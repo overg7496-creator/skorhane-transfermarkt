@@ -1,0 +1,2 @@
+# The recurring sync worker uses Python standard library only.
+# dcaribou is installed from its public Git repository only for the one-off seed-history job.
