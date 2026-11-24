@@ -1,0 +1,103 @@
+
+name: SkorHane Transfermarkt Sync
+
+on:
+  schedule:
+    - cron: "20 3 * * 1,4"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Çalıştırma modu"
+        required: true
+        type: choice
+        options:
+          - import-squads
+          - one-player-test
+          - sync
+          - seed-history
+        default: sync
+      player_id:
+        description: "Test edilecek oyuncunun Transfermarkt ID'si"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skorhane-transfermarkt-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ "${{ github.event.inputs.mode }}" = "seed-history" ]; then
+            python -m pip install "git+https://github.com/dcaribou/transfermarkt-scraper.git"
+          fi
+
+      - name: Run current sync
+        if: (github.event_name == 'schedule' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'sync')
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          FELIPE_API_BASE: https://transfermarkt-api.fly.dev
+          TM_LEAGUES: TR1
+          TM_SEASON: "2026"
+          REQUEST_DELAY_MIN_SECONDS: "1.5"
+          REQUEST_DELAY_MAX_SECONDS: "3.5"
+          FELIPE_DELAY_MIN_SECONDS: "3.1"
+          FELIPE_DELAY_MAX_SECONDS: "4.0"
+          TM_MAX_PLAYERS_PER_RUN: "80"
+          TM_MAX_MATCH_PAGES: "5"
+          HTTP_MAX_RETRIES: "4"
+        run: python sync/sync_transfermarkt.py sync
+
+      - name: Run historical seed
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'seed-history'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DCARIBOU_COMPETITIONS: TR1,GB1,ES1,L1,IT1,FR1
+          DCARIBOU_SEASONS: "2022,2023,2024,2025"
+          DCARIBOU_APPEARANCE_BATCH_SIZE: "25"
+          TM_SEASON: "2026"
+          REQUEST_DELAY_MIN_SECONDS: "1.5"
+          REQUEST_DELAY_MAX_SECONDS: "3.5"
+        run: python sync/sync_transfermarkt.py seed-history
+
+      - name: Import current squads
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'import-squads'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          TM_LEAGUES: TR1
+          TM_SEASON: "2026"
+          REQUEST_DELAY_MIN_SECONDS: "1.5"
+          REQUEST_DELAY_MAX_SECONDS: "3.5"
+        run: python sync/sync_transfermarkt.py import-squads
+
+      - name: Test one player
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'one-player-test'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id }}
+          FELIPE_API_BASE: https://transfermarkt-api.fly.dev
+          FELIPE_DELAY_MIN_SECONDS: "3.1"
+          FELIPE_DELAY_MAX_SECONDS: "4.0"
+        run: python sync/sync_transfermarkt.py one-player-test
