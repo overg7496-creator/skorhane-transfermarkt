@@ -760,10 +760,7 @@ def dispatch_refresh_details_continuation() -> bool:
 
 
 def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = False) -> int:
-    """Refresh Transfermarkt player profiles, season stats, transfers, injuries and valuations.
-
-    The runner rotates through current squads to respect the upstream API's rate limit.
-    """
+    """Refresh player details; backfill_only drains the initial queue safely across batches."""
     select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
     if only_player:
         query = f"tm_players?select={select}&tm_id=eq.{quote(only_player)}&limit=1"
@@ -1057,10 +1054,9 @@ def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = Fals
             LOG.info("felipeall oyuncu tamamen tamamlandı: %s/%s | ID=%s", idx, len(players), tm_id)
     
     
-            if backfill_only:
-                state = {"status": "completed", "attempts": attempts, "last_endpoint": "completed", "last_error": "", "http_status": 0, "retry_at": "", "completed_at": datetime.now(timezone.utc).isoformat()}
-                source_record("felipeall", "player_detail_queue", tm_id, "details", state)
-                states[tm_id] = state
+            state = {"status": "completed", "attempts": attempts, "last_endpoint": "completed", "last_error": "", "http_status": 0, "retry_at": "", "completed_at": datetime.now(timezone.utc).isoformat()}
+            source_record("felipeall", "player_detail_queue", tm_id, "details", state)
+            states[tm_id] = state
         except Exception as exc:
             message = safe_error_for_log(exc)
             status_match = re.search(r"HTTP\s+(\d{3})", message, re.IGNORECASE)
