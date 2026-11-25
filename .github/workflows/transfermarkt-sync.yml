@@ -161,13 +161,11 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           FELIPE_API_BASE: http://127.0.0.1:8000
           TM_LEAGUES: TR1,TR2,TR3,TR4,GB1,ES1,L1,IT1,FR1
           TM_SEASON: "2026"
-          TM_APIFY_MAX_PLAYERS: "20000"
           REQUEST_DELAY_MIN_SECONDS: "1.5"
-          REQUEST_DELAY_MAX_SECONDS: "3.5"
+          REQUEST_DELAY_MAX_SECONDS: "3.0"
           FELIPE_DELAY_MIN_SECONDS: "5.5"
           FELIPE_DELAY_MAX_SECONDS: "7.0"
           TM_MAX_PLAYERS_PER_RUN: "80"
@@ -181,12 +179,10 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           TM_LEAGUES: TR1,TR2,TR3,TR4,GB1,ES1,L1,IT1,FR1
           TM_SEASON: "2026"
-          TM_APIFY_MAX_PLAYERS: "20000"
           REQUEST_DELAY_MIN_SECONDS: "1.5"
-          REQUEST_DELAY_MAX_SECONDS: "3.5"
+          REQUEST_DELAY_MAX_SECONDS: "3.0"
         run: python sync/sync_transfermarkt.py import-squads
 
       - name: Refresh player detail data
@@ -229,7 +225,7 @@ jobs:
           DCARIBOU_APPEARANCE_BATCH_SIZE: "25"
           TM_SEASON: "2026"
           REQUEST_DELAY_MIN_SECONDS: "1.5"
-          REQUEST_DELAY_MAX_SECONDS: "3.5"
+          REQUEST_DELAY_MAX_SECONDS: "3.0"
         run: python sync/sync_transfermarkt.py seed-history
 
       - name: Test one player
