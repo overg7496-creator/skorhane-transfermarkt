@@ -310,7 +310,7 @@ def sync_kamerozkan(*, required: bool = False) -> int:
         raise RuntimeError("Apify çıktısı için defaultDatasetId bulunamadı.")
     items = json_request(f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={quote(APIFY_TOKEN)}&clean=true&format=json&limit=10000", source="Apify dataset")
       
-  if not isinstance(items, list):
+    if not isinstance(items, list):
         raise RuntimeError("Apify dataset yanıtı liste değil; mevcut DB verisi korunuyor.")
     valid_rows = [(row, player_id_from_row(row)) for row in items if isinstance(row, dict)]
     valid_rows = [(row, tm_id) for row, tm_id in valid_rows if tm_id]
