@@ -3956,7 +3956,7 @@ async function tmPlayer(env, id) {
   } catch (_) {}
   if (!marketRows.length) marketRows = listPayload(row.market_value_payload || {}, ["market_value_history", "marketValueHistory", "history", "marketValues", "valuations", "items", "data"]);
   out.marketValueHistory = marketRows;
-  out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]).map(item => ({ ...item, from: item.from || item.fromDate || "", until: item.until || item.untilDate || "" }));
+  out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]).map(item => ({ ...item, injury: item.injury || item.reason || item.type || item.description || item.injuryType || "Sakatlık", from_date: item.from_date || item.fromDate || item.from || item.startDate || item.start || "", until_date: item.until_date || item.untilDate || item.until || item.endDate || item.end || "", season: item.season || item.seasonName || item.season_id || "", days: item.days ?? item.daysMissed ?? item.durationDays, games_missed: item.games_missed ?? item.gamesMissed ?? item.missedMatches }));
   out.absences = listPayload(row.absences_payload || {}, ["absences", "data", "items"]);
   out.photo = row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "";
   const nationality = pick(b, "citizenship", "nationality", "nationalities");
@@ -3969,7 +3969,7 @@ async function tmPlayer(env, id) {
   out.bio = {
     ...dateBio(pick(b, "dateOfBirth", "date_of_birth")),
     "Ayak": footTr(pick(b, "foot", "preferredFoot", "preferred_foot")),
-    "Piyasa Değeri": valueTr(pick(b, "marketValue", "marketValueFormatted", "market_value")) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : "") || valueTr(pick(latestMarketValue, "display_value", "displayValue", "market_value", "value_eur", "value")),
+    "Piyasa Değeri": valueTr(pick(b, "marketValue", "marketValueFormatted", "market_value")) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : "") || valueTr(pick(latestMarketValue, "display_value", "displayValue", "market_value", "marketValue", "value_eur", "value")),
     "Şu Anki Takım": clubName,
     "Boy": height ? (typeof height === "number" && height < 3 ? String(height).replace(".", ",") + " m" : height + "") : "",
     "Uyruk": nat,
