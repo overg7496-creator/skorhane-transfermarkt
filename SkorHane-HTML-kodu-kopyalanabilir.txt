@@ -3858,90 +3858,22 @@ function mergePitchCareerIntoStats(stats, incoming){
   }
 }
 async function loadPitchPlayerCareer(my){
+  // Kariyer sezonları /player cevabındaki Transfermarkt kayıtlarından gelir.
+  // Bu yardımcı fonksiyon geriye dönük çağrı uyumluluğu için korunur;
+  // PitchAPI üzerinden ikinci bir sezon tablosu yüklemez.
   if(!my||!my.it||my.pitchCareerLoading||my.pitchCareerLoaded)return;
-  const team=my.it.team||my.it.teamName||my.stats?.bio?.['Şu Anki Takım']||my.info?.bio?.['Şu Anki Takım']||'';
-  let player=String(my.it.pitchId||'');
-  const inferred=(my.pitchCareerCodes&&my.pitchCareerCodes.length?my.pitchCareerCodes:[my.it.pitchCode||my.it.pitchLeagueCode||guessPitchCodeFromTeam(team)||my.prev&&my.prev.code||'']).filter(Boolean);
-  const codes=inferred.length?inferred:['tur.1','eng.1','esp.1','ger.1','ita.1','fra.1','uefa.champions','ned.1','por.1'];
-  my.pitchCareerCodes=codes;
-  my.pitchCareerLoading=true;my.pitchCareerError='';my.pitchCareerProgress='';
-  // Eski kariyer tablosu ilk çizimde görünür; PitchAPI yalnızca dört eksik alanı arka planda tamamlar.
-
-  const accumulated=new Map();let failedMatches=0,failedEvents=0,failedLineups=0,missingEvents=0,missingLineups=0,usedSeasons=0,scannedCodes=[];
-  const cacheKey=(id,version='v18')=>'skorhane.pitchcareer.'+version+'.'+String(id||'').replace(/[^A-Za-z0-9_-]/g,'_');
-  const readCache=id=>{try{for(const version of ['v18']){const raw=localStorage.getItem(cacheKey(id,version));if(!raw)continue;const value=JSON.parse(raw);if(value&&Date.now()-Number(value.savedAt||0)<=900e3&&Array.isArray(value.rows))return value.rows;}return null}catch(_){return null}};
-  const saveCache=(id,rows)=>{try{localStorage.setItem(cacheKey(id),JSON.stringify({savedAt:Date.now(),rows}))}catch(_){}};
-  const nameCacheId='name_'+pitchClientTeamKey(my.it.name)+'_'+pitchClientTeamKey(team||'');
-  const nameCached=readCache(nameCacheId);
-  if(nameCached&&nameCached.length){my.pitchCareerRows=nameCached;if(!my.stats)my.stats={player:{name:my.it.name},bio:{},seasons:[],national:[],sources:{}};my.stats.sources=my.stats.sources||{};my.stats.sources.pitch_api='önbellekten';mergePitchCareerIntoStats(my.stats,nameCached);renderPlayer()}
-  const addRows=rows=>{
-    for(const row of rows||[]){
-      const season=String(row['Sezon']||''),teamName=String(row['Takım']||''),code=String(row.pitchCode||''),k=careerSeasonYear(season)+'|'+pitchClientTeamKey(teamName)+'|'+code;
-      const sumFields=['Maç','Gol','Asist','İlk 11','Sarı Kart','Kırmızı Kart','Toplam Dakika','Puan Toplam','Puan Maç'];
-      if(!accumulated.has(k)){const copy={...row,_pitchUnknownFields:{}};for(const field of sumFields)if(row[field]==null)copy._pitchUnknownFields[field]=true;accumulated.set(k,copy)}
-      else{const old=accumulated.get(k);old._pitchUnknownFields=old._pitchUnknownFields||{};for(const field of sumFields){if(old._pitchUnknownFields[field]||row[field]==null){old[field]=null;old._pitchUnknownFields[field]=true}else if(row[field]!=null){old[field]=(Number(old[field])||0)+Number(row[field]||0)}}if(!old['Takım Logosu']&&row['Takım Logosu'])old['Takım Logosu']=row['Takım Logosu'];if(old['Puan Toplam']!=null&&old['Puan Maç']>0)old['Ort. Puan']=Number((old['Puan Toplam']/old['Puan Maç']).toFixed(2));}
-    }
-  };
-  try{
-    if(!player){
-      let resolved=null;
-      for(const code of codes){
-        const resolveMeta=await api('/pitch-player-resolve?name='+encodeURIComponent(my.it.name)+'&team='+encodeURIComponent(team)+'&code='+encodeURIComponent(code)).catch(()=>null);
-        const seasons=resolveMeta&&Array.isArray(resolveMeta.seasons)?resolveMeta.seasons:[];if(!seasons.length)continue;
-        for(let seasonIndex=0;seasonIndex<seasons.length;seasonIndex++){
-          const season=seasons[seasonIndex],seasonTeam=seasonIndex===0?team:'';
-          const base='/pitch-player-resolve?name='+encodeURIComponent(my.it.name)+'&team='+encodeURIComponent(seasonTeam)+'&code='+encodeURIComponent(code);
-          let offset=0,done=false,guard=0;
-          while(!done&&guard++<160){const result=await api(base+'&season='+encodeURIComponent(season)+'&offset='+offset);if(result.playerId){resolved=result;break}done=!!result.done;const next=Number(result.nextOffset);if(!done&&(!Number.isInteger(next)||next<=offset))break;offset=next}
-          if(resolved)break;
-        }
-        if(resolved){my.it.pitchCode=code;break}
-      }
-      if(!resolved)throw new Error('Oyuncu PitchAPI liglerinde eşleştirilemedi.');
-      player=String(resolved.playerId);my.it.pitchId=player;if(resolved.playerPhoto&&!my.it.logo)my.it.logo=resolved.playerPhoto;
-    }
-    // Daha önce tamamlanan kariyer tablosunu tek parça halinde hemen göster; yeni tarama arka planda devam eder.
-    const cachedRows=readCache(player);
-    if(cachedRows&&cachedRows.length){
-      my.pitchCareerRows=cachedRows;
-      if(!my.stats)my.stats={player:{name:my.it.name},bio:{},seasons:[],national:[],sources:{}};
-      my.stats.sources=my.stats.sources||{};my.stats.sources.pitch_api='önbellekten · '+cachedRows.length+' turnuva/takım satırı';
-      mergePitchCareerIntoStats(my.stats,cachedRows);renderPlayer();
-    }
-    my.pitchCareerSeasonCount=0;
-    for(const code of codes){
-      let meta;try{meta=await api('/pitch-player-career?player='+encodeURIComponent(player)+'&code='+encodeURIComponent(code))}catch(_){continue}
-      const seasons=Array.isArray(meta.seasons)?meta.seasons:[];if(!seasons.length)continue;scannedCodes.push(code);my.pitchCareerSeasonCount+=seasons.length;
-      for(const season of seasons){
-        const requestPage=off=>api('/pitch-player-career?player='+encodeURIComponent(player)+'&name='+encodeURIComponent(my.it.name||'')+'&code='+encodeURIComponent(code)+'&season='+encodeURIComponent(season)+'&offset='+off);
-        let first=await requestPage(0),pageSize=Math.max(1,Number(first.nextOffset)||5),offset=0,done=false,guard=0;
-        const processPage=(j,from)=>{
-          const next=Number(j.nextOffset);failedMatches+=Number(j.failedMatches)||0;failedEvents+=Number(j.failedEvents)||0;failedLineups+=Number(j.failedLineups)||0;missingEvents+=Number(j.missingEvents)||0;missingLineups+=Number(j.missingLineups)||0;addRows(j.rows||[]);return next;
-        };
-        offset=processPage(first,0);done=!!first.done;
-        while(!done&&offset<Number(first.totalMatches||0)&&guard++<100){
-          const offsets=[];for(let i=0;i<3&&offset+i*pageSize<Number(first.totalMatches||0);i++)offsets.push(offset+i*pageSize);if(!offsets.length)break;
-          const pages=await Promise.allSettled(offsets.map(requestPage));let nextMax=offset;
-          for(let i=0;i<pages.length;i++){
-            let item=pages[i];if(item.status!=='fulfilled'){try{item={status:'fulfilled',value:await requestPage(offsets[i])}}catch(error){throw new Error(season+' sezonunda '+offsets[i]+'. maç sayfası alınamadı: '+(error.message||error))}}
-            const page=item.value;nextMax=Math.max(nextMax,processPage(page,offsets[i]));if(page.done)done=true;
-          }
-          if(nextMax<=offset)throw new Error('PitchAPI sezon sayfalaması ilerleyemedi.');offset=nextMax;
-        }
-        if(!done&&offset>=Number(first.totalMatches||0))done=true;if(done)usedSeasons++;
-      }
-    }
-    const rows=[...accumulated.values()].map(({_pitchUnknownFields,...row})=>({...row,'Ort. Puan':row['Puan Toplam']!=null&&Number(row['Puan Maç'])>0?Number((Number(row['Puan Toplam'])/Number(row['Puan Maç'])).toFixed(2)):row['Ort. Puan']}));my.pitchCareerRows=rows;my.pitchCareerCodesScanned=scannedCodes;
-    if(!my.stats)my.stats={player:{name:my.it.name},bio:{},seasons:[],national:[],sources:{}};my.stats.sources=my.stats.sources||{};
-    my.stats.sources.pitch_api=rows.length?'ok · '+rows.length+' sezon/takım/turnuva satırı ('+scannedCodes.length+' lig/kupa kodu)':'eşleştirilen lig ve turnuvalarda oyuncu kaydı bulunamadı';
-    if(rows.length){mergePitchCareerIntoStats(my.stats,rows);saveCache(player,rows);saveCache(nameCacheId,rows);const gaps=[];if(failedMatches)gaps.push(failedMatches+' maç isteği');if(failedEvents)gaps.push(failedEvents+' kart isteği');if(missingEvents)gaps.push(missingEvents+' maçta kart olay verisi');if(failedLineups)gaps.push(failedLineups+' kadro isteği');if(missingLineups)gaps.push(missingLineups+' maçta ilk 11 verisi');my.pitchCareerError=gaps.length?'Bazı kaynak verileri eksik: '+gaps.join(', ')+'. Eksik alanlar — olarak gösterilir.':''}
-    else {
-      if(!Array.isArray(my.pitchCareerRows)||!my.pitchCareerRows.length){if(!my.stats)my.stats={player:{name:my.it.name},bio:{},seasons:[],national:[],sources:{}};mergePitchCareerIntoStats(my.stats,[])}
-      my.pitchCareerError='PitchAPI oyuncuyu buldu ancak taranan lig, kupa ve Avrupa sezonlarında maç istatistiği kaydı bulunamadı.';
-    }
-    my.pitchCareerLoaded=true;
-  }catch(error){my.pitchCareerError=error&&error.message||String(error);if(!Array.isArray(my.pitchCareerRows))my.pitchCareerRows=[];if(my.stats){mergePitchCareerIntoStats(my.stats,my.pitchCareerRows);my.stats.sources=my.stats.sources||{};my.stats.sources.pitch_api='hata: '+my.pitchCareerError}}
-  finally{my.pitchCareerLoading=false;my.pitchCareerProgress='';renderPlayer()}
+  if(!my.stats||!Array.isArray(my.stats.seasons))return;
+  my.pitchCareerLoading=false;
+  my.pitchCareerLoaded=true;
+  my.pitchCareerError='';
+  my.pitchCareerProgress='';
+  my.pitchCareerRows=[];
+  my.stats.sources=my.stats.sources||{};
+  my.stats.sources.pitch_api='devre dışı · oyuncu kariyer sezonları Transfermarkt kaynağından';
+  my.stats.sources.transfermarkt=my.stats.seasons.length
+    ? 'ok · '+my.stats.seasons.length+' sezon/takım satırı'
+    : 'Transfermarkt sezon kaydı bulunamadı';
+  renderPlayer();
 }
 const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v5.'+pitchClientTeamKey(name||'');
 function readPlayerStatsCache(name){try{const raw=localStorage.getItem(playerStatsCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<7*86400e3&&x.data&&Array.isArray(x.data.seasons)?x.data:null}catch(_){return null}}
