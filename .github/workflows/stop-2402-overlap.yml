@@ -1,0 +1,21 @@
+name: SkorHane 2.402 Kuyruğu Çakışma Durdurucu
+
+on:
+  push:
+    paths:
+      - ".github/workflows/stop-2402-overlap.yml"
+
+permissions:
+  contents: read
+
+# Aynı concurrency grubuna girerek eski ana kuyruğu iptal eder.
+concurrency:
+  group: skorhane-transfermarkt-sync
+  cancel-in-progress: true
+
+jobs:
+  stop-overlapping-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stop the previous 2,402-player worker
+        run: echo "Eski 2.402 oyunculuk çalışma durduruldu; düzeltilmiş aralıkla yeni çalışma başlatılacak."
