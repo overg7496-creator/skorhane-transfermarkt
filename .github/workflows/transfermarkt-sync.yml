@@ -62,6 +62,7 @@ jobs:
 
       - name: Start dedicated Transfermarkt API (v5.0.0)
         if: >-
+          github.event_name == 'push' ||
           (github.event_name == 'schedule' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') ||
           (github.event_name == 'workflow_dispatch' &&
            (github.event.inputs.mode == 'sync' ||
@@ -93,6 +94,46 @@ jobs:
             exit 1
           fi
           echo "Özel Transfermarkt API hazır (v5.0.0, eşzamanlı upstream isteği=1)."
+
+      - name: Live smoke-test Transfermarkt player endpoints
+        if: github.event_name == 'push'
+        run: |
+          python - <<'PY'
+          import json
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import urlopen
+
+          base = "http://127.0.0.1:8000/players/418560"
+          checks = [
+              ("/profile", "name"),
+              ("/market_value", "marketValueHistory"),
+              ("/transfers", "transfers"),
+              ("/stats", "stats"),
+              ("/injuries?page_number=1", "injuries"),
+              ("/absences?page_number=1", "absences"),
+              ("/matches?season_id=2026&page_number=1", "matches"),
+          ]
+          for index, (path, expected_key) in enumerate(checks, 1):
+              if index > 1:
+                  time.sleep(6)
+              url = base + path
+              try:
+                  with urlopen(url, timeout=45) as response:
+                      payload = json.loads(response.read().decode("utf-8"))
+                      if not isinstance(payload, dict) or expected_key not in payload:
+                          raise RuntimeError(
+                              f"{path}: geçersiz şema; beklenen alan '{expected_key}', "
+                              f"gelen alanlar={list(payload) if isinstance(payload, dict) else type(payload).__name__}"
+                          )
+                      print(f"OK {index}/{len(checks)} {path}: HTTP {response.status}, alan={expected_key}")
+              except HTTPError as exc:
+                  detail = exc.read().decode("utf-8", errors="replace")[:1200]
+                  raise SystemExit(f"FAIL {path}: HTTP {exc.code}; yanıt={detail}") from exc
+              except (URLError, TimeoutError, json.JSONDecodeError, RuntimeError) as exc:
+                  raise SystemExit(f"FAIL {path}: {exc}") from exc
+          print("Tüm Transfermarkt oyuncu uç noktaları canlı kontrolden geçti.")
+          PY
 
       - name: Run current sync
         if: (github.event_name == 'schedule' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'sync')
