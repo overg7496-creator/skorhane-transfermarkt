@@ -618,8 +618,12 @@ def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any
     rows = [row for row in rows_raw if isinstance(row, dict)]
 
     last_page = numeric(first, "lastPageNumber", "last_page_number")
-    if last_page is None or last_page < 1:
-        raise RuntimeError(f"felipeall {key}: lastPageNumber geçersiz; oyuncu tamamlanmadı.")
+    first_page = numeric(first, "pageNumber", "page_number")
+    if last_page is None or last_page < 1 or first_page != 1:
+        raise RuntimeError(
+            f"felipeall {key}: sayfalama metadata eksik/geçersiz "
+            f"(pageNumber={first_page}, lastPageNumber={last_page}); oyuncu tamamlanmadı."
+        )
     if last_page > 30:
         raise RuntimeError(
             f"felipeall {key}: {last_page} sayfa bulundu; güvenli üst sınır 30. "
@@ -631,6 +635,13 @@ def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any
         page_rows_raw = payload.get(key)
         if not isinstance(page_rows_raw, list):
             raise RuntimeError(f"felipeall {key} sayfa {page}: '{key}' listesi yok; oyuncu tamamlanmadı.")
+        page_last = numeric(payload, "lastPageNumber", "last_page_number")
+        current_page = numeric(payload, "pageNumber", "page_number")
+        if page_last != last_page or current_page != page:
+            raise RuntimeError(
+                f"felipeall {key} sayfa {page}: sayfalama tutarsız "
+                f"(pageNumber={current_page}, lastPageNumber={page_last}, beklenen son sayfa={last_page})."
+            )
         page_rows = [row for row in page_rows_raw if isinstance(row, dict)]
         if not page_rows:
             raise RuntimeError(
