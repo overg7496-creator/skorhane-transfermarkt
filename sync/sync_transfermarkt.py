@@ -151,6 +151,12 @@ def db_patch(path: str, payload: dict[str, Any]) -> None:
     with urlopen(req, timeout=HTTP_TIMEOUT) as response:
         response.read()
 
+def db_delete(path: str) -> None:
+    req = Request(f"{SUPABASE_URL}/rest/v1/{path}", headers={**db_headers(), "Prefer": "return=minimal"}, method="DELETE")
+    with urlopen(req, timeout=HTTP_TIMEOUT) as response:
+        response.read()
+
+
 def db_insert(path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     req = Request(f"{SUPABASE_URL}/rest/v1/{path}", data=json.dumps(payload).encode("utf-8"),
                   headers={**db_headers(), "Prefer": "return=representation"}, method="POST")
@@ -754,9 +760,10 @@ def dispatch_refresh_details_continuation() -> bool:
             response.read()
             LOG.info("Kalan oyuncular için otomatik devam çalışması kuyruğa alındı (HTTP %s).", response.status)
             return True
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:1000]
-        raise RuntimeError(f"GitHub otomatik devam dispatch başarısız: HTTP {exc.code}: {detail}") from exc
+    except (HTTPError, URLError, TimeoutError) as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:1000] if isinstance(exc, HTTPError) else str(exc)
+        LOG.error("GitHub otomatik devam şu an kuyruğa alınamadı; zamanlanmış kontrol devam edecek: %s", detail)
+        return False
 
 
 def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = False) -> int:
@@ -1054,9 +1061,12 @@ def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = Fals
             LOG.info("felipeall oyuncu tamamen tamamlandı: %s/%s | ID=%s", idx, len(players), tm_id)
     
     
-            state = {"status": "completed", "attempts": attempts, "last_endpoint": "completed", "last_error": "", "http_status": 0, "retry_at": "", "completed_at": datetime.now(timezone.utc).isoformat()}
-            source_record("felipeall", "player_detail_queue", tm_id, "details", state)
-            states[tm_id] = state
+            if previous:
+                db_delete(
+                    f"tm_source_records?source=eq.felipeall&record_type=eq.player_detail_queue"
+                    f"&external_id=eq.{quote(tm_id)}&record_key=eq.details"
+                )
+                states.pop(tm_id, None)
         except Exception as exc:
             message = safe_error_for_log(exc)
             status_match = re.search(r"HTTP\s+(\d{3})", message, re.IGNORECASE)
