@@ -66,12 +66,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if ! runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/refresh-imported-player-details.yml/runs?per_page=100")"; then
+          if ! runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100")"; then
             echo "Imported worker durumu okunamadı; güvenli tarafta kalıp post-window kurtarması bu çalışmada kapatıldı."
             echo "TM_DETAIL_AFTER_IMPORTED_END=" >> "$GITHUB_ENV"
             exit 0
           fi
-          active="$(jq '[.workflow_runs[] | select(.status != "completed")] | length' <<< "$runs")"
+          active="$(jq '[.workflow_runs[] | select(
+            (.path == ".github/workflows/refresh-imported-player-details.yml" or
+             .path == ".github/workflows/import-missing-leagues.yml") and
+            .status != "completed"
+          )] | length' <<< "$runs")"
           if [ "$active" -eq 0 ]; then
             echo "TM_DETAIL_AFTER_IMPORTED_END=2026-11-25T21:00:04Z" >> "$GITHUB_ENV"
             echo "Imported cohort aktif değil; eski worker'lardan taşınmış bekleyen kayıtlar ana kuyruğa açıldı."
