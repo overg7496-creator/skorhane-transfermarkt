@@ -3932,21 +3932,24 @@ async function tmPlayer(env, id) {
   } catch (_) {}
   const currentSeason = row.current_season_payload || {};
   if ((!Array.isArray(statsRows) || !statsRows.length) && Array.isArray(currentSeason.stats)) statsRows = currentSeason.stats;
+  const listPayload = (raw, keys) => Array.isArray(raw) ? raw : (raw && typeof raw === "object" ? keys.map(k => raw[k]).find(Array.isArray) || [] : []);
   const transferRaw = row.transfers_payload || {};
+  const payloadTransfers = listPayload(transferRaw, ["transfers", "history", "items", "data"]);
   try {
     const transferRows = await tmDbRows(env, "tm_transfers?select=transfer_date,from_club,to_club,transfer_type,fee_text,fee_eur&tm_id=eq." + encodeURIComponent(playerId) + "&order=transfer_date.desc&limit=100");
-    out.transfers = transferRows.map(x => ({
+    out.transfers = transferRows.length ? transferRows.map(x => ({
       date: x.transfer_date || "", from: x.from_club || "", to: x.to_club || "",
       kind: x.transfer_type || "", fee: x.fee_text || (x.fee_eur != null ? Number(x.fee_eur).toLocaleString("tr-TR") + " €" : "")
-    }));
+    })) : payloadTransfers;
   } catch (_) {
-    out.transfers = Array.isArray(transferRaw) ? transferRaw : (transferRaw.transfers || transferRaw.data || []);
+    out.transfers = payloadTransfers;
   }
+  let marketRows = [];
   try {
-    const marketRows = await tmDbRows(env, "tm_market_values?select=valuation_date,value_eur,display_value,club_name&tm_id=eq." + encodeURIComponent(playerId) + "&order=valuation_date.desc&limit=100");
-    out.marketValueHistory = marketRows;
-  } catch (_) { out.marketValueHistory = row.market_value_payload || []; }
-  const listPayload = (raw, keys) => Array.isArray(raw) ? raw : (raw && typeof raw === "object" ? keys.map(k => raw[k]).find(Array.isArray) || [] : []);
+    marketRows = await tmDbRows(env, "tm_market_values?select=valuation_date,value_eur,display_value,club_name&tm_id=eq." + encodeURIComponent(playerId) + "&order=valuation_date.desc&limit=100");
+  } catch (_) {}
+  if (!marketRows.length) marketRows = listPayload(row.market_value_payload || {}, ["market_value_history", "history", "marketValues", "valuations", "items", "data"]);
+  out.marketValueHistory = marketRows;
   out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]);
   out.absences = listPayload(row.absences_payload || {}, ["absences", "data", "items"]);
   out.photo = row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "";
@@ -3956,10 +3959,11 @@ async function tmPlayer(env, id) {
   const clubName = typeof club === "string" ? club : (club && (club.name || club.displayName)) || b.clubName || b.currentClub || row.team_name || "";
   const position = b.position || {};
   const height = pick(b, "height", "heightM", "heightMeters", "height_cm");
+  const latestMarketValue = Array.isArray(out.marketValueHistory) ? (out.marketValueHistory[0] || {}) : {};
   out.bio = {
     ...dateBio(pick(b, "dateOfBirth", "date_of_birth")),
     "Ayak": footTr(pick(b, "foot", "preferredFoot", "preferred_foot")),
-    "Piyasa Değeri": valueTr(pick(b, "marketValue", "marketValueFormatted", "market_value")) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : ""),
+    "Piyasa Değeri": valueTr(pick(b, "marketValue", "marketValueFormatted", "market_value")) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : "") || valueTr(pick(latestMarketValue, "display_value", "displayValue", "market_value", "value_eur", "value")),
     "Şu Anki Takım": clubName,
     "Boy": height ? (typeof height === "number" && height < 3 ? String(height).replace(".", ",") + " m" : height + "") : "",
     "Uyruk": nat,
