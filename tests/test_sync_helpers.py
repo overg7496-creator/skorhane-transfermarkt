@@ -136,6 +136,59 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("last_squad_seen_at.lt.2026-11-25T20%3A26%3A06Z", query)
         self.assertIn("last_felipe_synced_at=is.null", query)
 
+    def test_main_backlog_recovers_pending_rows_moved_past_imported_window(self):
+        from unittest.mock import patch
+
+        before = "2026-11-25T20:26:06Z"
+        imported_end = "2026-11-25T21:00:04Z"
+        with patch.object(sync, "db_get", return_value=[]) as fetch:
+            self.assertEqual(
+                sync.load_pending_player_detail_candidates(
+                    squad_seen_before=before,
+                    squad_seen_after_imported=imported_end,
+                ),
+                [],
+            )
+        query = fetch.call_args.args[0]
+        self.assertIn("or=", query)
+        self.assertIn("last_squad_seen_at.gte.", query)
+        self.assertIn("last_squad_seen_at.lt.2026-11-25T20", query)
+        self.assertIn("last_squad_seen_at.gte.2026-11-25T21", query)
+        self.assertIn("last_felipe_synced_at=is.null", query)
+
+    def test_player_detail_upsert_does_not_claim_squad_membership(self):
+        from unittest.mock import patch
+
+        with patch.object(sync, "rpc") as call:
+            sync.upsert_player(
+                "123",
+                "felipeall",
+                {"name": "Oyuncu", "team_name": "Takım", "position": "Forvet"},
+            )
+        payload = call.call_args.args[1]["p_player"]
+        self.assertNotIn("is_active", payload)
+
+    def test_pending_check_uses_both_imported_cohort_boundaries(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(sync, "load_player_detail_queue_states", return_value={}),
+            patch.object(sync, "db_get", return_value=[]) as fetch,
+            patch.dict(
+                os.environ,
+                {
+                    "TM_DETAIL_SQUAD_SEEN_AFTER": "2026-11-25T20:26:06Z",
+                    "TM_DETAIL_SQUAD_SEEN_BEFORE": "2026-11-25T21:00:04Z",
+                    "TM_DETAIL_AFTER_IMPORTED_END": "",
+                },
+                clear=False,
+            ),
+        ):
+            self.assertFalse(sync.has_pending_player_details())
+        query = fetch.call_args.args[0]
+        self.assertIn("last_squad_seen_at.gte.2026-11-25T20", query)
+        self.assertIn("last_squad_seen_at.lt.2026-11-25T21", query)
+
     def test_imported_detail_queue_rejects_incomplete_or_reversed_window(self):
         with self.assertRaisesRegex(RuntimeError, "hem başlangıç hem bitiş"):
             sync.load_pending_player_detail_candidates(squad_seen_after="2026-11-25T20:26:06Z")
