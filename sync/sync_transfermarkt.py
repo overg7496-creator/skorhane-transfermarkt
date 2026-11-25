@@ -642,7 +642,7 @@ def sync_felipeall(only_player: str | None = None) -> int:
         query = f"tm_players?select={select}&tm_id=eq.{quote(only_player)}&limit=1"
     else:
         squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-        query = f"tm_players?select={select}&is_active=eq.true&last_squad_seen_at=gte.{quote(squad_cutoff)}&order=last_felipe_synced_at.asc.nullsfirst&limit={TM_MAX_PLAYERS_PER_RUN}"
+        query = f"tm_players?select={select}&is_active=eq.true&last_squad_seen_at=gte.{quote(squad_cutoff)}&order=last_felipe_synced_at.asc.nullsfirst,tm_id.asc&limit={TM_MAX_PLAYERS_PER_RUN}"
     players = db_get(query)
     if not isinstance(players, list):
         raise RuntimeError("DB oyuncu listesi okunamadı.")
