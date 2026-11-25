@@ -4,7 +4,6 @@ on:
   # Bu dosya veya kadro aktarım işçisi güncellendiğinde ayrı aktarımı başlat.
   push:
     paths:
-      - ".github/workflows/import-missing-leagues.yml"
       - "sync/sync_squads_and_clubs.py"
   # Hata sonrası GitHub Actions ekranından yeniden başlatma imkânı kalsın.
   workflow_dispatch:
@@ -69,7 +68,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           FELIPE_API_BASE: http://127.0.0.1:8000
-          TM_LEAGUES: TR3A,TR3B,TR4A,TR4B,TR4C,L1,IT1,FR1
+          TM_LEAGUES: TR3A,TR3B,TR4A,TR4B,TR4C
           TM_SEASON: "2026"
           # Ana detay aktarımıyla eşzamanlı çalışırken istekleri seyrek tut.
           REQUEST_DELAY_MIN_SECONDS: "7.0"
