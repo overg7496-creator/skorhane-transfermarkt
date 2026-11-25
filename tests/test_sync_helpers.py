@@ -45,6 +45,28 @@ class SyncHelperTests(unittest.TestCase):
         worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
         self.assertNotIn("transfermarkt-api.fly.dev", worker)
         self.assertNotIn("www.transfermarkt.com", worker)
+
+    def test_required_player_endpoint_failure_propagates(self):
+        from unittest.mock import patch
+
+        with patch.object(sync, "json_request", side_effect=RuntimeError("HTTP 503")):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
+                sync.fetch_player_payload("https://api/players/1", "/profile", "1 profil")
+
+    def test_match_endpoint_failure_propagates(self):
+        from unittest.mock import patch
+
+        with patch.object(sync, "json_request", side_effect=RuntimeError("HTTP 503")):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
+                sync.get_player_current_matches("https://api/players/1", "1")
+
+    def test_injury_page_failure_does_not_become_empty_data(self):
+        from unittest.mock import patch
+
+        with patch.object(sync, "fetch_player_payload", side_effect=RuntimeError("HTTP 503")):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
+                sync.fetch_player_paged_rows("https://api/players/1", "/injuries", "injuries")
+
     def test_felipe_rotation_has_independent_cursor(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
         self.assertIn("last_felipe_synced_at.asc.nullsfirst", script)
