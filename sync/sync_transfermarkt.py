@@ -315,7 +315,7 @@ def sync_kamerozkan(*, required: bool = False) -> int:
     valid_rows = [(row, player_id_from_row(row)) for row in items if isinstance(row, dict)]
     valid_rows = [(row, tm_id) for row, tm_id in valid_rows if tm_id]
     if not valid_rows:
-        raise RuntimeError("Apify çıktısında geçerli oyuncu kimliği yok; mevcut DB verisi korunuyor.")
+                raise RuntimeError(f"Apify DEBUG: tür={type(items).__name__}, kayıt_sayısı={len(items) if isinstance(items, list) else 'liste değil'}, ilk_kayıt={repr(items[0])[:2000] if isinstance(items, list) and items else repr(items)[:2000]}")
     count = 0
     for row, tm_id in valid_rows:
         normalized = {
