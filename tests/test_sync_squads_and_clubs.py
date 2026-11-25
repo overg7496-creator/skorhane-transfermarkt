@@ -18,6 +18,11 @@ class SquadNormalizationTests(unittest.TestCase):
             "joinedOn": "2026-07-01",
             "signedFrom": "Club A",
             "marketValue": 250000,
+            "shirtNumber": 19,
+            "isCaptain": False,
+            "nationality": ["Ghana"],
+            "height": 180,
+            "foot": "right",
         }
         result = squads.normalize_squad_player(
             row,
@@ -34,6 +39,9 @@ class SquadNormalizationTests(unittest.TestCase):
         self.assertEqual(player["photo_url"], "https://img.example/player.jpg")
         self.assertEqual(player["current_market_value_eur"], 250000)
         self.assertEqual(player["team_name"], "Club B")
+        self.assertEqual(player["profile_payload"]["squad_import"]["shirt_number"], 19)
+        self.assertFalse(player["profile_payload"]["squad_import"]["is_captain"])
+        self.assertEqual(player["profile_payload"]["squad_import"]["nationality"], ["Ghana"])
         self.assertEqual(transfer["from_club"], "Club A")
         self.assertEqual(transfer["to_club"], "Club B")
         self.assertEqual(transfer["transfer_date"], "2026-07-01")
@@ -83,6 +91,7 @@ class SquadSyncTests(unittest.TestCase):
             patch.object(squads, "api_get", side_effect=[competition, club_a, club_b]) as api,
             patch.object(squads, "load_league_state", return_value={}),
             patch.object(squads, "save_league_state") as save_state,
+            patch.object(squads, "save_club_metadata") as save_club,
             patch.object(squads, "save_player") as save_player,
         ):
             count = squads.sync_squads_and_clubs()
@@ -91,6 +100,7 @@ class SquadSyncTests(unittest.TestCase):
         self.assertEqual(api.call_args_list[1].args[0], "/clubs/10/players?season_id=2026")
         self.assertEqual(api.call_args_list[2].args[0], "/clubs/20/players?season_id=2026")
         self.assertEqual(save_player.call_count, 2)
+        self.assertEqual(save_club.call_count, 2)
         self.assertGreaterEqual(save_state.call_count, 3)
 
     def test_empty_squad_is_not_checkpointed_or_written(self):
