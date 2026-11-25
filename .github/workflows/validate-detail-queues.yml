@@ -1,0 +1,33 @@
+name: SkorHane Detail Queue Regression Tests
+
+on:
+  push:
+    paths:
+      - "sync/sync_transfermarkt.py"
+      - "tests/**"
+      - ".github/workflows/transfermarkt-sync.yml"
+      - ".github/workflows/refresh-imported-player-details.yml"
+      - ".github/workflows/resume-long-sync.yml"
+      - ".github/workflows/validate-detail-queues.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile sync workers
+        run: python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py
+
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
