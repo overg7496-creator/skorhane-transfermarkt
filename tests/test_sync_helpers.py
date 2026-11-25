@@ -140,8 +140,8 @@ class SyncHelperTests(unittest.TestCase):
     def test_main_and_missing_squad_imports_do_not_share_leagues(self):
         main_workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
         missing_workflow = (ROOT / ".github" / "workflows" / "import-missing-leagues.yml").read_text(encoding="utf-8")
-        main_match = re.search(r"(?m)^\\s*TM_LEAGUES:\\s*([A-Z0-9,]+)", main_workflow)
-        missing_match = re.search(r"(?m)^\\s*TM_LEAGUES:\\s*([A-Z0-9,]+)", missing_workflow)
+        main_match = re.search(r"(?m)^\s*TM_LEAGUES:\s*([A-Z0-9,]+)", main_workflow)
+        missing_match = re.search(r"(?m)^\s*TM_LEAGUES:\s*([A-Z0-9,]+)", missing_workflow)
         self.assertIsNotNone(main_match)
         self.assertIsNotNone(missing_match)
         main_leagues = set(main_match.group(1).split(","))
