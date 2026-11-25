@@ -1,9 +1,8 @@
 name: SkorHane Eksik Lig Kadro Aktarımı
 
 on:
-  push:
-    paths:
-      - ".github/workflows/import-missing-leagues.yml"
+  # Manual start only: avoids automatic failed retries while the Apify
+  # account is over its Free-plan monthly usage allowance.
   workflow_dispatch:
 
 permissions:
