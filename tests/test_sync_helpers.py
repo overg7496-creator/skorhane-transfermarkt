@@ -35,10 +35,10 @@ class SyncHelperTests(unittest.TestCase):
     def test_player_id_from_profile_url(self):
         self.assertEqual(sync.player_id_from_row({"url": "https://www.transfermarkt.com/x/profil/spieler/12345"}), "12345")
 
-    def test_apify_token_is_redacted_from_logged_urls(self):
+    def test_query_tokens_are_redacted_from_logged_urls(self):
         self.assertEqual(
-            sync.safe_url_for_log("https://api.apify.com/v2/runs?token=ABC123&wait=10"),
-            "https://api.apify.com/v2/runs?token=[REDACTED]&wait=10",
+            sync.safe_url_for_log("https://api.example.test/v2/runs?token=ABC123&wait=10"),
+            "https://api.example.test/v2/runs?token=[REDACTED]&wait=10",
         )
 
     def test_worker_has_no_direct_transfermarkt_http_origin(self):
@@ -155,16 +155,6 @@ class SyncHelperTests(unittest.TestCase):
         ):
             rows = sync.load_rotating_player_candidates(states)
         self.assertEqual([row["tm_id"] for row in rows], ["2"])
-
-    def test_apify_dataset_fetch_reads_multiple_pages(self):
-        from unittest.mock import patch
-
-        first = [{"playerId": str(i)} for i in range(1000)]
-        second = [{"playerId": "1000"}]
-        with patch.object(sync, "json_request", side_effect=[first, second]) as request:
-            rows = sync.fetch_apify_dataset_items("dataset", "token", 1001)
-        self.assertEqual(len(rows), 1001)
-        self.assertIn("offset=1000", request.call_args_list[1].args[0])
 
     def test_history_source_cannot_replace_current_market_value(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
