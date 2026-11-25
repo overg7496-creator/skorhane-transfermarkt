@@ -1,19 +1,25 @@
-name: SkorHane Eksik Lig Kadro Aktarımı
+name: SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı
 
 on:
-  # Manuel başlatılır; eksik ligler ayrı ve bağımsız bir iş olarak çalışır.
+  # Bu dosya veya kadro aktarım işçisi güncellendiğinde ayrı aktarımı başlat.
+  push:
+    paths:
+      - ".github/workflows/import-missing-leagues.yml"
+      - "sync/sync_squads_and_clubs.py"
+  # Hata sonrası GitHub Actions ekranından yeniden başlatma imkânı kalsın.
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Ana oyuncu detay aktarımından bağımsız grup: biri diğerini iptal etmez.
 concurrency:
   group: skorhane-missing-league-squads
   cancel-in-progress: false
 
 jobs:
   import-missing-leagues:
-    name: Felipe API ile eksik ligleri içe aktar
+    name: Felipe API ile eksik lig takımlarını ve kadrolarını aktar
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -57,15 +63,16 @@ jobs:
           fi
           echo "Yerel Felipe API hazır; upstream eşzamanlılığı 1."
 
-      - name: Import missing league squads
+      - name: Import missing league teams and squads
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           FELIPE_API_BASE: http://127.0.0.1:8000
           TM_LEAGUES: TR3,TR4,L1,IT1,FR1
           TM_SEASON: "2026"
-          REQUEST_DELAY_MIN_SECONDS: "1.5"
-          REQUEST_DELAY_MAX_SECONDS: "3.0"
+          # Ana detay aktarımıyla eşzamanlı çalışırken istekleri seyrek tut.
+          REQUEST_DELAY_MIN_SECONDS: "7.0"
+          REQUEST_DELAY_MAX_SECONDS: "9.0"
           HTTP_MAX_RETRIES: "3"
           HTTP_TIMEOUT_SECONDS: "45"
         run: python sync/sync_squads_and_clubs.py
