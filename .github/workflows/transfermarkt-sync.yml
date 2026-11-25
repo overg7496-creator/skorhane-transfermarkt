@@ -2,6 +2,11 @@
 name: SkorHane Transfermarkt Sync
 
 on:
+  push:
+    paths:
+      - "sync/sync_transfermarkt.py"
+      - "tests/**"
+      - ".github/workflows/transfermarkt-sync.yml"
   schedule:
     - cron: "20 3 * * 1,4"
   workflow_dispatch:
