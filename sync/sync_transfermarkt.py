@@ -591,9 +591,8 @@ def load_pending_player_detail_candidates(
     candidates: list[dict[str, Any]] = []
     offset = 0
     page_size = 1000
-    if squad_seen_after or squad_seen_before:
-        if not squad_seen_after or not squad_seen_before:
-            raise RuntimeError("Yeni kadro kuyruğu için hem başlangıç hem bitiş zamanı gerekli.")
+    squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+    if squad_seen_after and squad_seen_before:
         squad_seen_after, squad_seen_before = validate_detail_squad_window(
             squad_seen_after, squad_seen_before
         )
@@ -602,8 +601,21 @@ def load_pending_player_detail_candidates(
             f"last_squad_seen_at.lt.{squad_seen_before})"
         )
         squad_filter = "&" + quote(window, safe="=.")
+    elif squad_seen_after:
+        raise RuntimeError("Yeni kadro kuyruğu için hem başlangıç hem bitiş zamanı gerekli.")
+    elif squad_seen_before:
+        try:
+            before_dt = datetime.fromisoformat(squad_seen_before.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise RuntimeError("Ana kuyruk için geçerli seen_before ISO tarihi gerekli.") from exc
+        if before_dt.tzinfo is None:
+            raise RuntimeError("Ana kuyruk seen_before tarihi saat dilimi içermeli (UTC/Z).")
+        window = (
+            f"and=(last_squad_seen_at.gte.{squad_cutoff},"
+            f"last_squad_seen_at.lt.{squad_seen_before})"
+        )
+        squad_filter = "&" + quote(window, safe="=.")
     else:
-        squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
         squad_filter = f"&last_squad_seen_at=gte.{quote(squad_cutoff, safe='')}"
     while True:
         query = (
@@ -675,7 +687,8 @@ def load_rotating_player_candidates(states: dict[str, dict[str, Any]]) -> list[d
 
 def has_pending_player_details() -> bool:
     states = load_player_detail_queue_states()
-    candidates = load_pending_player_detail_candidates()
+    seen_before = os.getenv("TM_DETAIL_SQUAD_SEEN_BEFORE", "").strip() or None
+    candidates = load_pending_player_detail_candidates(squad_seen_before=seen_before)
     now = datetime.now(timezone.utc)
     return any(
         str(player.get("tm_id") or "").strip()
@@ -695,7 +708,10 @@ def dispatch_refresh_details_continuation(
         LOG.warning("Kalan detay kuyruğu var ancak GITHUB_TOKEN/GITHUB_REPOSITORY yok; otomatik devam atlandı.")
         return False
     url = f"https://api.github.com/repos/{repository}/actions/workflows/{workflow_file}/dispatches"
-    dispatch_inputs = inputs if inputs is not None else {"mode": "refresh-details"}
+    dispatch_inputs = dict(inputs) if inputs is not None else {"mode": "refresh-details"}
+    seen_before = os.getenv("TM_DETAIL_SQUAD_SEEN_BEFORE", "").strip()
+    if inputs is None and seen_before:
+        dispatch_inputs["seen_before"] = seen_before
     payload = json.dumps({"ref": ref, "inputs": dispatch_inputs}).encode("utf-8")
     request = Request(url, data=payload, headers={
         "Accept": "application/vnd.github+json",
@@ -1388,7 +1404,14 @@ def main() -> int:
         run_squad_sync()
         return 0
     if args.mode == "refresh-details":
-        logged_run("felipeall", "refresh-details", lambda: sync_felipeall(backfill_only=True))
+        seen_before = os.getenv("TM_DETAIL_SQUAD_SEEN_BEFORE", "").strip()
+        logged_run(
+            "felipeall", "refresh-details",
+            lambda: sync_felipeall(
+                backfill_only=True,
+                squad_seen_before=seen_before or None,
+            ),
+        )
         return 0
     if args.mode == "refresh-imported-details":
         seen_after = os.getenv("TM_DETAIL_SQUAD_SEEN_AFTER", "").strip()
