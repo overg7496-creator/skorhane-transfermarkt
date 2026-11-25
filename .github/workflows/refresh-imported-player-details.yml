@@ -9,6 +9,8 @@ on:
     workflows:
       - "SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı"
     types: [completed]
+  schedule:
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       seen_after:
@@ -40,11 +42,11 @@ jobs:
       TM_DETAIL_SQUAD_SEEN_AFTER: >-
         ${{ github.event_name == 'workflow_run' && github.event.workflow_run.run_started_at ||
              (github.event_name == 'workflow_dispatch' && inputs.seen_after != '' && inputs.seen_after) ||
-             '2026-11-25T20:26:06Z' }}
+             '' }}
       TM_DETAIL_SQUAD_SEEN_BEFORE: >-
         ${{ github.event_name == 'workflow_run' && github.event.workflow_run.updated_at ||
              (github.event_name == 'workflow_dispatch' && inputs.seen_before != '' && inputs.seen_before) ||
-             '2026-11-25T21:00:04Z' }}
+             '' }}
     steps:
       - name: Cancel obsolete queued full-queue worker
         if: github.event_name == 'push'
@@ -75,7 +77,21 @@ jobs:
           python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py
           python -m unittest discover -s tests -v
 
+      - name: Check pending imported-player detail queue
+        id: detail_queue
+        if: github.event_name == 'schedule'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python sync/sync_transfermarkt.py has-pending-details
+
       - name: Start dedicated Transfermarkt API (v5.0.0)
+        if: >-
+          github.event_name == 'push' ||
+          github.event_name == 'workflow_run' ||
+          github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'schedule' &&
+           steps.detail_queue.outputs.has_pending == 'true')
         env:
           RATE_LIMITING_ENABLE: "false"
           TFMKT_MAX_CONCURRENCY: "1"
@@ -103,6 +119,13 @@ jobs:
           echo "Özel Transfermarkt API hazır (v5.0.0, eşzamanlı upstream isteği=1)."
 
       - name: Refresh only the imported squad cohort
+        if: >-
+          github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'workflow_run' &&
+           github.event.workflow_run.conclusion == 'success') ||
+          (github.event_name == 'schedule' &&
+           steps.detail_queue.outputs.has_pending == 'true')
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -110,7 +133,7 @@ jobs:
           FELIPE_API_BASE: http://127.0.0.1:8000
           TM_SEASON: "2026"
           TM_MAX_PLAYERS_PER_RUN: "80"
-          TM_DETAIL_MAX_RUNTIME_SECONDS: "20400"
+          TM_DETAIL_MAX_RUNTIME_SECONDS: "16200"
           TM_DETAIL_CONTINUATION_WORKFLOW: refresh-imported-player-details.yml
           FELIPE_DELAY_MIN_SECONDS: "8.0"
           FELIPE_DELAY_MAX_SECONDS: "9.5"
