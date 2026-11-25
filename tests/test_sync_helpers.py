@@ -104,6 +104,32 @@ class SyncHelperTests(unittest.TestCase):
         self.assertFalse(sync.detail_retry_is_due({"status": "blocked"}))
         self.assertTrue(sync.detail_retry_is_due({"status": "retry", "retry_at": ""}))
 
+
+    def test_imported_detail_queue_is_limited_to_explicit_squad_window(self):
+        from unittest.mock import patch
+
+        after = "2026-11-25T20:26:06Z"
+        before = "2026-11-25T21:00:04Z"
+        with patch.object(sync, "db_get", return_value=[]) as fetch:
+            self.assertEqual(
+                sync.load_pending_player_detail_candidates(
+                    squad_seen_after=after, squad_seen_before=before
+                ),
+                [],
+            )
+        query = fetch.call_args.args[0]
+        self.assertIn("last_squad_seen_at.gte.2026-11-25T20", query)
+        self.assertIn("last_squad_seen_at.lt.2026-11-25T21", query)
+        self.assertIn("last_felipe_synced_at=is.null", query)
+
+    def test_imported_detail_queue_rejects_incomplete_or_reversed_window(self):
+        with self.assertRaisesRegex(RuntimeError, "hem başlangıç hem bitiş"):
+            sync.load_pending_player_detail_candidates(squad_seen_after="2026-11-25T20:26:06Z")
+        with self.assertRaisesRegex(RuntimeError, "sonra olmalı"):
+            sync.validate_detail_squad_window(
+                "2026-11-25T21:00:04Z", "2026-11-25T20:26:06Z"
+            )
+
     def test_backfill_queue_is_resumable_and_uses_time_guard(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
         self.assertIn("last_felipe_synced_at=is.null", script)
