@@ -1,6 +1,10 @@
 name: SkorHane Yeni Kadro Oyuncu Detayları
 
 on:
+  # Periodic recovery catches players whose retry backoff has elapsed, even
+  # when the previous time-limited worker had no immediately-due retries.
+  schedule:
+    - cron: "*/15 * * * *"
   workflow_run:
     workflows:
       - "SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı"
@@ -20,7 +24,7 @@ permissions:
   contents: read
   actions: write
 
-# Aynı yeni-kadro zaman penceresindeki worker'ları seri yürüt; çakışan ikinci kopya açma.
+# This workflow owns only the imported squad timestamp window; its concurrency group is separate from the original backlog.
 concurrency:
   group: skorhane-imported-player-details
   cancel-in-progress: false
@@ -55,10 +59,20 @@ jobs:
           python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py
           python -m unittest discover -s tests -v
 
+      - name: Check pending imported-cohort player details
+        id: imported_queue
+        if: github.event_name == 'schedule'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python sync/sync_transfermarkt.py has-pending-details
+
       - name: Start dedicated Transfermarkt API (v5.0.0)
         if: >-
           github.event_name == 'workflow_run' ||
-          github.event_name == 'workflow_dispatch'
+          github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'schedule' &&
+           steps.imported_queue.outputs.has_pending == 'true')
         env:
           RATE_LIMITING_ENABLE: "false"
           TFMKT_MAX_CONCURRENCY: "1"
@@ -89,7 +103,9 @@ jobs:
         if: >-
           github.event_name == 'workflow_dispatch' ||
           (github.event_name == 'workflow_run' &&
-           github.event.workflow_run.conclusion == 'success')
+           github.event.workflow_run.conclusion == 'success') ||
+          (github.event_name == 'schedule' &&
+           steps.imported_queue.outputs.has_pending == 'true')
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
