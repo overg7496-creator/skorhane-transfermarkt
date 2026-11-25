@@ -94,8 +94,11 @@ def json_request(url: str, *, method: str = "GET", payload: Any = None,
             with urlopen(req, timeout=HTTP_TIMEOUT) as response:
                 raw = response.read()
                 if not raw:
+                    LOG.warning("%s HTTP %s: boş yanıt (%s)", source, response.status, safe_url_for_log(url))
                     return None
-                return json.loads(raw.decode("utf-8"))
+                parsed = json.loads(raw.decode("utf-8"))
+                LOG.info("%s HTTP %s başarılı (%s)", source, response.status, safe_url_for_log(url))
+                return parsed
         except HTTPError as exc:
             code = exc.code
             error_body = exc.read().decode("utf-8", errors="replace").strip()
@@ -580,8 +583,13 @@ def get_player_current_matches(base: str, tm_id: str) -> list[dict[str, Any]]:
     return all_rows
 
 
-def fetch_player_payload(base: str, endpoint: str, label: str) -> Any:
-    """Fetch a required player endpoint; never convert an upstream error into missing data."""
+def fetch_player_payload(
+    base: str,
+    endpoint: str,
+    label: str,
+    required_keys: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Fetch and validate a required player endpoint; failures must block completion."""
     payload = json_request(
         base + endpoint,
         source=f"felipeall {label}",
@@ -591,6 +599,12 @@ def fetch_player_payload(base: str, endpoint: str, label: str) -> Any:
         raise RuntimeError(
             f"felipeall {label}: beklenen JSON nesnesi yerine "
             f"{type(payload).__name__} / boş yanıt geldi; oyuncu tamamlanmadı."
+        )
+    missing = [key for key in required_keys if key not in payload]
+    if missing:
+        raise RuntimeError(
+            f"felipeall {label}: API yanıtında zorunlu alan(lar) yok: {', '.join(missing)}; "
+            f"gelen alanlar={', '.join(sorted(payload.keys()))}; oyuncu tamamlanmadı."
         )
     return payload
 
@@ -658,10 +672,10 @@ def sync_felipeall(only_player: str | None = None) -> int:
             idx, len(players), player.get("name") or "İsimsiz", tm_id,
         )
 
-        profile = fetch_player_payload(base, "/profile", f"{tm_id} profil")
-        market_payload = fetch_player_payload(base, "/market_value", f"{tm_id} piyasa değeri geçmişi")
-        transfer_payload = fetch_player_payload(base, "/transfers", f"{tm_id} transfer geçmişi")
-        stats_payload = fetch_player_payload(base, "/stats", f"{tm_id} sezon istatistikleri")
+        profile = fetch_player_payload(base, "/profile", f"{tm_id} profil", ("id", "name"))
+        market_payload = fetch_player_payload(base, "/market_value", f"{tm_id} piyasa değeri geçmişi", ("id", "marketValueHistory"))
+        transfer_payload = fetch_player_payload(base, "/transfers", f"{tm_id} transfer geçmişi", ("id", "transfers"))
+        stats_payload = fetch_player_payload(base, "/stats", f"{tm_id} sezon istatistikleri", ("id", "stats"))
         injuries_payload = fetch_player_paged_rows(base, "/injuries", "injuries")
         absences_payload = fetch_player_paged_rows(base, "/absences", "absences")
 
