@@ -3966,7 +3966,7 @@ async function tmPlayer(env, id) {
     "Mevki": (typeof position === "string" ? position : (position && (position.main || position.name || position.displayName))) || row.position || "",
     "Forma No": pick(b, "shirtNumber", "squad_shirt_number", "shirt_number")
   };
-  if ((club && (club.contractExpires || club.contract_expires)) || b.contractUntil || b.contract_until || b.contractExpires || b.contract_expires) out.bio["Sözleşme Bitişi"] = (club && club.contractExpires) || b.contractUntil || b.contractExpires;
+  if ((club && (club.contractExpires || club.contract_expires)) || b.contractUntil || b.contract_until || b.contractExpires || b.contract_expires) out.bio["Sözleşme Bitişi"] = (club && (club.contractExpires || club.contract_expires)) || b.contractUntil || b.contract_until || b.contractExpires || b.contract_expires;
   if (Array.isArray(statsRows)) {
     const mp = new Map();
     for (const x of statsRows) {
@@ -4273,15 +4273,8 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     })());
   }
   await Promise.all(tasks);
-  if (!coach && wantStats && sportmonksToken(env)) {
-    // Always query the optional provider when configured. It may add older
-    // seasons or clubs even when the primary provider returned partial history;
-    // mergeCareerRows later fills only fields missing from the primary source.
-    try {
-      out.sm = await sportmonksPlayerCareer(env, name, teamHint, posHint);
-      st.sportmonks = out.sm.seasons.length ? "ok " + out.sm.seasons.length + " sezon/takım satırı" : out.sm.ambiguous ? "aynı isimli oyuncular takım bilgisiyle ayırt edilemedi" : "abonelik kapsamındaki oyuncu/sezon istatistiği bulunamadı";
-    } catch (e) { st.sportmonks = "hata: " + (e.message || e); }
-  } else if (!coach && wantStats) st.sportmonks = "SPORTMONKS_API_TOKEN tanımlı değil (isteğe bağlı ek kaynak)";
+  // Oyuncu sezon/kariyer verilerinde tek kaynak Transfermarkt veritabanıdır.
+
   const nm = (ss && ss.player && ss.player.name) || (out.af && out.af.player) || (out.sm && out.sm.player) || name;
   const bio = {};
   [out.ts && out.ts.bio, out.es && out.es.bio, out.wbio, out.af && out.af.bio, out.afCoach && out.afCoach.bio, out.sm && out.sm.bio, out.tm && out.tm.bio].forEach((b) => Object.entries(b || {}).forEach(([k, v]) => { if (v !== "" && v != null) bio[k] = v; }));
