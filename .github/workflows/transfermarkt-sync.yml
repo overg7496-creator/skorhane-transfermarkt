@@ -52,6 +52,9 @@ jobs:
       # separate [20:26:06, 21:00:04) UTC window and its own concurrency group.
       # Continuations preserve this upper timestamp so the two cohorts stay apart.
       TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ github.event.inputs.seen_before || '2026-11-25T20:26:06Z' }}
+      # Rows moved by legacy detail workers beyond the imported window are
+      # recovered only by this main queue; the new-cohort worker excludes them.
+      TM_DETAIL_AFTER_IMPORTED_END: "2026-11-25T21:00:04Z"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
