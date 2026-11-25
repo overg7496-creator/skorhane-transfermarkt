@@ -239,11 +239,15 @@ def normalize_squad_player(
     player: dict[str, Any] = {
         "name": name,
         "team_name": team_name,
-        "position": as_text(get_value(row, "position")),
-        "photo_url": as_text(get_value(row, "image_url", "imageUrl", "photo_url", "photoUrl")),
         "profile_payload": {"squad_import": squad_fields},
         "is_active": True,
     }
+    position = as_text(get_value(row, "position"))
+    photo_url = as_text(get_value(row, "image_url", "imageUrl", "photo_url", "photoUrl"))
+    if position:
+        player["position"] = position
+    if photo_url:
+        player["photo_url"] = photo_url
     # Missing fields are omitted, never sent as empty values to the merge RPC.
     if current_value is not None:
         player["current_market_value_eur"] = int(current_value)
