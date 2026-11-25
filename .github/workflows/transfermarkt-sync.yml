@@ -61,27 +61,39 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check imported cohort before enabling fallback recovery
+      - name: Check squad-import and imported-detail workers
+        id: cohort_safety
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if ! runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100")"; then
-            echo "Imported worker durumu okunamadı; güvenli tarafta kalıp post-window kurtarması bu çalışmada kapatıldı."
+            echo "Imported worker durumu okunamadı; güvenli tarafta kalıp bu çalışmada detay taraması atlandı."
+            echo "can_process_original=false" >> "$GITHUB_OUTPUT"
             echo "TM_DETAIL_AFTER_IMPORTED_END=" >> "$GITHUB_ENV"
             exit 0
           fi
-          active="$(jq '[.workflow_runs[] | select(
-            (.path == ".github/workflows/refresh-imported-player-details.yml" or
-             .path == ".github/workflows/import-missing-leagues.yml") and
+          active_squad_import="$(jq '[.workflow_runs[] | select(
+            .path == ".github/workflows/import-missing-leagues.yml" and
             .status != "completed"
           )] | length' <<< "$runs")"
-          if [ "$active" -eq 0 ]; then
-            echo "TM_DETAIL_AFTER_IMPORTED_END=2026-11-25T21:00:04Z" >> "$GITHUB_ENV"
-            echo "Imported cohort aktif değil; eski worker'lardan taşınmış bekleyen kayıtlar ana kuyruğa açıldı."
-          else
+          active_imported_detail="$(jq '[.workflow_runs[] | select(
+            .path == ".github/workflows/refresh-imported-player-details.yml" and
+            .status != "completed"
+          )] | length' <<< "$runs")"
+          if [ "$active_squad_import" -gt 0 ]; then
+            echo "can_process_original=false" >> "$GITHUB_OUTPUT"
             echo "TM_DETAIL_AFTER_IMPORTED_END=" >> "$GITHUB_ENV"
-            echo "Imported cohort için çalışan/bekleyen iş var; olası yarışmayı önlemek için post-window kurtarması ertelendi."
+            echo "Kadro aktarımı sürüyor/bekliyor; oyuncu listeleri değişmesin diye ana detay taraması ertelendi."
+          else
+            echo "can_process_original=true" >> "$GITHUB_OUTPUT"
+            if [ "$active_imported_detail" -eq 0 ]; then
+              echo "TM_DETAIL_AFTER_IMPORTED_END=2026-11-25T21:00:04Z" >> "$GITHUB_ENV"
+              echo "Yeni kadro detay işçisi aktif değil; eski işçiden taşınmış bekleyen kayıtlar ana kuyruğa açıldı."
+            else
+              echo "TM_DETAIL_AFTER_IMPORTED_END=" >> "$GITHUB_ENV"
+              echo "Yeni kadro detay işçisi aktif/beklemede; post-window kurtarması olası çakışmayı önlemek için ertelendi."
+            fi
           fi
 
       - name: Install dependencies
@@ -219,7 +231,19 @@ jobs:
         run: python sync/sync_transfermarkt.py import-squads
 
       - name: Refresh player detail data
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'refresh-details' || github.event.inputs.mode == 'import-squads' || github.event.inputs.mode == 'sync')) || (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *' && steps.detail_queue.outputs.has_pending == 'true') || (github.event_name == 'schedule' && github.event.schedule == '20 3 * * 1,4' && vars.ENABLE_TRANSFERMARKT_CRON == 'true')
+        if: >-
+          steps.cohort_safety.outputs.can_process_original == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'workflow_dispatch' &&
+            (github.event.inputs.mode == 'refresh-details' ||
+             github.event.inputs.mode == 'import-squads' ||
+             github.event.inputs.mode == 'sync')) ||
+           (github.event_name == 'schedule' &&
+            github.event.schedule == '*/15 * * * *' &&
+            steps.detail_queue.outputs.has_pending == 'true') ||
+           (github.event_name == 'schedule' &&
+            github.event.schedule == '20 3 * * 1,4' &&
+            vars.ENABLE_TRANSFERMARKT_CRON == 'true'))
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
