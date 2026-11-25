@@ -130,6 +130,37 @@ class SyncHelperTests(unittest.TestCase):
                 "2026-11-25T21:00:04Z", "2026-11-25T20:26:06Z"
             )
 
+    def test_imported_detail_queue_without_window_uses_recent_unprocessed_players(self):
+        from unittest.mock import patch
+
+        with patch.object(sync, "db_get", return_value=[]) as fetch:
+            self.assertEqual(sync.load_pending_player_detail_candidates(), [])
+        query = fetch.call_args.args[0]
+        self.assertIn("last_squad_seen_at=gte.", query)
+        self.assertIn("last_felipe_synced_at=is.null", query)
+
+    def test_imported_detail_continuation_preserves_workflow_without_window(self):
+        from unittest.mock import patch
+
+        player = {"tm_id": "1", "name": "Oyuncu"}
+        with (
+            patch.object(sync, "db_get", side_effect=[[], [player]]),
+            patch.object(sync, "dispatch_refresh_details_continuation") as dispatch,
+            patch.object(sync.time, "monotonic", side_effect=[0.0, 1.0]),
+            patch.dict(
+                os.environ,
+                {
+                    "TM_DETAIL_MAX_RUNTIME_SECONDS": "0",
+                    "TM_DETAIL_CONTINUATION_WORKFLOW": "refresh-imported-player-details.yml",
+                },
+            ),
+        ):
+            sync.sync_felipeall(backfill_only=True)
+        dispatch.assert_called_once_with(
+            workflow_file="refresh-imported-player-details.yml",
+            inputs={},
+        )
+
     def test_backfill_queue_is_resumable_and_uses_time_guard(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
         self.assertIn("last_felipe_synced_at=is.null", script)
