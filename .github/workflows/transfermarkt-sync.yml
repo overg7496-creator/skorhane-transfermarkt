@@ -48,6 +48,9 @@ jobs:
             python -m pip install "git+https://github.com/dcaribou/transfermarkt-scraper.git"
           fi
 
+      - name: Validate Python syntax
+        run: python -m py_compile sync/sync_transfermarkt.py
+
       - name: Run current sync
         if: (github.event_name == 'schedule' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'sync')
         env:
@@ -57,6 +60,7 @@ jobs:
           FELIPE_API_BASE: https://transfermarkt-api.fly.dev
           TM_LEAGUES: TR1
           TM_SEASON: "2026"
+          TM_APIFY_MAX_PLAYERS: "1000"
           REQUEST_DELAY_MIN_SECONDS: "1.5"
           REQUEST_DELAY_MAX_SECONDS: "3.5"
           FELIPE_DELAY_MIN_SECONDS: "3.1"
@@ -87,6 +91,7 @@ jobs:
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           TM_LEAGUES: TR1
           TM_SEASON: "2026"
+          TM_APIFY_MAX_PLAYERS: "1000"
           REQUEST_DELAY_MIN_SECONDS: "1.5"
           REQUEST_DELAY_MAX_SECONDS: "3.5"
         run: python sync/sync_transfermarkt.py import-squads
