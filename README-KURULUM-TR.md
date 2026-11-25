@@ -112,7 +112,7 @@ Felipe API, workflow içinde klonlanıp runner üzerinde başlatılır. Kadro i�
 
 ## 5. Önerilen test sırası
 
-1. **Eksik ligleri içe aktar:** Actions → `SkorHane Eksik Lig Kadro Aktarımı` → Run workflow. Bu ayrı iş `TR3,TR4,L1,IT1,FR1` liglerini aktarır.
+1. **Eksik ligleri içe aktar:** Actions → `SkorHane Eksik Lig Kadro Aktarımı` → Run workflow. Bu ayrı iş akışı 2. Lig grupları `TR3A, TR3B`, 3. Lig grupları `TR4A–TR4D` ile Bundesliga `L1`, Serie A `IT1` ve Ligue 1 `FR1` kadrolarını ana oyuncu detay aktarımından bağımsız içe aktarır. Dosya güncellendiğinde otomatik başlar; Actions ekranından elle de başlatılabilir.
 2. **Tüm kadroları elle aktar:** Actions → `SkorHane Transfermarkt Sync` → Run workflow → `import-squads`.
 3. **Supabase'i kontrol et:**
 
@@ -150,6 +150,6 @@ limit 30;
 - `sync/sync_squads_and_clubs.py` – Felipe API'den lig/kulüp/kadro aktarımı.
 - `sync/sync_transfermarkt.py` – oyuncu detayları, transferler, değer geçmişi, istatistik ve tarihsel seed işleri.
 - `.github/workflows/transfermarkt-sync.yml` – ana manuel/zamanlanmış görevler.
-- `.github/workflows/import-missing-leagues.yml` – eksik ligler için bağımsız manuel görev.
+- `.github/workflows/import-missing-leagues.yml` – eksik ligler için ana oyuncu yenilemesinden ayrı, paralel ve otomatik tetiklenen görev.
 - `database/001_transfermarkt_schema.sql` – tablolar, RLS ve UPSERT RPC'leri.
 - `tests/` – ağ gerektirmeyen senkronizasyon testleri.
