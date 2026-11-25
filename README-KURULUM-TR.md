@@ -150,6 +150,6 @@ limit 30;
 - `sync/sync_squads_and_clubs.py` – Felipe API'den lig/kulüp/kadro aktarımı.
 - `sync/sync_transfermarkt.py` – oyuncu detayları, transferler, değer geçmişi, istatistik ve tarihsel seed işleri.
 - `.github/workflows/transfermarkt-sync.yml` – ana manuel/zamanlanmış görevler.
-- `.github/workflows/import-missing-leagues.yml` – eksik ligler için ana oyuncu yenilemesinden ayrı, paralel ve otomatik tetiklenen görev.
+- `.github/workflows/import-missing-leagues.yml` – eksik ligler için ana oyuncu yenilemesinden ayrı, paralel ve süre sınırında checkpoint’ten otomatik devam eden görev.
 - `database/001_transfermarkt_schema.sql` – tablolar, RLS ve UPSERT RPC'leri.
 - `tests/` – ağ gerektirmeyen senkronizasyon testleri.

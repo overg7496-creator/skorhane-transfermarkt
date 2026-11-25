@@ -40,6 +40,7 @@ DELAY_MIN = float(os.getenv("REQUEST_DELAY_MIN_SECONDS", "1.5"))
 DELAY_MAX = float(os.getenv("REQUEST_DELAY_MAX_SECONDS", "3.0"))
 HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT_SECONDS", "45"))
 MAX_RETRIES = int(os.getenv("HTTP_MAX_RETRIES", "3"))
+SQUAD_SYNC_MAX_RUNTIME_SECONDS = int(os.getenv("SQUAD_SYNC_MAX_RUNTIME_SECONDS", "20400"))
 
 
 def require_config() -> None:
@@ -53,6 +54,8 @@ def require_config() -> None:
         raise RuntimeError("TM_SEASON boş.")
     if DELAY_MIN < 0 or DELAY_MAX < DELAY_MIN:
         raise RuntimeError("REQUEST_DELAY_MIN_SECONDS / REQUEST_DELAY_MAX_SECONDS geçersiz.")
+    if SQUAD_SYNC_MAX_RUNTIME_SECONDS < 60:
+        raise RuntimeError("SQUAD_SYNC_MAX_RUNTIME_SECONDS en az 60 saniye olmalı.")
 
 
 def api_get(path: str) -> Any:
@@ -354,15 +357,67 @@ def save_club_metadata(
     })
 
 
+
+def completed_club_checkpoint(
+    state: dict[str, Any], *, today: str, force: bool = False
+) -> tuple[set[str], bool]:
+    """Keep running/completed checkpoints across midnight; a new season uses a new record key."""
+    if force:
+        return set(), False
+    status = state.get("status")
+    same_day_legacy_checkpoint = state.get("sync_date") == today
+    resumable = status in {"running", "completed"} or same_day_legacy_checkpoint
+    if not resumable:
+        return set(), False
+    completed = {
+        str(item) for item in state.get("completed_club_ids", [])
+        if item is not None
+    }
+    return completed, True
+
+
+def dispatch_squad_continuation() -> bool:
+    """Dispatch the same workflow again so it can resume from saved club checkpoints."""
+    token = os.getenv("GITHUB_TOKEN", "")
+    repository = os.getenv("GITHUB_REPOSITORY", "")
+    ref = os.getenv("GITHUB_REF_NAME", "main")
+    if not token or not repository:
+        LOG.error("Kadro aktarımında süre sınırı doldu ancak otomatik devam için GitHub token/repository yok.")
+        return False
+    url = f"https://api.github.com/repos/{repository}/actions/workflows/import-missing-leagues.yml/dispatches"
+    payload = json.dumps({"ref": ref}).encode("utf-8")
+    request = Request(url, data=payload, headers={
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "SkorHane-Squad-Queue",
+        "Content-Type": "application/json",
+    }, method="POST")
+    try:
+        with urlopen(request, timeout=30) as response:
+            response.read()
+            LOG.info("Eksik liglerde kalan kulüpler için otomatik devam çalışması kuyruğa alındı (HTTP %s).", response.status)
+            return True
+    except (HTTPError, URLError, TimeoutError) as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:1000] if isinstance(exc, HTTPError) else str(exc)
+        LOG.error("Eksik lig otomatik devamı kuyruğa alınamadı; tekrar başlatılması gerekecek: %s", detail)
+        return False
+
 def sync_squads_and_clubs(*, force: bool = False) -> int:
     """Fetch league clubs and their current squads, one club at a time."""
     require_config()
     today = datetime.now(timezone.utc).date().isoformat()
+    started = time.monotonic()
     total_players = 0
     failed_clubs: list[str] = []
+    stopped_for_time = False
 
     LOG.info("Kadro aktarımı başlıyor: ligler=%s sezon=%s", ",".join(TM_LEAGUES), TM_SEASON)
     for competition_id in TM_LEAGUES:
+        if time.monotonic() - started >= SQUAD_SYNC_MAX_RUNTIME_SECONDS:
+            stopped_for_time = True
+            LOG.warning("Güvenli süre sınırına ulaşıldı; kalan ligler sonraki çalışmaya bırakılıyor.")
+            break
         competition_path = (
             f"/competitions/{quote(competition_id, safe='')}/clubs?"
             + urlencode({"season_id": TM_SEASON})
@@ -378,13 +433,8 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
         competition_name = as_text(get_value(competition, "name")) or competition_id
         api_season = as_text(get_value(competition, "season_id", "seasonId")) or TM_SEASON
         state = load_league_state(competition_id, api_season)
-        completed = set()
-        if not force and state.get("sync_date") == today:
-            completed = {
-                str(item) for item in state.get("completed_club_ids", [])
-                if item is not None
-            }
-        if state.get("sync_date") != today or force:
+        completed, has_checkpoint = completed_club_checkpoint(state, today=today, force=force)
+        if not has_checkpoint:
             save_league_state(competition_id, api_season, {
                 "status": "running",
                 "sync_date": today,
@@ -404,6 +454,10 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
                 continue
             if club_id in completed:
                 continue
+            if time.monotonic() - started >= SQUAD_SYNC_MAX_RUNTIME_SECONDS:
+                stopped_for_time = True
+                LOG.warning("Güvenli süre sınırına ulaşıldı; %s kulübünden sonra kayıtlı noktada duruluyor.", club_name)
+                break
 
             club_profile: dict[str, Any] | None = None
             try:
@@ -485,13 +539,21 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
             LOG.warning("%s kısmi kaldı: %s/%s kulüp tamamlandı.",
                         competition_name, len(all_club_ids & completed), len(all_club_ids))
 
+        if stopped_for_time:
+            break
+
     if failed_clubs:
         raise RuntimeError(
             f"Kadro senkronizasyonu kısmi kaldı: {total_players} oyuncu yazıldı; "
             f"{len(failed_clubs)} kulüp sonraki çalıştırmaya bırakıldı: "
             + ", ".join(failed_clubs[:20])
         )
-    LOG.info("Kadro aktarımı tamamlandı: %s oyuncu UPSERT edildi.", total_players)
+    if stopped_for_time:
+        if dispatch_squad_continuation():
+            LOG.info("Kadro aktarımı güvenli biçimde durdu; sonraki çalışma checkpoint\u2019ten devam edecek.")
+        else:
+            LOG.error("Kadro aktarımı checkpoint\u2019te durdu ancak otomatik devam başlatılamadı.")
+    LOG.info("Kadro aktarımı bu çalışmada %s oyuncu UPSERT etti.", total_players)
     return total_players
 
 

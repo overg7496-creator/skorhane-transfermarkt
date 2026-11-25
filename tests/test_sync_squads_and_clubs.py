@@ -75,6 +75,43 @@ class SquadNormalizationTests(unittest.TestCase):
 
 
 class SquadSyncTests(unittest.TestCase):
+
+    def test_running_checkpoint_resumes_across_utc_day_boundary(self):
+        state = {
+            "status": "running",
+            "sync_date": "2026-11-25",
+            "completed_club_ids": ["10", "20"],
+        }
+        completed, has_checkpoint = squads.completed_club_checkpoint(
+            state, today="2026-11-26"
+        )
+        self.assertTrue(has_checkpoint)
+        self.assertEqual(completed, {"10", "20"})
+
+    def test_completed_checkpoint_is_not_imported_again_on_next_day(self):
+        state = {
+            "status": "completed",
+            "sync_date": "2026-11-25",
+            "completed_club_ids": ["10", "20"],
+        }
+        completed, has_checkpoint = squads.completed_club_checkpoint(
+            state, today="2026-11-26"
+        )
+        self.assertTrue(has_checkpoint)
+        self.assertEqual(completed, {"10", "20"})
+
+    def test_force_discards_checkpoint(self):
+        state = {
+            "status": "running",
+            "sync_date": "2026-11-25",
+            "completed_club_ids": ["10"],
+        }
+        completed, has_checkpoint = squads.completed_club_checkpoint(
+            state, today="2026-11-26", force=True
+        )
+        self.assertFalse(has_checkpoint)
+        self.assertEqual(completed, set())
+
     def test_sync_uses_competition_and_club_roster_endpoints(self):
         competition = {
             "id": "TR1",

@@ -1,0 +1,52 @@
+name: SkorHane 6 Saat Sınırı — Acil Devam
+
+on:
+  workflow_run:
+    workflows:
+      - SkorHane Transfermarkt Sync
+      - SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  resume-after-hard-timeout:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Continue only after an actual GitHub job timeout
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+          SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+
+          jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/jobs?per_page=100")"
+          timed_out="$(jq '[.jobs[] | select(.conclusion == "timed_out")] | length' <<< "$jobs")"
+
+          if [ "$timed_out" -eq 0 ]; then
+            echo "İş GitHub'ın 6 saatlik sert sınırına takılmadı; otomatik tekrar yapılmayacak."
+            exit 0
+          fi
+
+          ref="${SOURCE_BRANCH:-main}"
+          case "$SOURCE_WORKFLOW_PATH" in
+            .github/workflows/import-missing-leagues.yml)
+              workflow="import-missing-leagues.yml"
+              echo "Eksik lig aktarımı sert süre sınırına takıldı; kulüp checkpoint'lerinden devam edilecek."
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" -f ref="$ref"
+              ;;
+            .github/workflows/transfermarkt-sync.yml)
+              workflow="transfermarkt-sync.yml"
+              echo "Oyuncu detay aktarımı sert süre sınırına takıldı; kalıcı oyuncu kuyruğundan devam edilecek."
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" -f ref="$ref" -f inputs[mode]=refresh-details
+              ;;
+            *)
+              echo "Bilinmeyen workflow yolu: $SOURCE_WORKFLOW_PATH; otomatik tekrar atlandı."
+              exit 0
+              ;;
+          esac
