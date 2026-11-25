@@ -274,53 +274,103 @@ def upsert_player(tm_id: str, source: str, row: dict[str, Any]) -> None:
 
 
 def sync_kamerozkan(*, required: bool = False) -> int:
-    """Scheduled roster/value source. Actor uses TR1 by default; token is user-supplied."""
+    """Import current league squads and market values from the Apify actor."""
     if not APIFY_TOKEN:
         if required:
             raise RuntimeError("APIFY_TOKEN tanımlı değil. kamerozkan kadro içe aktarımı için Apify token gerekli.")
         LOG.warning("APIFY_TOKEN yok; kamerozkan kaynağı bu çalıştırmada atlandı.")
         return 0
 
-   body = {
-    "leagues": TM_LEAGUES,
-    "season": TM_SEASON,
-    "trackChanges": True,
-    "proxyConfiguration": {
-        "useApifyProxy": True,
-        "apifyProxyGroups": ["RESIDENTIAL"],
-        "apifyProxyCountry": "TR",
-    },
-}
+    max_players = int(os.getenv("TM_APIFY_MAX_PLAYERS", "1000"))
+    if not 1 <= max_players <= 20000:
+        raise RuntimeError("TM_APIFY_MAX_PLAYERS 1 ile 20000 arasında olmalı.")
+
+    proxy_country = os.getenv("APIFY_PROXY_COUNTRY", "TR").strip().upper()
+    if not re.fullmatch(r"[A-Z]{2}", proxy_country):
+        raise RuntimeError("APIFY_PROXY_COUNTRY iki harfli ülke kodu olmalı (ör. TR).")
+
+    body = {
+        "leagues": TM_LEAGUES,
+        "season": TM_SEASON,
+        "maxPlayers": max_players,
+        "maxClubsPerLeague": 0,
+        "trackChanges": True,
+        "onlyChanges": False,
+        "proxyConfiguration": {
+            "useApifyProxy": True,
+            "apifyProxyGroups": ["RESIDENTIAL"],
+            "apifyProxyCountry": proxy_country,
+        },
+    }
+
+    actor_id = quote(APIFY_ACTOR, safe="~")
+    token = quote(APIFY_TOKEN)
     run = json_request(
-        f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs?token={quote(APIFY_TOKEN)}",
-        method="POST", payload=body, source="kamerozkan/Apify", retries=0,
+        f"https://api.apify.com/v2/actors/{actor_id}/runs?token={token}&waitForFinish=60",
+        method="POST",
+        payload=body,
+        source="kamerozkan/Apify",
+        retries=0,
     )
-    run_id = ((run or {}).get("data") or {}).get("id")
+    run_data = (run or {}).get("data") or {}
+    run_id = run_data.get("id")
     if not run_id:
         raise RuntimeError("Apify actor başlatıldı ancak run ID alınamadı.")
-    run_data = (run or {}).get("data") or {}
+
+    terminal_states = {"SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"}
     state = run_data.get("status")
-    # The run request returns immediately; poll status separately to avoid a long POST timeout.
-    for _ in range(120):
-        if state in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"):
+    for _ in range(60):
+        if state in terminal_states:
             break
-        time.sleep(15)
-        status = json_request(f"https://api.apify.com/v2/actor-runs/{run_id}?token={quote(APIFY_TOKEN)}", source="Apify run status")
+        status = json_request(
+            f"https://api.apify.com/v2/actor-runs/{quote(str(run_id))}?token={token}&waitForFinish=60",
+            source="Apify run status",
+        )
         run_data = (status or {}).get("data") or {}
         state = run_data.get("status")
+
     if state != "SUCCEEDED":
-        raise RuntimeError(f"Apify actor tamamlanmadı: {state or 'unknown'}")
+        raise RuntimeError(
+            f"Apify actor tamamlanmadı: durum={state or 'unknown'}, "
+            f"mesaj={safe_text(run_data.get('statusMessage')) or 'yok'}, run_id={run_id}"
+        )
+
     dataset_id = run_data.get("defaultDatasetId")
     if not dataset_id:
-        raise RuntimeError("Apify çıktısı için defaultDatasetId bulunamadı.")
-    items = json_request(f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={quote(APIFY_TOKEN)}&clean=true&format=json&limit=10000", source="Apify dataset")
-      
+        raise RuntimeError(f"Apify çıktısı için defaultDatasetId bulunamadı. run_id={run_id}")
+
+    items = json_request(
+        f"https://api.apify.com/v2/datasets/{quote(str(dataset_id))}/items"
+        f"?token={token}&clean=true&format=json&limit=10000",
+        source="Apify dataset",
+    )
     if not isinstance(items, list):
-        raise RuntimeError("Apify dataset yanıtı liste değil; mevcut DB verisi korunuyor.")
-    valid_rows = [(row, player_id_from_row(row)) for row in items if isinstance(row, dict)]
+        raise RuntimeError(
+            f"Apify dataset yanıtı liste değil; tür={type(items).__name__}, run_id={run_id}. "
+            "Mevcut Supabase verileri korunuyor."
+        )
+
+    dict_rows = [row for row in items if isinstance(row, dict)]
+    valid_rows = [(row, player_id_from_row(row)) for row in dict_rows]
     valid_rows = [(row, tm_id) for row, tm_id in valid_rows if tm_id]
     if not valid_rows:
-                raise RuntimeError(f"Apify DEBUG: tür={type(items).__name__}, kayıt_sayısı={len(items) if isinstance(items, list) else 'liste değil'}, ilk_kayıt={repr(items[0])[:2000] if isinstance(items, list) and items else repr(items)[:2000]}")
+        sample = repr(items[:2])[:1500]
+        run_message = safe_text(run_data.get("statusMessage")) or "yok"
+        stats = run_data.get("stats") if isinstance(run_data.get("stats"), dict) else {}
+        raise RuntimeError(
+            "Apify çalışması SUCCEEDED görünmesine rağmen kullanılabilir oyuncu kaydı gelmedi. "
+            f"dataset_item_count={len(items)}, dict_row_count={len(dict_rows)}, "
+            f"maxPlayers={max_players}, statusMessage={run_message}, stats={stats}, "
+            f"sample={sample}, run_id={run_id}. "
+            f"Çalışma ayrıntısı: https://console.apify.com/actors/{actor_id}/runs/{quote(str(run_id))}. "
+            "Hiçbir oyuncu verisi Supabase'e yazılmadı."
+        )
+
+    club_counts: dict[str, int] = {}
+    for row, _ in valid_rows:
+        club_name = safe_text(row.get("clubName"), row.get("club"), row.get("clubId")) or "Takımı bilinmiyor"
+        club_counts[club_name] = club_counts.get(club_name, 0) + 1
+
     count = 0
     for row, tm_id in valid_rows:
         normalized = {
@@ -332,38 +382,55 @@ def sync_kamerozkan(*, required: bool = False) -> int:
             "is_active": True,
             "current_market_value_eur": row.get("marketValueEur") if isinstance(row.get("marketValueEur"), (int, float)) else parse_money_eur(row.get("marketValue")),
             "current_market_value_text": safe_text(row.get("marketValue")),
-            # checkedAt is only the time we observed the current value, not an
-            # official valuation date. Keep those concepts separate.
             "current_market_value_date": normalize_date(row.get("marketValueDate")),
             "current_market_value_observed_at": safe_text(row.get("checkedAt")) or datetime.now(timezone.utc).isoformat(),
         }
         upsert_player(tm_id, "kamerozkan", normalized)
         source_record("kamerozkan", "player_squad", tm_id, str(row.get("clubId") or row.get("clubName") or ""), row)
-        # Only add a historical valuation point when the source supplied an
-        # actual valuation date. A checkedAt timestamp updates the current
-        # observation, but must not masquerade as a Transfermarkt valuation.
+
         market_date = normalized.get("current_market_value_date")
         market_eur = normalized.get("current_market_value_eur")
         market_text = normalized.get("current_market_value_text")
         if market_date and (market_eur is not None or market_text):
             rpc("tm_upsert_market_value", {"p_row": {
-                "tm_id": tm_id, "valuation_date": market_date, "value_eur": market_eur,
-                "display_value": market_text, "club_name": normalized.get("team_name"),
-                "payload": row, "source": "kamerozkan",
+                "tm_id": tm_id,
+                "valuation_date": market_date,
+                "value_eur": market_eur,
+                "display_value": market_text,
+                "club_name": normalized.get("team_name"),
+                "payload": row,
+                "source": "kamerozkan",
             }})
+
         joined = normalize_date(row.get("joinedDate"))
         from_club = safe_text(row.get("signedFrom"))
         to_club = safe_text(row.get("clubName"), row.get("club"))
         if joined and from_club and to_club:
             rpc("tm_upsert_transfer", {"p_row": {
-                "tm_id": tm_id, "transfer_date": joined, "from_club": from_club, "to_club": to_club,
-                "transfer_type": "transfer", "fee_text": safe_text(row.get("transferFee")),
-                "fee_eur": parse_money_eur(row.get("transferFee")), "payload": row, "source": "kamerozkan",
+                "tm_id": tm_id,
+                "transfer_date": joined,
+                "from_club": from_club,
+                "to_club": to_club,
+                "transfer_type": "transfer",
+                "fee_text": safe_text(row.get("transferFee")),
+                "fee_eur": parse_money_eur(row.get("transferFee")),
+                "payload": row,
+                "source": "kamerozkan",
             }})
         count += 1
-    LOG.info("kamerozkan tamamlandı: %s oyuncu kaydı", count)
-    return count
 
+    club_summary = ", ".join(f"{club}: {players}" for club, players in sorted(club_counts.items()))
+    LOG.info(
+        "kamerozkan tamamlandı: %s oyuncu / %s kulüp. Kulüp dağılımı: %s",
+        count, len(club_counts), club_summary,
+    )
+    if count >= max_players:
+        LOG.warning(
+            "Apify maxPlayers sınırına (%s) ulaşıldı; bazı kulüpler kesilmiş olabilir. "
+            "TM_APIFY_MAX_PLAYERS artırılabilir.",
+            max_players,
+        )
+    return count
 
 def value_from(obj: Any, keys: tuple[str, ...]) -> Any:
     if isinstance(obj, dict):
@@ -898,15 +965,20 @@ def main() -> int:
             raise RuntimeError("Test oyuncusu önce kadro senkronizasyonuyla tm_players tablosuna eklenmeli.")
         logged_run("felipeall", "one-player-test", lambda: sync_felipeall(only_player=str(args.player_id)))
         return 0
-    # Current-only workflow: no historical season loop.
+    # Current-only workflow: attempt both sources, but fail the job if either fails.
+    failures: list[str] = []
     try:
         logged_run("kamerozkan", "sync", sync_kamerozkan)
     except Exception as exc:
         LOG.exception("kamerozkan kaynağı başarısız; önceki kayıtlar korunuyor: %s", exc)
+        failures.append(f"kamerozkan: {safe_error_for_log(exc)}")
     try:
         logged_run("felipeall", "sync", sync_felipeall)
     except Exception as exc:
         LOG.exception("felipeall kaynağı başarısız; önceki kayıtlar korunuyor: %s", exc)
+        failures.append(f"felipeall: {safe_error_for_log(exc)}")
+    if failures:
+        raise RuntimeError("Senkronizasyon kaynak hataları: " + " | ".join(failures))
     return 0
 
 
