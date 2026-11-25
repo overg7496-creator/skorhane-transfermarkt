@@ -1,0 +1,47 @@
+name: Build SkorHane HTML and Worker ZIP
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build ZIP
+        run: |
+          mkdir -p package
+          cp SkorHane-HTML-kodu-kopyalanabilir.txt package/SkorHane-HTML.html
+          cp SkorHane-Worker.js package/SkorHane-Worker.js
+          cp SkorHane-Worker-kodu-kopyalanabilir.txt package/SkorHane-Worker-kodu-kopyalanabilir.txt
+          cat > package/KURULUM.txt <<'EOF'
+          SKORHANE GUNCEL PAKET
+
+          1) SkorHane-HTML.html: mevcut uygulamadaki HTML dosyasinin yerine kullan.
+          2) SkorHane-Worker.js: Cloudflare Worker'a yapistirip Deploy et.
+          3) Worker kodunu kopyalamak icin SkorHane-Worker-kodu-kopyalanabilir.txt dosyasini kullanabilirsin.
+          4) Worker.js ve kopyalanabilir TXT dosyasinin icerigi aynidir.
+
+          NOT: Oyuncu kariyeri, piyasa degeri, sakatlik ve transfer gecmisi icin
+          GitHub Actions icinde 'refresh-details' modu da calistirilmalidir.
+          Bu mod her calismada en fazla 80 oyuncuyu Transfermarkt ayrintilariyla gunceller.
+          525 oyuncunun tamamini islemek icin 80 oyunculuk partiler halinde tekrar calistir.
+          EOF
+          cd package
+          zip -q -j ../SkorHane-Guncel.zip SkorHane-HTML.html SkorHane-Worker.js SkorHane-Worker-kodu-kopyalanabilir.txt KURULUM.txt
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkorHane-Guncel
+          path: SkorHane-Guncel.zip
+          if-no-files-found: error
+          retention-days: 30
