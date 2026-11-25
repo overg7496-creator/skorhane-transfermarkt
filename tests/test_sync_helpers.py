@@ -67,6 +67,12 @@ class SyncHelperTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
                 sync.fetch_player_paged_rows("https://api/players/1", "/injuries", "injuries")
 
+
+    def test_player_sync_never_uses_shared_public_api_by_default(self):
+        script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
+        self.assertIn('FELIPE_API_BASE = os.getenv("FELIPE_API_BASE", "http://127.0.0.1:8000")', script)
+        self.assertNotIn("fetch_optional_player_payload", script)
+
     def test_felipe_rotation_has_independent_cursor(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
         self.assertIn("last_felipe_synced_at.asc.nullsfirst", script)
