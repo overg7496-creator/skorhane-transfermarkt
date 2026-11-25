@@ -33,7 +33,7 @@ LOG.addHandler(_handler)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-FELIPE_API_BASE = os.getenv("FELIPE_API_BASE", "https://transfermarkt-api.fly.dev").rstrip("/")
+FELIPE_API_BASE = os.getenv("FELIPE_API_BASE", "http://127.0.0.1:8000").rstrip("/")
 APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
 APIFY_ACTOR = os.getenv("APIFY_ACTOR", "kamerozkan~transfermarkt-scraper")
 TM_LEAGUES = [x.strip() for x in os.getenv("TM_LEAGUES", "TR1").split(",") if x.strip()]
@@ -574,7 +574,7 @@ def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any
         raise RuntimeError(f"felipeall {key}: ilk sayfa geçersiz yanıt; oyuncu tamamlanmadı.")
     if isinstance(first, dict) and not any(k in first for k in (key, "data", "items", "results")):
         raise RuntimeError(f"felipeall {key}: beklenen liste alanı yanıtta yok; oyuncu tamamlanmadı.")
-    rows = iterable_from(first, (key,))
+    rows = iterable_from(first, (key, "data", "items", "results"))
     if isinstance(first, list):
         return {key: rows, "page_number": 1, "last_page_number": 1}
 
@@ -587,7 +587,7 @@ def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any
             raise RuntimeError(f"felipeall {key} sayfa {page}: geçersiz yanıt; oyuncu tamamlanmadı.")
         if isinstance(payload, dict) and not any(k in payload for k in (key, "data", "items", "results")):
             raise RuntimeError(f"felipeall {key} sayfa {page}: beklenen liste alanı yok; oyuncu tamamlanmadı.")
-        page_rows = iterable_from(payload, (key,))
+        page_rows = iterable_from(payload, (key, "data", "items", "results"))
         if not page_rows:
             raise RuntimeError(
                 f"felipeall {key} sayfa {page}: beklenen sayfada kayıt gelmedi; "
