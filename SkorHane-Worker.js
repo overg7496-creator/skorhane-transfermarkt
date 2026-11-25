@@ -4285,12 +4285,9 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
   // let an older Transfermarkt profile override it when the providers disagree.
   if (coach && out.afCoach && out.afCoach.bio && out.afCoach.bio["Şu Anki Takım"]) bio["Şu Anki Takım"] = out.afCoach.bio["Şu Anki Takım"];
   const esRows = (out.es && out.es.seasons || []).map((r) => ({ ...r, "Sezon": String(r["Sezon"] || ""), "Takım": r["Takım"] || "", "Maç": r["Maç"] == null ? null : num(r["Maç"]), "Gol": r["Gol"] == null ? null : num(r["Gol"]), "Asist": r["Asist"] == null ? null : num(r["Asist"]), "İlk 11": r["İlk 11"] == null ? null : num(r["İlk 11"]), "Sarı Kart": r["Sarı Kart"] == null ? null : num(r["Sarı Kart"]), "Kırmızı Kart": r["Kırmızı Kart"] == null ? null : num(r["Kırmızı Kart"]), cats: r.cats || null }));
-  const rows = mergeCareerRows([out.tm && out.tm.seasons, out.sd && out.sd.seasons, esRows, out.tsStats, out.wrows, out.sm && out.sm.seasons]);
-  // API-Football is intentionally excluded from the general career-row merge:
-  // its supplemental feed must not replace Maç/Gol or any other table columns.
-  // Override only Asist / İlk 11 / Sarı Kart / Kırmızı Kart with verified
-  // API-Football values. Other career columns remain exactly as before.
-  overlayApiFootballCareerFields(rows, out.af && out.af.seasons);
+  // Oyuncu kariyer tablosunun tek veri kaynağı Transfermarkt'tır.
+  // PitchAPI, API-Football, ESPN ve diğer sağlayıcılar sezon istatistiklerine eklenmez.
+  const rows = mergeCareerRows([out.tm && out.tm.seasons]);
   // Cross-check API-Football's transfer chronology with Transfermarkt transfer history.
   // Both sources write chronological timestamps onto the season/team rows, oldest stint first.
   if (out.tm && out.tm.transfers) applyTransferOrderToCareerRows(rows, out.tm.transfers);
@@ -4338,18 +4335,6 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
   }
   const sp = splitSeasons(rows);
   await attachCareerTeamLogos(env, [...sp.seasons, ...(out.national || [])]);
-  if (out.us && out.us.length) {
-    // Understat lig asistlerini sezon satırlarına ekle (Transfermarkt asisti zaten varsa dokunma)
-    for (const r of sp.seasons) {
-      if (r["Asist"] != null && Number(r["Asist"]) > 0) continue;
-      const y = parseInt(String(r["Sezon"]).slice(0, 4), 10);
-      const u = out.us.find((x) => x.year === y && nameLike(x.team, r["Takım"]));
-      if (!u) continue;
-      r.aLig = u.a;
-      if (!r.cats) r.cats = emptyCats();
-      r.cats.lig.a = u.a;
-    }
-  }
   if (coach && out.afCoach && out.afCoach.career.length) {
     const apiRows = out.afCoach.career;
     const wikiRows = out.coachRows || [];
