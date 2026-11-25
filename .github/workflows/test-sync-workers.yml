@@ -1,0 +1,30 @@
+name: SkorHane Sync Worker Tests
+
+on:
+  push:
+    paths:
+      - "sync/**"
+      - "tests/**"
+      - ".github/workflows/test-sync-workers.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate Python workers
+        run: |
+          python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py
+          python -m unittest discover -s tests -v
