@@ -54,23 +54,58 @@ jobs:
           python -m py_compile sync/sync_transfermarkt.py
           node --input-type=module --check < SkorHane-Worker.js
 
+      - name: Start dedicated Transfermarkt API (v5.0.0)
+        if: >-
+          (github.event_name == 'schedule' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') ||
+          (github.event_name == 'workflow_dispatch' &&
+           (github.event.inputs.mode == 'sync' ||
+            github.event.inputs.mode == 'refresh-details' ||
+            github.event.inputs.mode == 'one-player-test'))
+        env:
+          RATE_LIMITING_ENABLE: "false"
+          TFMKT_MAX_CONCURRENCY: "1"
+          TFMKT_TIMEOUT_SECONDS: "30"
+          CACHE_TTL_SECONDS: "600"
+        run: |
+          python -m pip install --upgrade uv
+          git clone --depth 1 --branch v5.0.0 https://github.com/felipeall/transfermarkt-api.git "$RUNNER_TEMP/transfermarkt-api"
+          cd "$RUNNER_TEMP/transfermarkt-api"
+          uv sync --extra server --no-dev
+          nohup uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/transfermarkt-api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/transfermarkt-api.pid"
+          ready=0
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:8000/health > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat "$RUNNER_TEMP/transfermarkt-api.log"
+            echo "Kendi Transfermarkt API sunucumuz 90 saniye içinde başlamadı."
+            exit 1
+          fi
+          echo "Özel Transfermarkt API hazır (v5.0.0, eşzamanlı upstream isteği=1)."
+
       - name: Run current sync
         if: (github.event_name == 'schedule' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'sync')
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
-          FELIPE_API_BASE: https://transfermarkt-api.fly.dev
+          FELIPE_API_BASE: http://127.0.0.1:8000
           TM_LEAGUES: TR1
           TM_SEASON: "2026"
           TM_APIFY_MAX_PLAYERS: "1000"
           REQUEST_DELAY_MIN_SECONDS: "1.5"
           REQUEST_DELAY_MAX_SECONDS: "3.5"
-          FELIPE_DELAY_MIN_SECONDS: "3.1"
-          FELIPE_DELAY_MAX_SECONDS: "4.0"
+          FELIPE_DELAY_MIN_SECONDS: "5.5"
+          FELIPE_DELAY_MAX_SECONDS: "7.0"
           TM_MAX_PLAYERS_PER_RUN: "80"
           TM_MAX_MATCH_PAGES: "5"
           HTTP_MAX_RETRIES: "4"
+          HTTP_TIMEOUT_SECONDS: "45"
         run: python sync/sync_transfermarkt.py sync
 
       - name: Refresh player detail data
@@ -78,12 +113,13 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FELIPE_API_BASE: https://transfermarkt-api.fly.dev
+          FELIPE_API_BASE: http://127.0.0.1:8000
           TM_MAX_PLAYERS_PER_RUN: "80"
-          FELIPE_DELAY_MIN_SECONDS: "3.1"
-          FELIPE_DELAY_MAX_SECONDS: "4.0"
+          FELIPE_DELAY_MIN_SECONDS: "5.5"
+          FELIPE_DELAY_MAX_SECONDS: "7.0"
           TM_MAX_MATCH_PAGES: "5"
           HTTP_MAX_RETRIES: "4"
+          HTTP_TIMEOUT_SECONDS: "45"
         run: python sync/sync_transfermarkt.py refresh-details
 
       - name: Run historical seed
@@ -118,7 +154,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id }}
-          FELIPE_API_BASE: https://transfermarkt-api.fly.dev
-          FELIPE_DELAY_MIN_SECONDS: "3.1"
-          FELIPE_DELAY_MAX_SECONDS: "4.0"
+          FELIPE_API_BASE: http://127.0.0.1:8000
+          FELIPE_DELAY_MIN_SECONDS: "5.5"
+          FELIPE_DELAY_MAX_SECONDS: "7.0"
         run: python sync/sync_transfermarkt.py one-player-test
