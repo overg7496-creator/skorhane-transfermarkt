@@ -1,0 +1,49 @@
+name: SkorHane Eksik Lig Kadro Aktarımı
+
+on:
+  push:
+    paths:
+      - ".github/workflows/import-missing-leagues.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Separate from the main sync workflow so squad import can run alongside
+# the Felipe player-detail refresh without cancelling or queueing it.
+concurrency:
+  group: skorhane-missing-league-squads
+  cancel-in-progress: false
+
+jobs:
+  import-missing-leagues:
+    name: Eksik ligleri içe aktar
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate importer and tests
+        run: |
+          python -m py_compile sync/sync_transfermarkt.py
+          python -m unittest discover -s tests -v
+
+      - name: Import missing league squads
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          TM_LEAGUES: TR3,TR4,L1,IT1,FR1
+          TM_SEASON: "2026"
+          TM_APIFY_MAX_PLAYERS: "20000"
+          REQUEST_DELAY_MIN_SECONDS: "1.5"
+          REQUEST_DELAY_MAX_SECONDS: "3.5"
+          HTTP_MAX_RETRIES: "4"
+          HTTP_TIMEOUT_SECONDS: "45"
+        run: python sync/sync_transfermarkt.py import-squads
