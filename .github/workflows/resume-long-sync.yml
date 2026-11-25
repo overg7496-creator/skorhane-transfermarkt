@@ -5,6 +5,7 @@ on:
     workflows:
       - SkorHane Transfermarkt Sync
       - SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı
+      - SkorHane Yeni Kadro Oyuncu Detayları
     types: [completed]
 
 permissions:
@@ -13,10 +14,12 @@ permissions:
 
 jobs:
   resume-after-hard-timeout:
-    if: github.event.workflow_run.conclusion == 'failure'
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' ||
+      github.event.workflow_run.conclusion == 'cancelled'
     runs-on: ubuntu-latest
     steps:
-      - name: Continue only after an actual GitHub job timeout
+      - name: Detect GitHub hard timeout or six-hour cancellation
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
@@ -27,9 +30,18 @@ jobs:
 
           jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/jobs?per_page=100")"
           timed_out="$(jq '[.jobs[] | select(.conclusion == "timed_out")] | length' <<< "$jobs")"
+          # GitHub may report its six-hour job limit as "cancelled", not "timed_out".
+          # Treat only a long-running cancelled job as a hard timeout; don't revive
+          # ordinary user cancellations or short failures.
+          long_cancelled="$(jq '[.jobs[] | select(
+            .conclusion == "cancelled" and
+            (.started_at // "") != "" and
+            (.completed_at // "") != "" and
+            ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601)) >= 19800
+          )] | length' <<< "$jobs")"
 
-          if [ "$timed_out" -eq 0 ]; then
-            echo "İş GitHub'ın 6 saatlik sert sınırına takılmadı; otomatik tekrar yapılmayacak."
+          if [ "$timed_out" -eq 0 ] && [ "$long_cancelled" -eq 0 ]; then
+            echo "Sert süre sınırı tespit edilmedi; otomatik devam yapılmayacak."
             exit 0
           fi
 
@@ -37,13 +49,18 @@ jobs:
           case "$SOURCE_WORKFLOW_PATH" in
             .github/workflows/import-missing-leagues.yml)
               workflow="import-missing-leagues.yml"
-              echo "Eksik lig aktarımı sert süre sınırına takıldı; kulüp checkpoint'lerinden devam edilecek."
+              echo "Eksik lig aktarımı sert süre sınırında durdu; checkpoint'lerden devam ediliyor."
               gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" -f ref="$ref"
               ;;
             .github/workflows/transfermarkt-sync.yml)
               workflow="transfermarkt-sync.yml"
-              echo "Oyuncu detay aktarımı sert süre sınırına takıldı; kalıcı oyuncu kuyruğundan devam edilecek."
-              gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" -f ref="$ref" -f inputs[mode]=refresh-details
+              echo "Ana oyuncu detay kuyruğu sert süre sınırında durdu; kalıcı kuyruktan devam ediliyor."
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" -f ref="$ref" -f 'inputs[mode]=refresh-details'
+              ;;
+            .github/workflows/refresh-imported-player-details.yml)
+              workflow="refresh-imported-player-details.yml"
+              echo "Yeni kadro detay kuyruğu sert süre sınırında durdu; son 14 gündeki tamamlanmamış oyunculardan devam ediliyor."
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" -f ref="$ref"
               ;;
             *)
               echo "Bilinmeyen workflow yolu: $SOURCE_WORKFLOW_PATH; otomatik tekrar atlandı."
