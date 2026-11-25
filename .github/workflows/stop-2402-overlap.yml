@@ -1,4 +1,4 @@
-name: SkorHane 2.402 Kuyruğu Çakışma Durdurucu
+name: SkorHane 2.402 Kuyruğunu Durdur
 
 on:
   push:
@@ -7,15 +7,19 @@ on:
 
 permissions:
   contents: read
-
-# Aynı concurrency grubuna girerek eski ana kuyruğu iptal eder.
-concurrency:
-  group: skorhane-transfermarkt-sync
-  cancel-in-progress: true
+  actions: write
 
 jobs:
-  stop-overlapping-worker:
+  cancel-overlapping-2402:
     runs-on: ubuntu-latest
     steps:
-      - name: Stop the previous 2,402-player worker
-        run: echo "Eski 2.402 oyunculuk çalışma durduruldu; düzeltilmiş aralıkla yeni çalışma başlatılacak."
+      - name: Cancel the old 2,402-player run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/45712306203/cancel"
+          echo "Eski 2.402 oyunculuk çalışma iptal isteği gönderildi."
