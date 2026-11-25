@@ -82,6 +82,7 @@ jobs:
           (github.event_name == 'workflow_dispatch' &&
            (github.event.inputs.mode == 'sync' ||
             github.event.inputs.mode == 'refresh-details' ||
+            github.event.inputs.mode == 'import-squads' ||
             github.event.inputs.mode == 'one-player-test'))
         env:
           RATE_LIMITING_ENABLE: "false"
