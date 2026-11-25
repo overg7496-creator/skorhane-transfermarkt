@@ -112,7 +112,7 @@ Felipe API, workflow içinde klonlanıp runner üzerinde başlatılır. Kadro i�
 
 ## 5. Önerilen test sırası
 
-1. **Eksik ligleri içe aktar:** Actions → `SkorHane Eksik Lig Kadro Aktarımı` → Run workflow. Bu ayrı iş akışı 2. Lig grupları `TR3A, TR3B`, 3. Lig grupları `TR4A–TR4D` ile Bundesliga `L1`, Serie A `IT1` ve Ligue 1 `FR1` kadrolarını ana oyuncu detay aktarımından bağımsız içe aktarır. Dosya güncellendiğinde otomatik başlar; Actions ekranından elle de başlatılabilir.
+1. **Eksik ligleri içe aktar:** Actions → `SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı`. Bu ayrı iş akışı 2. Lig grupları `TR3A, TR3B`, 3. Lig grupları `TR4A–TR4D` ile Bundesliga `L1`, Serie A `IT1` ve Ligue 1 `FR1` kadrolarını ana oyuncu detay aktarımından bağımsız içe aktarır. Dosya güncellendiğinde otomatik başlar; Actions ekranından elle de başlatılabilir.
 2. **Tüm kadroları elle aktar:** Actions → `SkorHane Transfermarkt Sync` → Run workflow → `import-squads`.
 3. **Supabase'i kontrol et:**
 
@@ -132,7 +132,7 @@ limit 30;
 
 - Kadro cron'u ana `transfermarkt-sync.yml` içinde pazartesi ve perşembe 03:20 UTC'de tanımlıdır. Türkiye saatiyle 06:20'dir. Başlatmak için `ENABLE_TRANSFERMARKT_CRON=true` repository variable'ını ekle.
 - Kadro istekleri sırayla yapılır; her dış API çağrısından önce 1.5–3.0 saniye rastgele bekleme uygulanır. Yerel API'nin upstream eşzamanlılığı 1'dir.
-- Her lig için tamamlanan kulüp ID'leri `tm_source_records` içine küçük bir checkpoint olarak yazılır. Aynı gün yarıda kalan çalışma yeniden başladığında tamamlanmış kulüpleri atlayıp sıradaki kulüpten devam eder.
+- Her lig için tamamlanan kulüp ID'leri `tm_source_records` içine checkpoint olarak yazılır. Çalışma gece yarısını geçse bile `running` durumundaki checkpoint silinmez; tekrar başladığında tamamlanan kulüpleri atlayıp sıradaki kulüpten devam eder. Tamamlanan ligler aynı sezon içinde gereksiz yere yeniden içe aktarılmaz.
 - Bir kulübün kadrosu boş veya geçersiz gelirse o kulüp tamamlandı sayılmaz; tekrar denenecek şekilde bırakılır.
 - Bir kulübün oyuncuları yazılırken hata olursa kulüp checkpoint'i tamamlanmaz. Sonraki çalıştırma aynı kulübü yeniden işler; RPC UPSERT'leri aynı oyuncuyu çoğaltmaz.
 - Dolu `photo_url`, piyasa değeri, takım adı ve diğer mevcut alanlar null/boş veriyle silinmez.
@@ -151,5 +151,6 @@ limit 30;
 - `sync/sync_transfermarkt.py` – oyuncu detayları, transferler, değer geçmişi, istatistik ve tarihsel seed işleri.
 - `.github/workflows/transfermarkt-sync.yml` – ana manuel/zamanlanmış görevler.
 - `.github/workflows/import-missing-leagues.yml` – eksik ligler için ana oyuncu yenilemesinden ayrı, paralel ve süre sınırında checkpoint’ten otomatik devam eden görev.
+- `.github/workflows/resume-long-sync.yml` – 6 saatlik sert zaman aşımı durumunda yedek otomatik devam mekanizması.
 - `database/001_transfermarkt_schema.sql` – tablolar, RLS ve UPSERT RPC'leri.
 - `tests/` – ağ gerektirmeyen senkronizasyon testleri.
