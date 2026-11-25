@@ -12,6 +12,7 @@ on:
         type: choice
         options:
           - import-squads
+          - refresh-details
           - one-player-test
           - sync
           - seed-history
@@ -71,6 +72,19 @@ jobs:
           TM_MAX_MATCH_PAGES: "5"
           HTTP_MAX_RETRIES: "4"
         run: python sync/sync_transfermarkt.py sync
+
+      - name: Refresh player detail data
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'refresh-details'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FELIPE_API_BASE: https://transfermarkt-api.fly.dev
+          TM_MAX_PLAYERS_PER_RUN: "80"
+          FELIPE_DELAY_MIN_SECONDS: "3.1"
+          FELIPE_DELAY_MAX_SECONDS: "4.0"
+          TM_MAX_MATCH_PAGES: "5"
+          HTTP_MAX_RETRIES: "4"
+        run: python sync/sync_transfermarkt.py refresh-details
 
       - name: Run historical seed
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'seed-history'
