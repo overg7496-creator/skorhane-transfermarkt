@@ -8,6 +8,7 @@ on:
       - "tests/**"
   schedule:
     - cron: "20 3 * * 1,4"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -28,6 +29,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: skorhane-transfermarkt-sync
@@ -59,10 +61,23 @@ jobs:
           python -m unittest discover -s tests -v
           node --input-type=module --check < SkorHane-Worker.js
 
+      - name: Check resumable player detail queue
+        id: detail_queue
+        if: github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python sync/sync_transfermarkt.py has-pending-details
+
       - name: Start dedicated Transfermarkt API (v5.0.0)
         if: >-
           github.event_name == 'push' ||
-          (github.event_name == 'schedule' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') ||
+          (github.event_name == 'schedule' &&
+           github.event.schedule == '20 3 * * 1,4' &&
+           vars.ENABLE_TRANSFERMARKT_CRON == 'true') ||
+          (github.event_name == 'schedule' &&
+           github.event.schedule == '*/15 * * * *' &&
+           steps.detail_queue.outputs.has_pending == 'true') ||
           (github.event_name == 'workflow_dispatch' &&
            (github.event.inputs.mode == 'sync' ||
             github.event.inputs.mode == 'refresh-details' ||
@@ -135,7 +150,7 @@ jobs:
           PY
 
       - name: Run current sync
-        if: (github.event_name == 'schedule' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'sync')
+        if: (github.event_name == 'schedule' && github.event.schedule == '20 3 * * 1,4' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'sync')
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -155,12 +170,14 @@ jobs:
         run: python sync/sync_transfermarkt.py sync
 
       - name: Refresh player detail data
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'refresh-details'
+        if: (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'refresh-details') || (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *' && steps.detail_queue.outputs.has_pending == 'true')
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FELIPE_API_BASE: http://127.0.0.1:8000
           TM_MAX_PLAYERS_PER_RUN: "80"
+          TM_DETAIL_MAX_RUNTIME_SECONDS: "20400"
           FELIPE_DELAY_MIN_SECONDS: "5.5"
           FELIPE_DELAY_MAX_SECONDS: "7.0"
           TM_MAX_MATCH_PAGES: "5"
