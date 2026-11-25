@@ -121,6 +121,51 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("last_felipe_synced_at.asc.nullsfirst,tm_id.asc", script)
         self.assertIn('"last_felipe_synced_at": datetime.now(timezone.utc).isoformat()', script)
 
+    def test_source_record_snapshot_replaces_authoritative_empty_arrays(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(sync, "db_get", return_value=[{"id": 77}]),
+            patch.object(sync, "db_patch") as patch_db,
+        ):
+            sync.source_record_snapshot(
+                "felipeall", "player_injuries", "123", "",
+                {"id": "123", "pageNumber": 1, "lastPageNumber": 1, "injuries": []},
+            )
+        self.assertEqual(patch_db.call_args.args[1]["payload"]["injuries"], [])
+        self.assertEqual(patch_db.call_args.args[0], "tm_source_records?id=eq.77")
+
+    def test_player_snapshot_columns_allow_authoritative_empty_lists(self):
+        from unittest.mock import patch
+
+        snapshot = {"injuries_payload": {"injuries": []}, "absences_payload": {"absences": []}}
+        with patch.object(sync, "db_patch") as patch_db:
+            sync.replace_player_snapshots("123", snapshot)
+        self.assertEqual(patch_db.call_args.args[1]["injuries_payload"]["injuries"], [])
+        self.assertEqual(patch_db.call_args.args[1]["absences_payload"]["absences"], [])
+
+    def test_rotation_candidates_do_not_starve_after_retry_failures(self):
+        from unittest.mock import patch
+
+        future = "2099-01-01T00:00:00+00:00"
+        states = {"1": {"status": "retry", "retry_at": future}}
+        with (
+            patch.object(sync, "TM_MAX_PLAYERS_PER_RUN", 1),
+            patch.object(sync, "db_get", return_value=[{"tm_id": "1"}, {"tm_id": "2"}]),
+        ):
+            rows = sync.load_rotating_player_candidates(states)
+        self.assertEqual([row["tm_id"] for row in rows], ["2"])
+
+    def test_apify_dataset_fetch_reads_multiple_pages(self):
+        from unittest.mock import patch
+
+        first = [{"playerId": str(i)} for i in range(1000)]
+        second = [{"playerId": "1000"}]
+        with patch.object(sync, "json_request", side_effect=[first, second]) as request:
+            rows = sync.fetch_apify_dataset_items("dataset", "token", 1001)
+        self.assertEqual(len(rows), 1001)
+        self.assertIn("offset=1000", request.call_args_list[1].args[0])
+
     def test_history_source_cannot_replace_current_market_value(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
         self.assertIn("case when p_source = 'dcaribou' then tm_players.current_market_value_eur", schema)

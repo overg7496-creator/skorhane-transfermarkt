@@ -242,6 +242,52 @@ def source_record(source: str, record_type: str, external_id: str, record_key: s
     })
 
 
+def source_record_snapshot(
+    source: str, record_type: str, external_id: str, record_key: str, payload: dict[str, Any]
+) -> None:
+    """Replace a fully fetched source snapshot, including authoritative empty lists."""
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{record_type} anlık görüntüsü JSON nesnesi değil.")
+    external_id, record_key = str(external_id or ""), str(record_key or "")
+    query = (
+        "tm_source_records?select=id"
+        f"&source=eq.{quote(source)}&record_type=eq.{quote(record_type)}"
+        f"&external_id=eq.{quote(external_id)}&record_key=eq.{quote(record_key)}&limit=1"
+    )
+    rows = db_get(query)
+    snapshot = {"payload": payload, "fetched_at": datetime.now(timezone.utc).isoformat()}
+    if rows:
+        row_id = rows[0].get("id")
+        if row_id is None:
+            raise RuntimeError(f"{record_type} anlık görüntüsünün DB kimliği okunamadı.")
+        db_patch(f"tm_source_records?id=eq.{quote(str(row_id))}", snapshot)
+    else:
+        db_insert("tm_source_records", {
+            "source": source, "record_type": record_type,
+            "external_id": external_id, "record_key": record_key, **snapshot,
+        })
+
+
+PLAYER_SNAPSHOT_FIELDS = {
+    "stats_payload", "current_season_payload", "transfers_payload",
+    "market_value_payload", "injuries_payload", "absences_payload", "national_career_payload",
+}
+
+
+def replace_player_snapshots(tm_id: str, snapshots: dict[str, Any]) -> None:
+    """Replace endpoint columns only after all pages of those endpoints succeeded."""
+    unknown = set(snapshots) - PLAYER_SNAPSHOT_FIELDS
+    if unknown:
+        raise ValueError(f"İzin verilmeyen oyuncu anlık görüntüsü alanları: {', '.join(sorted(unknown))}")
+    if any(not isinstance(value, dict) for value in snapshots.values()):
+        raise ValueError("Oyuncu anlık görüntüleri JSON nesnesi olmalı.")
+    if snapshots:
+        db_patch(
+            f"tm_players?tm_id=eq.{quote(str(tm_id))}",
+            {**snapshots, "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+
+
 def safe_text(*values: Any) -> str | None:
     for value in values:
         if value is None:
@@ -286,6 +332,27 @@ def upsert_player(tm_id: str, source: str, row: dict[str, Any]) -> None:
         if not is_empty_payload(value):
             player[field] = value
     rpc("tm_upsert_player", {"p_tm_id": str(tm_id), "p_source": source, "p_player": player})
+
+
+def fetch_apify_dataset_items(dataset_id: str, token: str, max_items: int) -> list[dict[str, Any]]:
+    """Read the complete Apify dataset in bounded pages before writing any rows."""
+    page_size = 1000
+    items: list[dict[str, Any]] = []
+    for offset in range(0, max_items, page_size):
+        limit = min(page_size, max_items - offset)
+        page = json_request(
+            f"https://api.apify.com/v2/datasets/{quote(str(dataset_id))}/items"
+            f"?token={token}&clean=true&format=json&offset={offset}&limit={limit}",
+            source=f"Apify dataset offset={offset}",
+        )
+        if not isinstance(page, list):
+            raise RuntimeError(
+                f"Apify dataset sayfası liste değil (offset={offset}); mevcut Supabase verileri korunuyor."
+            )
+        items.extend(row for row in page if isinstance(row, dict))
+        if len(page) < limit:
+            break
+    return items
 
 
 def sync_kamerozkan(*, required: bool = False) -> int:
@@ -355,16 +422,7 @@ def sync_kamerozkan(*, required: bool = False) -> int:
     if not dataset_id:
         raise RuntimeError(f"Apify çıktısı için defaultDatasetId bulunamadı. run_id={run_id}")
 
-    items = json_request(
-        f"https://api.apify.com/v2/datasets/{quote(str(dataset_id))}/items"
-        f"?token={token}&clean=true&format=json&limit=10000",
-        source="Apify dataset",
-    )
-    if not isinstance(items, list):
-        raise RuntimeError(
-            f"Apify dataset yanıtı liste değil; tür={type(items).__name__}, run_id={run_id}. "
-            "Mevcut Supabase verileri korunuyor."
-        )
+    items = fetch_apify_dataset_items(str(dataset_id), token, max_players)
 
     dict_rows = [row for row in items if isinstance(row, dict)]
     valid_rows = [(row, player_id_from_row(row)) for row in dict_rows]
@@ -727,6 +785,41 @@ def detail_retry_is_due(state: dict[str, Any], now: datetime | None = None) -> b
         return True
 
 
+def load_rotating_player_candidates(states: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pick oldest eligible active players; retry backoff must not starve the rotation."""
+    select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+    page_size, offset = 1000, 0
+    selected: list[dict[str, Any]] = []
+    now, target = datetime.now(timezone.utc), max(1, TM_MAX_PLAYERS_PER_RUN)
+    while True:
+        query = (
+            f"tm_players?select={select}&is_active=eq.true"
+            f"&last_squad_seen_at=gte.{quote(cutoff)}"
+            "&order=last_felipe_synced_at.asc.nullsfirst,tm_id.asc"
+            f"&limit={page_size}&offset={offset}"
+        )
+        rows = db_get(query)
+        if not isinstance(rows, list):
+            raise RuntimeError("Döngüsel oyuncu yenileme listesi okunamadı.")
+        for player in rows:
+            tm_id = str(player.get("tm_id") or "").strip()
+            if not tm_id:
+                continue
+            state = states.get(tm_id, {})
+            if state.get("status") == "blocked":
+                continue
+            if state.get("status") == "retry" and not detail_retry_is_due(state, now):
+                continue
+            selected.append(player)
+            if len(selected) >= target:
+                return selected
+        if len(rows) < page_size:
+            break
+        offset += len(rows)
+    return selected
+
+
 def has_pending_player_details() -> bool:
     states = load_player_detail_queue_states()
     candidates = load_pending_player_detail_candidates()
@@ -777,10 +870,8 @@ def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = Fals
         states = load_player_detail_queue_states()
         players = load_pending_player_detail_candidates()
     else:
-        squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-        query = f"tm_players?select={select}&is_active=eq.true&last_squad_seen_at=gte.{quote(squad_cutoff)}&order=last_felipe_synced_at.asc.nullsfirst,tm_id.asc&limit={TM_MAX_PLAYERS_PER_RUN}"
-        players = db_get(query)
         states = load_player_detail_queue_states()
+        players = load_rotating_player_candidates(states)
     if not isinstance(players, list):
         raise RuntimeError("DB oyuncu listesi okunamadı.")
 
@@ -849,7 +940,7 @@ def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = Fals
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
                 "matches": matches,
                 "stats": current_stats,
-            } if matches else {}
+            }
     
             profile_obj = profile if isinstance(profile, dict) else {}
             profile_player = profile_obj.get("player") or profile_obj.get("data") or profile_obj.get("profile") or profile_obj
@@ -920,14 +1011,24 @@ def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = Fals
     
             progress["endpoint"] = "database_upsert_player"
             upsert_player(tm_id, "felipeall", normalized)
-            if profile:
-                source_record("felipeall", "player_profile", tm_id, "", profile)
-            if stats_payload:
-                source_record("felipeall", "player_stats", tm_id, "", stats_payload)
-            if injuries_payload:
-                source_record("felipeall", "player_injuries", tm_id, "", injuries_payload)
-            if absences_payload:
-                source_record("felipeall", "player_absences", tm_id, "", absences_payload)
+
+            # All seven detail endpoints were validated and fully paginated.
+            # Empty injury/absence arrays are authoritative only after this point.
+            replace_player_snapshots(tm_id, {
+                "market_value_payload": market_payload,
+                "transfers_payload": transfer_payload,
+                "stats_payload": stats_payload,
+                "injuries_payload": injuries_payload,
+                "absences_payload": absences_payload,
+                "current_season_payload": current_payload,
+            })
+            source_record_snapshot("felipeall", "player_profile", tm_id, "", profile)
+            source_record_snapshot("felipeall", "player_market_values", tm_id, "", market_payload)
+            source_record_snapshot("felipeall", "player_transfers", tm_id, "", transfer_payload)
+            source_record_snapshot("felipeall", "player_stats", tm_id, "", stats_payload)
+            source_record_snapshot("felipeall", "player_injuries", tm_id, "", injuries_payload)
+            source_record_snapshot("felipeall", "player_absences", tm_id, "", absences_payload)
+            source_record_snapshot("felipeall", "current_season_matches", tm_id, str(TM_SEASON), current_payload)
     
             # Resolve club IDs in Transfermarkt season-stat rows using profile and
             # the player's own transfer history, avoiding guesses from other providers.
@@ -1049,9 +1150,6 @@ def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = Fals
                     "second_yellow_cards": numeric(row, "secondYellowCards"),
                     "red_cards": numeric(row, "redCards", "red"), "payload": row, "source": "felipeall",
                 }})
-    
-            if current_payload:
-                source_record("felipeall", "current_season_matches", tm_id, str(TM_SEASON), current_payload)
     
             progress["endpoint"] = "mark_synced"
             db_patch(f"tm_players?tm_id=eq.{quote(tm_id)}", {
@@ -1393,7 +1491,7 @@ def seed_dcaribou_history() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "seed-history", "one-player-test", "has-pending-details"))
+    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "refresh-rotation", "seed-history", "one-player-test", "has-pending-details"))
     parser.add_argument("--player-id", default=os.getenv("TM_TEST_PLAYER_ID", ""))
     args = parser.parse_args()
     require_db()
@@ -1413,6 +1511,9 @@ def main() -> int:
         return 0
     if args.mode == "refresh-details":
         logged_run("felipeall", "refresh-details", lambda: sync_felipeall(backfill_only=True))
+        return 0
+    if args.mode == "refresh-rotation":
+        logged_run("felipeall", "refresh-rotation", sync_felipeall)
         return 0
     if args.mode == "one-player-test":
         if not re.fullmatch(r"\d+", str(args.player_id or "")):

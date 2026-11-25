@@ -3927,7 +3927,13 @@ async function tmPlayer(env, id) {
       minutes: x.minutes, yellowCards: x.yellow_cards, secondYellowCards: x.second_yellow_cards,
       redCards: x.red_cards
     }));
-    const normalized = [...normalizeRows(dbStats), ...normalizeRows(historyStats)];
+    const currentRows = normalizeRows(dbStats);
+    const statKey = x => [x.seasonID || "", x.competitionName || "", x.clubName || ""].join("|");
+    const currentKeys = new Set(currentRows.map(statKey));
+    // Prefer Transfermarkt season totals for matching season/competition/club
+    // keys; use historical match aggregates only where no current row exists.
+    const historyOnly = normalizeRows(historyStats).filter(x => !currentKeys.has(statKey(x)));
+    const normalized = [...currentRows, ...historyOnly];
     if (normalized.length) statsRows = normalized;
   } catch (_) {}
   const currentSeason = row.current_season_payload || {};
