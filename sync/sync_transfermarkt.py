@@ -540,12 +540,10 @@ def get_player_current_matches(base: str, tm_id: str) -> list[dict[str, Any]]:
         source=f"felipeall {tm_id} aktif sezon maçları",
         delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
     )
-    if not isinstance(first, (dict, list)):
-        raise RuntimeError(f"felipeall {tm_id} maçlar: ilk sayfa geçersiz/boş yanıt; oyuncu tamamlanmadı.")
-    if isinstance(first, list):
-        return [row for row in first if isinstance(row, dict)]
-    if not any(key in first for key in ("matches", "data", "items", "results")):
-        raise RuntimeError(f"felipeall {tm_id} maçlar: beklenen maç listesi alanı yok; oyuncu tamamlanmadı.")
+    if not isinstance(first, dict) or not isinstance(first.get("matches"), list):
+        raise RuntimeError(
+            f"felipeall {tm_id} maçlar: beklenen 'matches' listesi yok; oyuncu tamamlanmadı."
+        )
 
     last_page = numeric(first, "lastPageNumber", "last_page_number")
     if last_page is None or last_page < 1:
@@ -563,22 +561,17 @@ def get_player_current_matches(base: str, tm_id: str) -> list[dict[str, Any]]:
             source=f"felipeall {tm_id} aktif sezon maçları",
             delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
         )
-        if not isinstance(payload, (dict, list)):
-            raise RuntimeError(f"felipeall {tm_id} maçlar sayfa {page}: geçersiz/boş yanıt; oyuncu tamamlanmadı.")
-        if isinstance(payload, list):
-            rows = [row for row in payload if isinstance(row, dict)]
-        else:
-            page_last = numeric(payload, "lastPageNumber", "last_page_number")
-            if page_last != last_page:
-                raise RuntimeError(
-                    f"felipeall {tm_id} maçlar sayfa {page}: sayfa sayısı değişti "
-                    f"({last_page} -> {page_last}); oyuncu yeniden denenmeli."
-                )
-            if not any(key in payload for key in ("matches", "data", "items", "results")):
-                raise RuntimeError(
-                    f"felipeall {tm_id} maçlar sayfa {page}: beklenen maç listesi alanı yok; oyuncu tamamlanmadı."
-                )
-            rows = api_payload_rows(payload, ("matches", "data", "items", "results"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("matches"), list):
+            raise RuntimeError(
+                f"felipeall {tm_id} maçlar sayfa {page}: beklenen 'matches' listesi yok; oyuncu tamamlanmadı."
+            )
+        page_last = numeric(payload, "lastPageNumber", "last_page_number")
+        if page_last != last_page:
+            raise RuntimeError(
+                f"felipeall {tm_id} maçlar sayfa {page}: sayfa sayısı değişti "
+                f"({last_page} -> {page_last}); oyuncu yeniden denenmeli."
+            )
+        rows = [row for row in payload["matches"] if isinstance(row, dict)]
         if page < last_page and not rows:
             raise RuntimeError(
                 f"felipeall {tm_id} maçlar sayfa {page}: beklenen sayfada kayıt yok; oyuncu tamamlanmadı."
@@ -594,24 +587,24 @@ def fetch_player_payload(base: str, endpoint: str, label: str) -> Any:
         source=f"felipeall {label}",
         delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
     )
-    if payload is None:
-        raise RuntimeError(f"felipeall {label}: yanıt gövdesi boş; oyuncu tamamlanmadı.")
+    if not isinstance(payload, dict) or not payload:
+        raise RuntimeError(
+            f"felipeall {label}: beklenen JSON nesnesi yerine "
+            f"{type(payload).__name__} / boş yanıt geldi; oyuncu tamamlanmadı."
+        )
     return payload
 
 
 def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any]:
     """Fetch every available Transfermarkt injury/absence page, with a safe page cap."""
     first = fetch_player_payload(base, f"{endpoint}?page_number=1", key)
-    if not isinstance(first, (dict, list)):
-        raise RuntimeError(f"felipeall {key}: ilk sayfa geçersiz yanıt; oyuncu tamamlanmadı.")
-    if isinstance(first, dict) and not any(k in first for k in (key, "data", "items", "results")):
-        raise RuntimeError(f"felipeall {key}: beklenen liste alanı yanıtta yok; oyuncu tamamlanmadı.")
-    rows = iterable_from(first, (key, "data", "items", "results"))
-    if isinstance(first, list):
-        return {key: rows, "page_number": 1, "last_page_number": 1}
+    rows_raw = first.get(key)
+    if not isinstance(rows_raw, list):
+        raise RuntimeError(f"felipeall {key}: '{key}' listesi yanıtta yok; oyuncu tamamlanmadı.")
+    rows = [row for row in rows_raw if isinstance(row, dict)]
 
-    last_page = numeric(first, "last_page_number", "lastPageNumber") or 1
-    if last_page < 1:
+    last_page = numeric(first, "lastPageNumber", "last_page_number")
+    if last_page is None or last_page < 1:
         raise RuntimeError(f"felipeall {key}: lastPageNumber geçersiz; oyuncu tamamlanmadı.")
     if last_page > 30:
         raise RuntimeError(
@@ -621,11 +614,10 @@ def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any
     loaded_pages = 1
     for page in range(2, last_page + 1):
         payload = fetch_player_payload(base, f"{endpoint}?page_number={page}", f"{key} sayfa {page}")
-        if not isinstance(payload, (dict, list)):
-            raise RuntimeError(f"felipeall {key} sayfa {page}: geçersiz yanıt; oyuncu tamamlanmadı.")
-        if isinstance(payload, dict) and not any(k in payload for k in (key, "data", "items", "results")):
-            raise RuntimeError(f"felipeall {key} sayfa {page}: beklenen liste alanı yok; oyuncu tamamlanmadı.")
-        page_rows = iterable_from(payload, (key, "data", "items", "results"))
+        page_rows_raw = payload.get(key)
+        if not isinstance(page_rows_raw, list):
+            raise RuntimeError(f"felipeall {key} sayfa {page}: '{key}' listesi yok; oyuncu tamamlanmadı.")
+        page_rows = [row for row in page_rows_raw if isinstance(row, dict)]
         if not page_rows:
             raise RuntimeError(
                 f"felipeall {key} sayfa {page}: beklenen sayfada kayıt gelmedi; "
@@ -659,7 +651,7 @@ def sync_felipeall(only_player: str | None = None) -> int:
     for idx, player in enumerate(players, 1):
         tm_id = str(player.get("tm_id") or "").strip()
         if not tm_id:
-            continue
+            raise RuntimeError(f"tm_players kaydında oyuncu ID'si boş; liste {idx}/{len(players)} noktasında durduruldu.")
         base = f"{FELIPE_API_BASE}/players/{quote(tm_id)}"
         LOG.info(
             "felipeall oyuncu başlıyor: %s/%s | %s | ID=%s",
