@@ -4366,11 +4366,11 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
   const tmRows=Array.isArray(tmRaw)?tmRaw:Array.isArray(tmRaw&&tmRaw.transfers)?tmRaw.transfers:Array.isArray(tmRaw&&tmRaw.history)?tmRaw.history:Array.isArray(tmRaw&&tmRaw.data)?tmRaw.data:[];
   const tmTransfers=tmRows.map(move=>{
     const teamName=value=>typeof value==='string'?value:value&& (value.name||value.clubName||value.teamName)||'';
-    const from=teamName(move.from||move.fromClub||move.fromTeam||move.oldClub||move.previousClub||move.fromClubName);
-    const to=teamName(move.to||move.toClub||move.toTeam||move.newClub||move.currentClub||move.toClubName);
+    const from=teamName(move.from||move.fromClub||move.fromTeam||move.oldClub||move.previousClub||move.fromClubName||move.club_from);
+    const to=teamName(move.to||move.toClub||move.toTeam||move.newClub||move.currentClub||move.toClubName||move.club_to);
     const rawDate=move.date||move.transferDate||move.dateOfTransfer||move.timestamp||'';
     const date=typeof rawDate==='number'?new Date(rawDate<1e12?rawDate*1000:rawDate).toISOString().slice(0,10):String(rawDate).slice(0,10);
-    const rawType=String(move.type||move.transferType||move.fee||move.transferFee||move.feeText||'').trim();
+    const rawType=String(move.type||move.transferType||move.transfer_type||move.fee||move.transferFee||move.feeText||move.fee_text||'').trim();
     const loan=/loan|kiral/i.test(rawType),free=/free|bedelsiz/i.test(rawType),fee=/€|£|\$|\b\d/.test(rawType)&&!loan?rawType:'';
     return {date,from,to,kind:loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
   }).filter(x=>x.from||x.to||x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
