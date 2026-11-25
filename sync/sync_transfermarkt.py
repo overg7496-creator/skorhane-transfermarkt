@@ -281,11 +281,16 @@ def sync_kamerozkan(*, required: bool = False) -> int:
         LOG.warning("APIFY_TOKEN yok; kamerozkan kaynağı bu çalıştırmada atlandı.")
         return 0
 
-    body = {
-        "leagues": TM_LEAGUES,
-        "season": TM_SEASON,
-        "trackChanges": True,
-    }
+   body = {
+    "leagues": TM_LEAGUES,
+    "season": TM_SEASON,
+    "trackChanges": True,
+    "proxyConfiguration": {
+        "useApifyProxy": True,
+        "apifyProxyGroups": ["RESIDENTIAL"],
+        "apifyProxyCountry": "TR",
+    },
+}
     run = json_request(
         f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs?token={quote(APIFY_TOKEN)}",
         method="POST", payload=body, source="kamerozkan/Apify", retries=0,
