@@ -48,8 +48,10 @@ jobs:
             python -m pip install "git+https://github.com/dcaribou/transfermarkt-scraper.git"
           fi
 
-      - name: Validate Python syntax
-        run: python -m py_compile sync/sync_transfermarkt.py
+      - name: Validate Python and Worker syntax
+        run: |
+          python -m py_compile sync/sync_transfermarkt.py
+          node --input-type=module --check < SkorHane-Worker.js
 
       - name: Run current sync
         if: (github.event_name == 'schedule' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'sync')
