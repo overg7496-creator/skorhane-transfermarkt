@@ -1049,10 +1049,19 @@ def sync_felipeall(
     )
     if backfill_only and stopped_for_time and remaining_due:
         continuation_workflow = os.getenv("TM_DETAIL_CONTINUATION_WORKFLOW", "").strip()
-        if continuation_workflow and squad_seen_after and squad_seen_before:
+        if continuation_workflow:
+            if squad_seen_after and squad_seen_before:
+                continuation_inputs = {
+                    "seen_after": squad_seen_after,
+                    "seen_before": squad_seen_before,
+                }
+            else:
+                # The dedicated imported-player workflow accepts an empty dispatch
+                # and resumes the durable, recent-unprocessed cohort from Supabase.
+                continuation_inputs = {}
             dispatch_refresh_details_continuation(
                 workflow_file=continuation_workflow,
-                inputs={"seen_after": squad_seen_after, "seen_before": squad_seen_before},
+                inputs=continuation_inputs,
             )
         else:
             dispatch_refresh_details_continuation()
@@ -1384,11 +1393,21 @@ def main() -> int:
     if args.mode == "refresh-imported-details":
         seen_after = os.getenv("TM_DETAIL_SQUAD_SEEN_AFTER", "").strip()
         seen_before = os.getenv("TM_DETAIL_SQUAD_SEEN_BEFORE", "").strip()
-        validate_detail_squad_window(seen_after, seen_before)
+        if bool(seen_after) != bool(seen_before):
+            validate_detail_squad_window(seen_after, seen_before)
+        elif seen_after and seen_before:
+            validate_detail_squad_window(seen_after, seen_before)
+        else:
+            LOG.info(
+                "Kadro detay kurtarma modu: son 14 gündeki henüz detayları alınmamış "
+                "oyuncular kalıcı kuyruktan taranacak."
+            )
         logged_run(
             "felipeall", "refresh-imported-details",
             lambda: sync_felipeall(
-                backfill_only=True, squad_seen_after=seen_after, squad_seen_before=seen_before
+                backfill_only=True,
+                squad_seen_after=seen_after or None,
+                squad_seen_before=seen_before or None,
             ),
         )
         return 0
