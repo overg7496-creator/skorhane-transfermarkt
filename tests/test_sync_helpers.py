@@ -122,6 +122,20 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("last_squad_seen_at.lt.2026-11-25T21", query)
         self.assertIn("last_felipe_synced_at=is.null", query)
 
+    def test_original_backfill_can_stop_before_new_squad_import_window(self):
+        from unittest.mock import patch
+
+        before = "2026-11-25T20:26:06Z"
+        with patch.object(sync, "db_get", return_value=[]) as fetch:
+            self.assertEqual(
+                sync.load_pending_player_detail_candidates(squad_seen_before=before),
+                [],
+            )
+        query = fetch.call_args.args[0]
+        self.assertIn("last_squad_seen_at.gte.", query)
+        self.assertIn("last_squad_seen_at.lt.2026-11-25T20:26:06Z", query)
+        self.assertIn("last_felipe_synced_at=is.null", query)
+
     def test_imported_detail_queue_rejects_incomplete_or_reversed_window(self):
         with self.assertRaisesRegex(RuntimeError, "hem başlangıç hem bitiş"):
             sync.load_pending_player_detail_candidates(squad_seen_after="2026-11-25T20:26:06Z")
