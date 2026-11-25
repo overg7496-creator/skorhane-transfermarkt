@@ -52,9 +52,6 @@ jobs:
       # separate [20:26:06, 21:00:04) UTC window and its own concurrency group.
       # Continuations preserve this upper timestamp so the two cohorts stay apart.
       TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ github.event.inputs.seen_before || '2026-11-25T20:26:06Z' }}
-      # Rows moved by legacy detail workers beyond the imported window are
-      # recovered only by this main queue; the new-cohort worker excludes them.
-      TM_DETAIL_AFTER_IMPORTED_END: "2026-11-25T21:00:04Z"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,6 +60,25 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Check imported cohort before enabling fallback recovery
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/refresh-imported-player-details.yml/runs?per_page=100")"; then
+            echo "Imported worker durumu okunamadı; güvenli tarafta kalıp post-window kurtarması bu çalışmada kapatıldı."
+            echo "TM_DETAIL_AFTER_IMPORTED_END=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          active="$(jq '[.workflow_runs[] | select(.status != "completed")] | length' <<< "$runs")"
+          if [ "$active" -eq 0 ]; then
+            echo "TM_DETAIL_AFTER_IMPORTED_END=2026-11-25T21:00:04Z" >> "$GITHUB_ENV"
+            echo "Imported cohort aktif değil; eski worker'lardan taşınmış bekleyen kayıtlar ana kuyruğa açıldı."
+          else
+            echo "TM_DETAIL_AFTER_IMPORTED_END=" >> "$GITHUB_ENV"
+            echo "Imported cohort için çalışan/bekleyen iş var; olası yarışmayı önlemek için post-window kurtarması ertelendi."
+          fi
 
       - name: Install dependencies
         run: |
