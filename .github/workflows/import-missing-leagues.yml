@@ -1,22 +1,19 @@
 name: SkorHane Eksik Lig Kadro Aktarımı
 
 on:
-  # Manual start only: avoids automatic failed retries while the Apify
-  # account is over its Free-plan monthly usage allowance.
+  # Manuel başlatılır; eksik ligler ayrı ve bağımsız bir iş olarak çalışır.
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Separate from the main sync workflow so squad import can run alongside
-# the Felipe player-detail refresh without cancelling or queueing it.
 concurrency:
   group: skorhane-missing-league-squads
   cancel-in-progress: false
 
 jobs:
   import-missing-leagues:
-    name: Eksik ligleri içe aktar
+    name: Felipe API ile eksik ligleri içe aktar
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -28,21 +25,47 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate importer and tests
+      - name: Validate workers and tests
         run: |
-          python -m py_compile sync/sync_transfermarkt.py
+          python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py
           python -m unittest discover -s tests -v
+
+      - name: Start local Felipe Transfermarkt API (v5.0.0)
+        env:
+          RATE_LIMITING_ENABLE: "false"
+          TFMKT_MAX_CONCURRENCY: "1"
+          TFMKT_TIMEOUT_SECONDS: "30"
+          CACHE_TTL_SECONDS: "600"
+        run: |
+          python -m pip install --upgrade uv
+          git clone --depth 1 --branch v5.0.0 https://github.com/felipeall/transfermarkt-api.git "$RUNNER_TEMP/transfermarkt-api"
+          cd "$RUNNER_TEMP/transfermarkt-api"
+          uv sync --extra server --no-dev
+          nohup uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/transfermarkt-api.log" 2>&1 &
+          ready=0
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:8000/health > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat "$RUNNER_TEMP/transfermarkt-api.log"
+            echo "Felipe API 90 saniye içinde başlamadı."
+            exit 1
+          fi
+          echo "Yerel Felipe API hazır; upstream eşzamanlılığı 1."
 
       - name: Import missing league squads
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          FELIPE_API_BASE: http://127.0.0.1:8000
           TM_LEAGUES: TR3,TR4,L1,IT1,FR1
           TM_SEASON: "2026"
-          TM_APIFY_MAX_PLAYERS: "20000"
           REQUEST_DELAY_MIN_SECONDS: "1.5"
-          REQUEST_DELAY_MAX_SECONDS: "3.5"
-          HTTP_MAX_RETRIES: "4"
+          REQUEST_DELAY_MAX_SECONDS: "3.0"
+          HTTP_MAX_RETRIES: "3"
           HTTP_TIMEOUT_SECONDS: "45"
-        run: python sync/sync_transfermarkt.py import-squads
+        run: python sync/sync_squads_and_clubs.py
