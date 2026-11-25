@@ -308,21 +308,45 @@ def save_player(tm_id: str, player: dict[str, Any], transfer: dict[str, Any] | N
 
 
 def save_club_metadata(
-    competition_id: str, competition_name: str, club_id: str, club_name: str, season_id: str
+    competition_id: str, competition_name: str, club_id: str, club_name: str,
+    season_id: str, profile: dict[str, Any] | None = None,
 ) -> None:
-    """Store only compact, normalized team metadata; no source HTML/large JSON."""
+    """Store compact club fields only; never persist the full upstream response."""
+    squad = get_value(profile, "squad") or {}
+    league = get_value(profile, "league") or {}
+    stadium = get_value(profile, "stadium") or {}
+    coach = get_value(profile, "coach") or {}
+    payload: dict[str, Any] = {
+        "club_id": club_id,
+        "club_name": as_text(get_value(profile, "name")) or club_name,
+        "competition_id": competition_id,
+        "competition_name": competition_name,
+        "season_id": season_id,
+    }
+    optional = {
+        "official_name": as_text(get_value(profile, "official_name", "officialName")),
+        "short_name": as_text(get_value(profile, "short_name", "shortName")),
+        "abbreviation": as_text(get_value(profile, "abbreviation")),
+        "logo_url": as_text(get_value(profile, "image")),
+        "current_market_value": get_value(profile, "current_market_value", "currentMarketValue"),
+        "squad_size": get_value(squad, "size"),
+        "average_age": get_value(squad, "average_age", "averageAge"),
+        "foreigners": get_value(squad, "foreigners"),
+        "national_team_players": get_value(squad, "national_team_players", "nationalTeamPlayers"),
+        "league_name": as_text(get_value(league, "name")),
+        "league_tier": as_text(get_value(league, "tier")),
+        "coach_name": as_text(get_value(coach, "name")),
+        "coach_id": as_text(get_value(coach, "id")),
+        "stadium_name": as_text(get_value(stadium, "name")) or as_text(get_value(profile, "stadium_name", "stadiumName")),
+        "stadium_capacity": get_value(stadium, "capacity") or get_value(profile, "stadium_seats", "stadiumSeats"),
+    }
+    payload.update({key: value for key, value in optional.items() if value is not None and value != ""})
     db_rpc("tm_upsert_source_record", {
         "p_source": "felipeall",
         "p_record_type": "club_metadata",
         "p_external_id": club_id,
         "p_record_key": f"{competition_id}:{season_id}",
-        "p_payload": {
-            "club_id": club_id,
-            "club_name": club_name,
-            "competition_id": competition_id,
-            "competition_name": competition_name,
-            "season_id": season_id,
-        },
+        "p_payload": payload,
     })
 
 
@@ -377,6 +401,16 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
             if club_id in completed:
                 continue
 
+            club_profile: dict[str, Any] | None = None
+            try:
+                profile = api_get(f"/clubs/{quote(club_id, safe='')}/profile")
+                if isinstance(profile, dict) and as_text(get_value(profile, "id")):
+                    club_profile = profile
+            except Exception as exc:
+                # A squad can still be imported when optional club-profile metadata is missing.
+                LOG.warning("%s kulüp profili alınamadı; kadro aktarımı devam ediyor: %s",
+                            club_name, str(exc)[:500])
+
             path = (
                 f"/clubs/{quote(club_id, safe='')}/players?"
                 + urlencode({"season_id": api_season})
@@ -412,7 +446,7 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
                 LOG.warning("%s kadrosundan kullanılabilir oyuncu çıkmadı; checkpoint yazılmadı.", club_name)
                 continue
 
-            save_club_metadata(competition_id, competition_name, club_id, club_name, api_season)
+            save_club_metadata(competition_id, competition_name, club_id, club_name, api_season, club_profile)
             completed.add(club_id)
             save_league_state(competition_id, api_season, {
                 "status": "running",
