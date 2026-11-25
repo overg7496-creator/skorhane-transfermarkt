@@ -275,13 +275,13 @@ def upsert_player(tm_id: str, source: str, row: dict[str, Any]) -> None:
 
 def sync_kamerozkan(*, required: bool = False) -> int:
     """Scheduled roster/value source. Actor uses TR1 by default; token is user-supplied."""
-       if not APIFY_TOKEN:
+    if not APIFY_TOKEN:
         if required:
             raise RuntimeError("APIFY_TOKEN tanımlı değil. kamerozkan kadro içe aktarımı için Apify token gerekli.")
         LOG.warning("APIFY_TOKEN yok; kamerozkan kaynağı bu çalıştırmada atlandı.")
-           return 0
+        return 0
 
-       body = {
+    body = {
         "leagues": TM_LEAGUES,
         "season": TM_SEASON,
         "trackChanges": True,
@@ -291,7 +291,7 @@ def sync_kamerozkan(*, required: bool = False) -> int:
             "apifyProxyCountry": "TR",
         },
     }
-       run = json_request(
+    run = json_request(
         f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/runs?token={quote(APIFY_TOKEN)}",
         method="POST", payload=body, source="kamerozkan/Apify", retries=0,
     )
