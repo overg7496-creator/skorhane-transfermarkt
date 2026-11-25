@@ -759,7 +759,7 @@ def dispatch_refresh_details_continuation() -> bool:
         raise RuntimeError(f"GitHub otomatik devam dispatch başarısız: HTTP {exc.code}: {detail}") from exc
 
 
-def sync_felipeall(only_player: str | None = None) -> int:
+def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = False) -> int:
     """Refresh Transfermarkt player profiles, season stats, transfers, injuries and valuations.
 
     The runner rotates through current squads to respect the upstream API's rate limit.
@@ -777,10 +777,6 @@ def sync_felipeall(only_player: str | None = None) -> int:
         query = f"tm_players?select={select}&is_active=eq.true&last_squad_seen_at=gte.{quote(squad_cutoff)}&order=last_felipe_synced_at.asc.nullsfirst,tm_id.asc&limit={TM_MAX_PLAYERS_PER_RUN}"
         players = db_get(query)
         states = load_player_detail_queue_states()
-    if not isinstance(players, list):
-        raise RuntimeError("DB oyuncu listesi okunamadı.")
-
-    successful = 0
     if not isinstance(players, list):
         raise RuntimeError("DB oyuncu listesi okunamadı.")
 
@@ -1067,7 +1063,7 @@ def sync_felipeall(only_player: str | None = None) -> int:
                 states[tm_id] = state
         except Exception as exc:
             message = safe_error_for_log(exc)
-            status_match = re.search(r"HTTP\\s+(\\d{3})", message, re.IGNORECASE)
+            status_match = re.search(r"HTTP\s+(\d{3})", message, re.IGNORECASE)
             http_status = int(status_match.group(1)) if status_match else None
             permanent = http_status in (400, 404, 410, 422) or attempts >= 8
             retry_delays = (15 * 60, 60 * 60, 3 * 60 * 60, 12 * 60 * 60, 24 * 60 * 60)
@@ -1391,10 +1387,18 @@ def seed_dcaribou_history() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "seed-history", "one-player-test"))
+    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "seed-history", "one-player-test", "has-pending-details"))
     parser.add_argument("--player-id", default=os.getenv("TM_TEST_PLAYER_ID", ""))
     args = parser.parse_args()
     require_db()
+    if args.mode == "has-pending-details":
+        pending = has_pending_player_details()
+        output_path = os.getenv("GITHUB_OUTPUT", "")
+        if output_path:
+            with open(output_path, "a", encoding="utf-8") as output:
+                output.write(f"has_pending={str(pending).lower()}\n")
+        print(f"has_pending={str(pending).lower()}")
+        return 0
     if args.mode == "seed-history":
         logged_run("dcaribou", "seed-history", seed_dcaribou_history)
         return 0
@@ -1402,7 +1406,7 @@ def main() -> int:
         logged_run("kamerozkan", "import-squads", lambda: sync_kamerozkan(required=True))
         return 0
     if args.mode == "refresh-details":
-        logged_run("felipeall", "refresh-details", sync_felipeall)
+        logged_run("felipeall", "refresh-details", lambda: sync_felipeall(backfill_only=True))
         return 0
     if args.mode == "one-player-test":
         if not re.fullmatch(r"\d+", str(args.player_id or "")):
