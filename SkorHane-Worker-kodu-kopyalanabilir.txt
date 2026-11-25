@@ -3949,49 +3949,49 @@ async function tmPlayer(env, id) {
   const listPayload = (raw, keys) => Array.isArray(raw) ? raw : (raw && typeof raw === "object" ? keys.map(k => raw[k]).find(Array.isArray) || [] : []);
   out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]);
   out.absences = listPayload(row.absences_payload || {}, ["absences", "data", "items"]);
-  out.photo = row.photo_url || b.imageUrl || b.image || b.photo || "";
+  out.photo = row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "";
   const nationality = pick(b, "citizenship", "nationality", "nationalities");
   const nat = Array.isArray(nationality) ? nationality.join(", ") : nationality || "";
   const club = b.club || b.team || {};
   const clubName = typeof club === "string" ? club : (club && (club.name || club.displayName)) || b.clubName || b.currentClub || row.team_name || "";
   const position = b.position || {};
-  const height = pick(b, "height", "heightM", "heightMeters");
+  const height = pick(b, "height", "heightM", "heightMeters", "height_cm");
   out.bio = {
-    ...dateBio(pick(b, "dateOfBirth")),
-    "Ayak": footTr(pick(b, "foot", "preferredFoot")),
-    "Piyasa Değeri": valueTr(pick(b, "marketValue", "marketValueFormatted")) || row.current_market_value_text || (row.current_market_value_eur != null ? Number(row.current_market_value_eur).toLocaleString("tr-TR") + " €" : ""),
+    ...dateBio(pick(b, "dateOfBirth", "date_of_birth")),
+    "Ayak": footTr(pick(b, "foot", "preferredFoot", "preferred_foot")),
+    "Piyasa Değeri": valueTr(pick(b, "marketValue", "marketValueFormatted", "market_value")) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : ""),
     "Şu Anki Takım": clubName,
     "Boy": height ? (typeof height === "number" && height < 3 ? String(height).replace(".", ",") + " m" : height + "") : "",
     "Uyruk": nat,
     "Mevki": (typeof position === "string" ? position : (position && (position.main || position.name || position.displayName))) || row.position || "",
-    "Forma No": pick(b, "shirtNumber", "squad_shirt_number")
+    "Forma No": pick(b, "shirtNumber", "squad_shirt_number", "shirt_number")
   };
-  if ((club && club.contractExpires) || b.contractUntil || b.contractExpires) out.bio["Sözleşme Bitişi"] = (club && club.contractExpires) || b.contractUntil || b.contractExpires;
+  if ((club && (club.contractExpires || club.contract_expires)) || b.contractUntil || b.contract_until || b.contractExpires || b.contract_expires) out.bio["Sözleşme Bitişi"] = (club && club.contractExpires) || b.contractUntil || b.contractExpires;
   if (Array.isArray(statsRows)) {
     const mp = new Map();
     for (const x of statsRows) {
-      const rawSeason = pick(x, "seasonID", "seasonId", "season", "seasonName");
+      const rawSeason = pick(x, "seasonID", "seasonId", "season_id", "season", "seasonName");
       const sm = String(rawSeason && typeof rawSeason === "object" ? pick(rawSeason, "name", "displayName", "year", "id") : rawSeason).match(/(?:19|20)\d{2}(?:\s*[-/–]\s*\d{2,4})?/);
       if (!sm) continue;
       let se = sm[0].replace(/\s+/g, "").replace(/[–-]/g, "/");
       if (/^\d{4}$/.test(se)) se = se + "/" + String(Number(se) + 1).slice(2);
       else se = se.replace(/\/(\d{4})$/, (_, y) => "/" + y.slice(2));
-      const clubRaw = pick(x, "clubName", "teamName", "club", "team", "clubID");
+      const clubRaw = pick(x, "clubName", "club_name", "teamName", "team_name", "club", "team", "clubID", "club_id");
       const clubName = clubRaw && typeof clubRaw === "object" ? pick(clubRaw, "name", "displayName", "shortName") : clubRaw;
       const clubLabel = clubName == null ? "" : String(clubName).trim();
       if (!clubLabel || /^(?:[a-z]{2,5}\.)[a-z0-9._-]+$/i.test(clubLabel) || /^(?:undefined|null|\[object object\]|\d+)$/i.test(clubLabel) || /\b(?:super lig|bundesliga|premier league|serie a|la liga|ligue 1|champions league|europa league)\b/i.test(clubLabel)) continue;
       const k = se + "|" + clubLabel;
       const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Sarı Kart": null, "Kırmızı Kart": null, cats: emptyCats() };
       const m = num(pick(x, "appearances", "apps", "matches")), g = num(pick(x, "goals")), rawAssists = pick(x, "assists"), a = num(rawAssists);
-      const rawStarts = pick(x, "starts", "gamesStarted", "appearancesAsStarter"), starts = rawStarts === "" ? null : num(rawStarts);
-      const rawYellow = pick(x, "yellowCards", "yellow", "bookingsYellow"), yellow = rawYellow === "" ? null : num(rawYellow);
-      const rawRed = pick(x, "redCards", "red", "bookingsRed"), red = rawRed === "" ? null : num(rawRed);
+      const rawStarts = pick(x, "starts", "gamesStarted", "appearancesAsStarter", "is_starting"), starts = rawStarts === "" ? null : num(rawStarts);
+      const rawYellow = pick(x, "yellowCards", "yellow_cards", "yellow", "bookingsYellow"), yellow = rawYellow === "" ? null : num(rawYellow);
+      const rawRed = pick(x, "redCards", "red_cards", "red", "bookingsRed"), red = rawRed === "" ? null : num(rawRed);
       r["Maç"] += m; r["Gol"] += g;
       if (rawAssists !== "") r["Asist"] = (r["Asist"] || 0) + a;
       if (starts != null) r["İlk 11"] = (r["İlk 11"] || 0) + starts;
       if (yellow != null) r["Sarı Kart"] = (r["Sarı Kart"] || 0) + yellow;
       if (red != null) r["Kırmızı Kart"] = (r["Kırmızı Kart"] || 0) + red;
-      addCat(r.cats, catOf(pick(x, "competitionName", "competition", "competitionID")), m, g, rawAssists === "" ? null : a, starts, yellow, red);
+      addCat(r.cats, catOf(pick(x, "competitionName", "competition_name", "competition", "competitionID", "competition_id")), m, g, rawAssists === "" ? null : a, starts, yellow, red);
       mp.set(k, r);
     }
     out.seasons = [...mp.values()];
@@ -4254,81 +4254,23 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     tasks.push((async () => {
       try {
         let id = tmId;
-        if (!id && name) { const r = await tmSearch(env, name); const m = selectPlayerCandidate(r, name, teamHint, posHint); id = m && m.tm; }
-        if (!id) { st.transfermarkt = "oyuncu bulunamadı"; return; }
-        const t = await tmPlayer(env, id);
-        out.tm = t;
-        out.tmId = id;
-        st.transfermarkt = t.err ? "kısmi: " + t.err : "ok";
-      } catch (e) { st.transfermarkt = "hata: " + (e.message || e); }
-    })());
-    tasks.push((async () => {
-      try {
-        let id = tsdbId;
-        if (!id && name) { const r = await tsdbSearch(name); const m = selectPlayerCandidate(r, name, teamHint, posHint); id = m && m.tsdb; }
-        if (!id) { st.thesportsdb = "oyuncu bulunamadı"; return; }
-        try { out.ts = await tsdbPlayer(id); st.thesportsdb = "ok"; }
-        catch (e) { st.thesportsdb = "profil hata: " + (e.message || e); }
-        try { out.tsStats = await tsdbPlayerStats(id); st.thesportsdb_istatistik = out.tsStats.length ? "ok " + out.tsStats.length : "istatistik yok"; }
-        catch (e) { st.thesportsdb_istatistik = "hata: " + (e.message || e); }
-      } catch (e) { st.thesportsdb = "hata: " + (e.message || e); }
-    })());
-    if (pitchApiKey(env)) {
-      // Eski kariyer tablosunu geri getir: sezon/takım/maç/gol Wikipedia'dan tek
-      // makale isteğiyle alınır. Asist, ilk 11 ve kart alanları sadece PitchAPI ile eklenir.
-      st.pitch_api = teamHint ? "API anahtarı hazır; ek asist/ilk 11/kart alanları PitchAPI'den tamamlanacak" : "API anahtarı hazır; oyuncu için takım/lig eşleştirmesi bekleniyor";
-      tasks.push((async () => {
-        try {
-          const t = await title();
-          if (!t) { st.wikipedia_istatistik = "oyuncu makalesi bulunamadı"; return; }
-          let rows = await wikiStatsSingle(t, "en");
-          if ((!rows.club.length || !rows.national.length)) {
-            const tt = await wikiTrTitle(t).catch(() => "");
-            if (tt) {
-              const trRows = await wikiStatsSingle(tt, "tr").catch(() => ({ club: [], national: [] }));
-              if (!rows.club.length) rows.club = trRows.club;
-              if (!rows.national.length) rows.national = trRows.national;
-            }
-          }
-          out.wrows = wikiCareerBaseRows(rows.club);
-          out.national = rows.national || [];
-          st.wikipedia_istatistik = out.wrows.length ? "ok " + out.wrows.length + " sezon/takım satırı" : "kariyer tablosu bulunamadı";
-          st.wikipedia_milli = out.national.length ? "ok " + out.national.length + " millî takım satırı" : "millî takım tablosu bulunamadı";
-        } catch (e) { st.wikipedia_istatistik = "hata: " + (e.message || e); }
-      })());
-    } else {
-      st.pitch_api = "PITCH_API_KEY tanımlı değil";
-      tasks.push((async () => {
-      try {
-        const t = await title();
-        if (!t) return;
-        let r = await wikiStats(t, "en");
-        if (!r.club.length || !r.national.length) {
-          const tt = await wikiTrTitle(t).catch(() => "");
-          if (tt) { const r2 = await wikiStats(tt, "tr").catch(() => ({ club: [], national: [] })); if (!r.club.length) r.club = r2.club; if (!r.national.length) r.national = r2.national; }
+        if (!id && name) {
+          const candidates = await tmSearch(env, name);
+          const match = selectPlayerCandidate(candidates, name, teamHint, posHint);
+          id = match && match.tm;
         }
-        out.wrows = r.club; out.national = r.national;
-        st.wikipedia_istatistik = r.club.length ? "ok " + r.club.length : "tablo bulunamadı";
-        st.wikipedia_milli = r.national.length ? "ok " + r.national.length : "tablo bulunamadı";
-      } catch (e) { st.wikipedia_istatistik = "hata: " + (e.message || e); }
+        if (!id) {
+          st.transfermarkt = "Transfermarkt oyuncusu bulunamadı";
+          return;
+        }
+        const result = await tmPlayer(env, id);
+        out.tm = result;
+        out.tmId = id;
+        st.transfermarkt = result.err ? "hata: " + result.err : "ok";
+      } catch (error) {
+        st.transfermarkt = "hata: " + (error && error.message || error);
+      }
     })());
-    }
-    if (!espnId) tasks.push((async () => { try { out.us = await understat(name); st.understat = "ok " + out.us.length; } catch (e) { st.understat = "hata: " + (e.message || e); } })());
-    if (name) tasks.push((async () => { try { out.es = await espnPlayer(name, apiFootballKey(env) ? 8 : 15, espnId, teamHint, posHint); st.espn = out.es.seasons.length ? "ok" : out.es.note || "veri yok"; } catch (e) { st.espn = "hata: " + e.message; } })());
-    if (name && apiFootballKey(env)) tasks.push((async () => {
-      try {
-        out.af = await apiFootballPlayerCareer(env, name, afId, teamHint, posHint);
-        st.api_football = out.af.seasons.length ? "ok " + out.af.seasons.length + " sezon" + (out.af.failedYears && out.af.failedYears.length ? "; erişilemeyen sezon: " + out.af.failedYears.slice(0, 5).map(x => x.year).join(", ") : "") : (out.af.failedYears && out.af.failedYears.length ? "erişilemeyen sezon: " + out.af.failedYears.slice(0, 5).map(x => x.year).join(", ") : "bu oyuncu/sezon için istatistik yok");
-      } catch (e) { st.api_football = "hata: " + (e.message || e); }
-    })());
-    else if (!coach) st.api_football = "API_FOOTBALL_KEY tanımlı değil; kapsamlı sezon/turnuva kırılımı devre dışı";
-    if (name && soccerDataKey(env)) tasks.push((async () => {
-      try {
-        out.sd = await soccerDataPlayerCareer(env, name, teamHint, posHint);
-        st.soccer_data = out.sd.seasons.length ? "ok " + out.sd.seasons.length + " sezon/takım satırı (" + (out.sd.searchedSeasons || 0) + " sezon denendi)" + (out.sd.failures.length ? "; bazı sorgular başarısız: " + out.sd.failures.slice(0, 2).join(", ") : "") : out.sd.failures.length ? "sorgu hatası: " + out.sd.failures.slice(0, 2).join(", ") : out.sd.ambiguous ? "aynı isimli oyuncu takım bilgisiyle ayırt edilemedi" : "kapsamdaki takım/sezonlarda kayıt yok";
-      } catch (e) { st.soccer_data = "hata: " + (e.message || e); }
-    })());
-    else if (!coach) st.soccer_data = "SOCCER_DATA_KEY tanımlı değil; ek asist/ilk 11/kart kaynağı devre dışı";
   }
   await Promise.all(tasks);
   if (!coach && wantStats && sportmonksToken(env)) {
@@ -4342,10 +4284,10 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
   } else if (!coach && wantStats) st.sportmonks = "SPORTMONKS_API_TOKEN tanımlı değil (isteğe bağlı ek kaynak)";
   const nm = (ss && ss.player && ss.player.name) || (out.af && out.af.player) || (out.sm && out.sm.player) || name;
   const bio = {};
-  [out.ts && out.ts.bio, out.es && out.es.bio, out.wbio, out.af && out.af.bio, out.afCoach && out.afCoach.bio, out.tm && out.tm.bio, out.sm && out.sm.bio].forEach((b) => Object.entries(b || {}).forEach(([k, v]) => { if (v !== "" && v != null) bio[k] = v; }));
+  [out.ts && out.ts.bio, out.es && out.es.bio, out.wbio, out.af && out.af.bio, out.afCoach && out.afCoach.bio, out.sm && out.sm.bio, out.tm && out.tm.bio].forEach((b) => Object.entries(b || {}).forEach(([k, v]) => { if (v !== "" && v != null) bio[k] = v; }));
   // API-Football's /transfers endpoint is the freshest current-club record; don't
   // let an older Transfermarkt profile override it when the providers disagree.
-  if (out.af && out.af.bio && out.af.bio["Şu Anki Takım"]) bio["Şu Anki Takım"] = out.af.bio["Şu Anki Takım"];
+  if (coach && out.afCoach && out.afCoach.bio && out.afCoach.bio["Şu Anki Takım"]) bio["Şu Anki Takım"] = out.afCoach.bio["Şu Anki Takım"];
   const esRows = (out.es && out.es.seasons || []).map((r) => ({ ...r, "Sezon": String(r["Sezon"] || ""), "Takım": r["Takım"] || "", "Maç": r["Maç"] == null ? null : num(r["Maç"]), "Gol": r["Gol"] == null ? null : num(r["Gol"]), "Asist": r["Asist"] == null ? null : num(r["Asist"]), "İlk 11": r["İlk 11"] == null ? null : num(r["İlk 11"]), "Sarı Kart": r["Sarı Kart"] == null ? null : num(r["Sarı Kart"]), "Kırmızı Kart": r["Kırmızı Kart"] == null ? null : num(r["Kırmızı Kart"]), cats: r.cats || null }));
   const rows = mergeCareerRows([out.tm && out.tm.seasons, out.sd && out.sd.seasons, esRows, out.tsStats, out.wrows, out.sm && out.sm.seasons]);
   // API-Football is intentionally excluded from the general career-row merge:
@@ -4439,8 +4381,8 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     const loan=/loan|kiral/i.test(rawType),free=/free|bedelsiz/i.test(rawType),fee=/€|£|\$|\b\d/.test(rawType)&&!loan?rawType:'';
     return {date,from,to,kind:loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
   }).filter(x=>x.from||x.to||x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-  const transfers=afTransfers.length?afTransfers:tmTransfers;
-  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.af && out.af.injuries || [], sources: st, stats: null };
+  const transfers=tmTransfers;
+  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], sources: st, stats: null };
 }
 
 // ---------- PitchAPI: seçilen oyuncunun erişilebilir geçmiş sezonlarını maç maç birleştir ----------
@@ -7767,7 +7709,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf31:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf32:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
