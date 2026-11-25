@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -135,6 +136,17 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("last_squad_seen_at.gte.", query)
         self.assertIn("last_squad_seen_at.lt.2026-11-25T20%3A26%3A06Z", query)
         self.assertIn("last_felipe_synced_at=is.null", query)
+
+    def test_main_and_missing_squad_imports_do_not_share_leagues(self):
+        main_workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
+        missing_workflow = (ROOT / ".github" / "workflows" / "import-missing-leagues.yml").read_text(encoding="utf-8")
+        main_match = re.search(r"(?m)^\\s*TM_LEAGUES:\\s*([A-Z0-9,]+)", main_workflow)
+        missing_match = re.search(r"(?m)^\\s*TM_LEAGUES:\\s*([A-Z0-9,]+)", missing_workflow)
+        self.assertIsNotNone(main_match)
+        self.assertIsNotNone(missing_match)
+        main_leagues = set(main_match.group(1).split(","))
+        missing_leagues = set(missing_match.group(1).split(","))
+        self.assertFalse(main_leagues & missing_leagues)
 
     def test_main_backlog_recovers_pending_rows_moved_past_imported_window(self):
         from unittest.mock import patch
