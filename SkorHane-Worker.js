@@ -3981,7 +3981,7 @@ async function tmPlayer(env, id) {
       const clubLabel = clubName == null ? "" : String(clubName).trim();
       if (!clubLabel || /^(?:[a-z]{2,5}\.)[a-z0-9._-]+$/i.test(clubLabel) || /^(?:undefined|null|\[object object\]|\d+)$/i.test(clubLabel) || /\b(?:super lig|bundesliga|premier league|serie a|la liga|ligue 1|champions league|europa league)\b/i.test(clubLabel)) continue;
       const k = se + "|" + clubLabel;
-      const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Sarı Kart": null, "Kırmızı Kart": null, cats: emptyCats() };
+      const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Toplam Dakika": null, "Sarı Kart": null, "Kırmızı Kart": null, cats: emptyCats() };
       const m = num(pick(x, "appearances", "apps", "matches")), g = num(pick(x, "goals")), rawAssists = pick(x, "assists"), a = num(rawAssists);
       const rawStarts = pick(x, "starts", "gamesStarted", "appearancesAsStarter", "is_starting"), starts = rawStarts === "" ? null : num(rawStarts);
       const rawYellow = pick(x, "yellowCards", "yellow_cards", "yellow", "bookingsYellow"), yellow = rawYellow === "" ? null : num(rawYellow);
@@ -3991,6 +3991,8 @@ async function tmPlayer(env, id) {
       if (starts != null) r["İlk 11"] = (r["İlk 11"] || 0) + starts;
       if (yellow != null) r["Sarı Kart"] = (r["Sarı Kart"] || 0) + yellow;
       if (red != null) r["Kırmızı Kart"] = (r["Kırmızı Kart"] || 0) + red;
+      const rawMinutes = pick(x, "minutes", "minutes_played", "minutesPlayed");
+      if (rawMinutes !== "") r["Toplam Dakika"] = (r["Toplam Dakika"] || 0) + num(rawMinutes);
       addCat(r.cats, catOf(pick(x, "competitionName", "competition_name", "competition", "competitionID", "competition_id")), m, g, rawAssists === "" ? null : a, starts, yellow, red);
       mp.set(k, r);
     }
@@ -4006,6 +4008,7 @@ async function tmPlayer(env, id) {
         "Gol": x.goals == null ? 0 : Number(x.goals),
         "Asist": x.assists == null ? null : Number(x.assists),
         "İlk 11": x.starts == null ? null : Number(x.starts),
+        "Toplam Dakika": x.minutes == null ? null : Number(x.minutes),
         "Sarı Kart": x.yellow_cards == null ? null : Number(x.yellow_cards),
         "Kırmızı Kart": x.red_cards == null ? null : Number(x.red_cards),
         cats: emptyCats()
@@ -4365,14 +4368,16 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
   const tmRaw=out.tm&&out.tm.transfers;
   const tmRows=Array.isArray(tmRaw)?tmRaw:Array.isArray(tmRaw&&tmRaw.transfers)?tmRaw.transfers:Array.isArray(tmRaw&&tmRaw.history)?tmRaw.history:Array.isArray(tmRaw&&tmRaw.data)?tmRaw.data:[];
   const tmTransfers=tmRows.map(move=>{
-    const teamName=value=>typeof value==='string'?value:value&& (value.name||value.clubName||value.teamName)||'';
+    const teamName=value=>typeof value==='string'?value:value&& (value.name||value.clubName||value.teamName||value.display_name)||'';
     const from=teamName(move.from||move.fromClub||move.fromTeam||move.oldClub||move.previousClub||move.fromClubName||move.club_from);
     const to=teamName(move.to||move.toClub||move.toTeam||move.newClub||move.currentClub||move.toClubName||move.club_to);
     const rawDate=move.date||move.transferDate||move.dateOfTransfer||move.timestamp||'';
     const date=typeof rawDate==='number'?new Date(rawDate<1e12?rawDate*1000:rawDate).toISOString().slice(0,10):String(rawDate).slice(0,10);
-    const rawType=String(move.type||move.transferType||move.transfer_type||move.fee||move.transferFee||move.feeText||move.fee_text||'').trim();
-    const loan=/loan|kiral/i.test(rawType),free=/free|bedelsiz/i.test(rawType),fee=/€|£|\$|\b\d/.test(rawType)&&!loan?rawType:'';
-    return {date,from,to,kind:loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
+    const rawType=String(move.kind||move.type||move.transferType||move.transfer_type||'').trim();
+    const rawFee=move.fee||move.feeText||move.fee_text||'';
+    const loan=/loan|kiral/i.test(rawType),free=/free|bedelsiz/i.test(rawType),endLoan=/endOfLoan|end of loan|kiralıktan dönüş/i.test(rawType);
+    const fee=rawFee!==''?String(rawFee):(/€|£|\$|\b\d/.test(rawType)&&!loan?rawType:'');
+    return {date,from,to,kind:endLoan?'Kiralıktan dönüş':loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
   }).filter(x=>x.from||x.to||x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const transfers=tmTransfers;
   return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], sources: st, stats: null };
