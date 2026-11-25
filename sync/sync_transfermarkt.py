@@ -306,7 +306,7 @@ def sync_kamerozkan(*, required: bool = False) -> int:
     actor_id = quote(APIFY_ACTOR, safe="~")
     token = quote(APIFY_TOKEN)
     run = json_request(
-        f"https://api.apify.com/v2/actors/{actor_id}/runs?token={token}&waitForFinish=60",
+        f"https://api.apify.com/v2/actors/{actor_id}/runs?token={token}",
         method="POST",
         payload=body,
         source="kamerozkan/Apify",
@@ -319,11 +319,12 @@ def sync_kamerozkan(*, required: bool = False) -> int:
 
     terminal_states = {"SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"}
     state = run_data.get("status")
-    for _ in range(60):
+    for _ in range(120):
         if state in terminal_states:
             break
+        time.sleep(15)
         status = json_request(
-            f"https://api.apify.com/v2/actor-runs/{quote(str(run_id))}?token={token}&waitForFinish=60",
+            f"https://api.apify.com/v2/actor-runs/{quote(str(run_id))}?token={token}",
             source="Apify run status",
         )
         run_data = (status or {}).get("data") or {}
