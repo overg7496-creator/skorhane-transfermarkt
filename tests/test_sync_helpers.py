@@ -133,7 +133,7 @@ class SyncHelperTests(unittest.TestCase):
             )
         query = fetch.call_args.args[0]
         self.assertIn("last_squad_seen_at.gte.", query)
-        self.assertIn("last_squad_seen_at.lt.2026-11-25T20:26:06Z", query)
+        self.assertIn("last_squad_seen_at.lt.2026-11-25T20%3A26%3A06Z", query)
         self.assertIn("last_felipe_synced_at=is.null", query)
 
     def test_imported_detail_queue_rejects_incomplete_or_reversed_window(self):
