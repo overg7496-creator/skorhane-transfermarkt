@@ -1132,7 +1132,7 @@ def seed_dcaribou_history() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("sync", "import-squads", "seed-history", "one-player-test"))
+    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "seed-history", "one-player-test"))
     parser.add_argument("--player-id", default=os.getenv("TM_TEST_PLAYER_ID", ""))
     args = parser.parse_args()
     require_db()
@@ -1141,6 +1141,9 @@ def main() -> int:
         return 0
     if args.mode == "import-squads":
         logged_run("kamerozkan", "import-squads", lambda: sync_kamerozkan(required=True))
+        return 0
+    if args.mode == "refresh-details":
+        logged_run("felipeall", "refresh-details", sync_felipeall)
         return 0
     if args.mode == "one-player-test":
         if not re.fullmatch(r"\d+", str(args.player_id or "")):
