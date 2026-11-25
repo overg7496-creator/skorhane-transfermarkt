@@ -49,9 +49,10 @@ jobs:
             python -m pip install "git+https://github.com/dcaribou/transfermarkt-scraper.git"
           fi
 
-      - name: Validate Python and Worker syntax
+      - name: Validate Python, tests and Worker syntax
         run: |
           python -m py_compile sync/sync_transfermarkt.py
+          python -m unittest discover -s tests -v
           node --input-type=module --check < SkorHane-Worker.js
 
       - name: Start dedicated Transfermarkt API (v5.0.0)
@@ -157,4 +158,6 @@ jobs:
           FELIPE_API_BASE: http://127.0.0.1:8000
           FELIPE_DELAY_MIN_SECONDS: "5.5"
           FELIPE_DELAY_MAX_SECONDS: "7.0"
+          HTTP_MAX_RETRIES: "4"
+          HTTP_TIMEOUT_SECONDS: "45"
         run: python sync/sync_transfermarkt.py one-player-test
