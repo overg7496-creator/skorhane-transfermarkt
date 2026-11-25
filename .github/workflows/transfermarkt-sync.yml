@@ -186,14 +186,14 @@ jobs:
         run: python sync/sync_transfermarkt.py import-squads
 
       - name: Refresh player detail data
-        if: (github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'refresh-details' || github.event.inputs.mode == 'import-squads' || github.event.inputs.mode == 'sync')) || (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *' && steps.detail_queue.outputs.has_pending == 'true') || (github.event_name == 'schedule' && github.event.schedule == '20 3 * * 1,4' && vars.ENABLE_TRANSFERMARKT_CRON == 'true')
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'refresh-details' || github.event.inputs.mode == 'import-squads' || github.event.inputs.mode == 'sync')) || (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *' && steps.detail_queue.outputs.has_pending == 'true') || (github.event_name == 'schedule' && github.event.schedule == '20 3 * * 1,4' && vars.ENABLE_TRANSFERMARKT_CRON == 'true')
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FELIPE_API_BASE: http://127.0.0.1:8000
           TM_MAX_PLAYERS_PER_RUN: "80"
-          TM_DETAIL_MAX_RUNTIME_SECONDS: "20400"
+          TM_DETAIL_MAX_RUNTIME_SECONDS: "16200"
           FELIPE_DELAY_MIN_SECONDS: "5.5"
           FELIPE_DELAY_MAX_SECONDS: "7.0"
           TM_MAX_MATCH_PAGES: "5"
