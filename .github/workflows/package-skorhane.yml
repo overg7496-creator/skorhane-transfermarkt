@@ -20,6 +20,7 @@ jobs:
         run: |
           mkdir -p package
           cp SkorHane-HTML-kodu-kopyalanabilir.txt package/SkorHane-HTML.html
+          cp SkorHane-HTML-kodu-kopyalanabilir.txt package/SkorHane-HTML-kodu-kopyalanabilir.txt
           cp SkorHane-Worker.js package/SkorHane-Worker.js
           cp SkorHane-Worker-kodu-kopyalanabilir.txt package/SkorHane-Worker-kodu-kopyalanabilir.txt
           cat > package/KURULUM.txt <<'EOF'
@@ -36,7 +37,7 @@ jobs:
           525 oyuncunun tamamini islemek icin 80 oyunculuk partiler halinde tekrar calistir.
           EOF
           cd package
-          zip -q -j ../SkorHane-Guncel.zip SkorHane-HTML.html SkorHane-Worker.js SkorHane-Worker-kodu-kopyalanabilir.txt KURULUM.txt
+          zip -q -j ../SkorHane-Guncel.zip SkorHane-HTML.html SkorHane-HTML-kodu-kopyalanabilir.txt SkorHane-Worker.js SkorHane-Worker-kodu-kopyalanabilir.txt KURULUM.txt
 
       - name: Upload ZIP artifact
         uses: actions/upload-artifact@v4
