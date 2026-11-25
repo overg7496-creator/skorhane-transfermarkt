@@ -450,7 +450,7 @@ def iterable_from(payload: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
             if isinstance(value, list):
                 return [x for x in value if isinstance(x, dict)]
             if isinstance(value, dict):
-                for nested in ("items", "data", "stats", "transfers", "history", "marketValues", "valuations", "matches", "results", "appearances"):
+                for nested in ("items", "data", "stats", "transfers", "history", "marketValues", "market_value_history", "valuations", "matches", "results", "appearances", "injuries", "absences"):
                     if isinstance(value.get(nested), list):
                         return [x for x in value[nested] if isinstance(x, dict)]
     return []
@@ -543,45 +543,76 @@ def get_player_current_matches(base: str, tm_id: str) -> list[dict[str, Any]]:
     return all_rows
 
 
-def sync_felipeall(only_player: str | None = None) -> int:
-    """Refresh player profile and active-season matches only.
+def fetch_optional_player_payload(base: str, endpoint: str, label: str) -> Any:
+    try:
+        return json_request(
+            base + endpoint,
+            source=f"felipeall {label}",
+            delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
+        )
+    except Exception as exc:
+        LOG.warning("felipeall %s alınamadı: %s; mevcut veri korunuyor.", label, exc)
+        return None
 
-    Historical match appearances are seeded separately by dcaribou. Current
-    transfers and market-value observations come from kamerozkan. Rotation is
-    based on last_synced_at and excludes squads not reconfirmed within 14 days.
+
+def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any]:
+    """Fetch every available Transfermarkt injury/absence page, with a safe page cap."""
+    first = fetch_optional_player_payload(base, f"{endpoint}?page_number=1", key)
+    if not isinstance(first, (dict, list)):
+        return {}
+    rows = iterable_from(first, (key,))
+    if isinstance(first, list):
+        return {key: rows, "page_number": 1, "last_page_number": 1}
+
+    last_page = numeric(first, "last_page_number", "lastPageNumber") or 1
+    last_page = max(1, min(last_page, 30))
+    loaded_pages = 1
+    for page in range(2, last_page + 1):
+        payload = fetch_optional_player_payload(base, f"{endpoint}?page_number={page}", f"{key} sayfa {page}")
+        if payload is None:
+            break
+        page_rows = iterable_from(payload, (key,))
+        if not page_rows:
+            break
+        rows.extend(page_rows)
+        loaded_pages += 1
+    result = dict(first)
+    result[key] = rows
+    result["pages_loaded"] = loaded_pages
+    result["last_page_number"] = last_page
+    return result
+
+
+def sync_felipeall(only_player: str | None = None) -> int:
+    """Refresh Transfermarkt player profiles, season stats, transfers, injuries and valuations.
+
+    The runner rotates through current squads to respect the upstream API's rate limit.
     """
     select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
     if only_player:
         query = f"tm_players?select={select}&tm_id=eq.{quote(only_player)}&limit=1"
     else:
         squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-        # Do not order by last_synced_at: kamerozkan touches every current-squad
-        # record on each run. A dedicated cursor ensures felipeall rotates players.
         query = f"tm_players?select={select}&is_active=eq.true&last_squad_seen_at=gte.{quote(squad_cutoff)}&order=last_felipe_synced_at.asc.nullsfirst&limit={TM_MAX_PLAYERS_PER_RUN}"
     players = db_get(query)
     if not isinstance(players, list):
         raise RuntimeError("DB oyuncu listesi okunamadı.")
+
     successful = 0
     for idx, player in enumerate(players, 1):
         tm_id = str(player.get("tm_id") or "").strip()
         if not tm_id:
             continue
         base = f"{FELIPE_API_BASE}/players/{quote(tm_id)}"
-        payloads: dict[str, Any] = {}
-        # Current profile refresh on each rotation.
-        for kind, endpoint in (("profile", "/profile"),):
-            try:
-                value = json_request(base + endpoint, source=f"felipeall {kind}",
-                                     delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX))
-                if isinstance(value, (dict, list)) and value:
-                    payloads[kind] = value
-            except Exception as exc:
-                LOG.warning("felipeall %s %s: %s; mevcut profil korunuyor.", tm_id, kind, exc)
-        # This scheduled worker intentionally does not call historical stats,
-        # transfer-history, injury-history or valuation-history endpoints.
-        # Legacy/history backfill is the one-off dcaribou seed; current transfer
-        # and market-value observations come from kamerozkan.
-        # Only current season is checked on recurring runs. Endpoint returns 50/page.
+
+        profile = fetch_optional_player_payload(base, "/profile", "profile")
+        market_payload = fetch_optional_player_payload(base, "/market_value", "piyasa değeri geçmişi")
+        transfer_payload = fetch_optional_player_payload(base, "/transfers", "transfer geçmişi")
+        stats_payload = fetch_optional_player_payload(base, "/stats", "sezon istatistikleri")
+        injuries_payload = fetch_player_paged_rows(base, "/injuries", "injuries")
+        absences_payload = fetch_player_paged_rows(base, "/absences", "absences")
+
+        # Transfermarkt'ın maç sayfası da güncel sezonun maç bazlı verilerini sağlar.
         matches = get_player_current_matches(base, tm_id)
         current_stats = build_current_season_stats(matches)
         current_payload = {
@@ -590,36 +621,187 @@ def sync_felipeall(only_player: str | None = None) -> int:
             "matches": matches,
             "stats": current_stats,
         } if matches else {}
-        profile = payloads.get("profile") or {}
-        if isinstance(profile, dict):
-            b = profile.get("player") or profile.get("data") or profile.get("profile") or profile
-            name = safe_text(b.get("name"), b.get("playerName"), player.get("name")) if isinstance(b, dict) else player.get("name")
-            club_obj = b.get("club") or {} if isinstance(b, dict) else {}
-            team = safe_text(club_obj, b.get("team") if isinstance(b, dict) else None, player.get("team_name"))
-            pos_obj = b.get("position") or {} if isinstance(b, dict) else {}
-            pos = safe_text(pos_obj, player.get("position"))
-            photo = safe_text(b.get("imageUrl"), b.get("photo"), b.get("image"), player.get("photo_url")) if isinstance(b, dict) else player.get("photo_url")
+
+        profile_obj = profile if isinstance(profile, dict) else {}
+        profile_player = profile_obj.get("player") or profile_obj.get("data") or profile_obj.get("profile") or profile_obj
+        if not isinstance(profile_player, dict):
+            profile_player = {}
+
+        club_obj = profile_player.get("club") or {}
+        if isinstance(club_obj, str):
+            club_name = club_obj
+            club_id = ""
+        elif isinstance(club_obj, dict):
+            club_name = safe_text(club_obj.get("name"), club_obj.get("display_name"), player.get("team_name"))
+            club_id = safe_text(club_obj.get("id")) or ""
         else:
-            name, team, pos, photo = player.get("name"), player.get("team_name"), player.get("position"), player.get("photo_url")
-        normalized = {"team_name": team, "position": pos, "photo_url": photo}
+            club_name, club_id = player.get("team_name"), ""
+
+        position_obj = profile_player.get("position") or {}
+        position = safe_text(
+            position_obj.get("main") if isinstance(position_obj, dict) else position_obj,
+            position_obj.get("name") if isinstance(position_obj, dict) else None,
+            player.get("position"),
+        )
+        name = safe_text(profile_player.get("name"), profile_player.get("full_name"), player.get("name"))
+        photo = safe_text(profile_player.get("image_url"), profile_player.get("imageUrl"),
+                          profile_player.get("photo"), player.get("photo_url"))
+
+        market_obj = market_payload if isinstance(market_payload, dict) else {}
+        current_value = value_from(profile_player, ("market_value", "marketValue"))
+        if current_value is None:
+            current_value = value_from(market_obj, ("market_value", "marketValue"))
+        current_value_eur = parse_money_eur(current_value)
+        market_history = iterable_from(market_payload, ("market_value_history", "history", "marketValues", "valuations"))
+        latest_market_date = normalize_date(
+            value_from(market_obj, ("last_updated", "lastUpdated"))
+            or (market_history[0].get("date") if market_history else None)
+        )
+
+        normalized: dict[str, Any] = {
+            "team_name": club_name or player.get("team_name"),
+            "position": position,
+            "photo_url": photo,
+            "is_active": True,
+        }
         if name and name != tm_id:
             normalized["name"] = name
-        if "profile" in payloads:
-            normalized["profile_payload"] = payloads["profile"]
+        if profile:
+            normalized["profile_payload"] = profile
+        if market_payload:
+            normalized["market_value_payload"] = market_payload
+        if transfer_payload:
+            normalized["transfers_payload"] = transfer_payload
+        if stats_payload:
+            normalized["stats_payload"] = stats_payload
+        if injuries_payload:
+            normalized["injuries_payload"] = injuries_payload
+        if absences_payload:
+            normalized["absences_payload"] = absences_payload
         if current_payload:
             normalized["current_season_payload"] = current_payload
-        if normalized.get("name") or normalized.get("profile_payload") or current_payload:
-            upsert_player(tm_id, "felipeall", normalized)
-            if isinstance(profile, dict) and profile:
-                source_record("felipeall", "player_profile", tm_id, "", profile)
-        # Current-season totals only. Historical seasons are seeded separately.
+        if current_value_eur is not None:
+            normalized["current_market_value_eur"] = current_value_eur
+            normalized["current_market_value_text"] = safe_text(current_value)
+            normalized["current_market_value_observed_at"] = datetime.now(timezone.utc).isoformat()
+        if latest_market_date:
+            normalized["current_market_value_date"] = latest_market_date
+
+        upsert_player(tm_id, "felipeall", normalized)
+        if profile:
+            source_record("felipeall", "player_profile", tm_id, "", profile)
+        if stats_payload:
+            source_record("felipeall", "player_stats", tm_id, "", stats_payload)
+        if injuries_payload:
+            source_record("felipeall", "player_injuries", tm_id, "", injuries_payload)
+        if absences_payload:
+            source_record("felipeall", "player_absences", tm_id, "", absences_payload)
+
+        # Resolve club IDs in Transfermarkt season-stat rows using profile and
+        # the player's own transfer history, avoiding guesses from other providers.
+        club_names: dict[str, str] = {}
+        if club_id and club_name:
+            club_names[club_id] = club_name
+        transfer_rows = iterable_from(transfer_payload, ("transfers",))
+        for transfer in transfer_rows:
+            for key in ("club_from", "club_to", "from_club", "to_club"):
+                club = transfer.get(key)
+                if isinstance(club, dict):
+                    cid = safe_text(club.get("id"))
+                    cname = safe_text(club.get("name"), club.get("display_name"))
+                    if cid and cname:
+                        club_names[cid] = cname
+
+        # All transfer rows (not only the current squad's joinedDate) are persisted.
+        for transfer in transfer_rows:
+            from_club = safe_text(transfer.get("club_from"), transfer.get("from_club"))
+            to_club = safe_text(transfer.get("club_to"), transfer.get("to_club"))
+            transfer_date = normalize_date(value_from(transfer, ("date", "transfer_date", "transferDate"))) or ""
+            fee = value_from(transfer, ("fee", "fee_eur", "transfer_fee"))
+            fee_text = safe_text(transfer.get("fee_text"), transfer.get("feeText"), fee)
+            if not from_club and not to_club:
+                continue
+            rpc("tm_upsert_transfer", {"p_row": {
+                "tm_id": tm_id,
+                "transfer_date": transfer_date,
+                "from_club": from_club or "",
+                "to_club": to_club or "",
+                "transfer_type": safe_text(transfer.get("transfer_type"), transfer.get("transferType")),
+                "fee_text": fee_text,
+                "fee_eur": parse_money_eur(fee),
+                "payload": transfer,
+                "source": "felipeall",
+            }})
+
+        # Save valuation history as dated rows as well as the raw player payload.
+        for item in market_history:
+            valuation_date = normalize_date(item.get("date") or item.get("valuation_date"))
+            if not valuation_date:
+                continue
+            value = value_from(item, ("market_value", "value_eur", "value"))
+            club = safe_text(item.get("club_name"), item.get("club"))
+            rpc("tm_upsert_market_value", {"p_row": {
+                "tm_id": tm_id,
+                "valuation_date": valuation_date,
+                "value_eur": parse_money_eur(value),
+                "display_value": safe_text(item.get("display_value"), value),
+                "club_name": club,
+                "payload": item,
+                "source": "felipeall",
+            }})
+
+        # Normalize Transfermarkt's stats endpoint to the same DB shape used by
+        # the career screen. PlayerStats identifies clubs by ID; transfer history
+        # supplies those IDs' official Transfermarkt names.
+        raw_stat_rows = iterable_from(stats_payload, ("stats",))
+        normalized_stats: list[dict[str, Any]] = []
+        for row in raw_stat_rows:
+            season = safe_text(row.get("season_id"), row.get("seasonID"), row.get("season"))
+            competition = safe_text(row.get("competition_name"), row.get("competitionName"), row.get("competition"))
+            club_id_for_stat = safe_text(row.get("club_id"), row.get("clubID")) or ""
+            stat_club = safe_text(row.get("club_name"), row.get("clubName"), club_names.get(club_id_for_stat))
+            if not season or not stat_club:
+                continue
+            mapped = {
+                "seasonID": season,
+                "competitionName": competition or "",
+                "clubName": stat_club,
+                "appearances": numeric(row, "appearances", "matches"),
+                "starts": numeric(row, "starts"),
+                "goals": numeric(row, "goals"),
+                "assists": numeric(row, "assists"),
+                "minutes": numeric(row, "minutes_played", "minutes"),
+                "yellowCards": numeric(row, "yellow_cards", "yellowCards"),
+                "secondYellowCards": numeric(row, "second_yellow_cards", "secondYellowCards"),
+                "redCards": numeric(row, "red_cards", "redCards"),
+            }
+            normalized_stats.append(mapped)
+            rpc("tm_upsert_season_stat", {"p_row": {
+                "tm_id": tm_id,
+                "season_id": season,
+                "competition_name": competition or "",
+                "club_name": stat_club,
+                "appearances": mapped["appearances"],
+                "starts": mapped["starts"],
+                "goals": mapped["goals"],
+                "assists": mapped["assists"],
+                "minutes": mapped["minutes"],
+                "yellow_cards": mapped["yellowCards"],
+                "second_yellow_cards": mapped["secondYellowCards"],
+                "red_cards": mapped["redCards"],
+                "payload": row,
+                "source": "felipeall",
+            }})
+
+        # Preserve current-season match-derived totals when they add fields that
+        # the season summary endpoint does not expose (for example starts/minutes).
         stat_batches: list[dict[str, Any]] = list(current_stats)
         seen_stats: set[tuple[str, str, str]] = set()
         for row in stat_batches:
             season = safe_text(row.get("seasonID"), row.get("seasonId"), row.get("season"), row.get("seasonName")) or ""
             competition = safe_text(row.get("competitionName"), row.get("competition"), row.get("competitionID")) or ""
             club = safe_text(row.get("clubName"), row.get("teamName"), row.get("club"), row.get("team")) or ""
-            if not season:
+            if not season or not club:
                 continue
             stat_key = (str(season), competition, club)
             if stat_key in seen_stats:
@@ -635,18 +817,19 @@ def sync_felipeall(only_player: str | None = None) -> int:
                 "second_yellow_cards": numeric(row, "secondYellowCards"),
                 "red_cards": numeric(row, "redCards", "red"), "payload": row, "source": "felipeall",
             }})
+
         if current_payload:
             source_record("felipeall", "current_season_matches", tm_id, str(TM_SEASON), current_payload)
-        # Persist rotation progress independently from the all-source last_synced_at.
+
         db_patch(f"tm_players?tm_id=eq.{quote(tm_id)}", {
             "last_felipe_synced_at": datetime.now(timezone.utc).isoformat()
         })
         successful += 1
         if idx % 10 == 0:
             LOG.info("felipeall ilerleme: %s/%s oyuncu", idx, len(players))
+
     LOG.info("felipeall tamamlandı: %s oyuncu işlendi", successful)
     return successful
-
 
 def patch_dcaribou_rate_limit() -> None:
     """Patch dcaribou's shared crawler factory after install: concurrency 1 + jitter hook.
