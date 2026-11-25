@@ -82,13 +82,17 @@ class SquadSyncTests(unittest.TestCase):
             "seasonId": "2026",
             "clubs": [{"id": "10", "name": "Club A"}, {"id": "20", "name": "Club B"}],
         }
+        profile_a = {"id": "10", "name": "Club A", "image": "https://img.example/club-a.png"}
+        profile_b = {"id": "20", "name": "Club B"}
         club_a = {"id": "10", "players": [{"id": "100", "name": "Player A"}]}
         club_b = {"id": "20", "players": [{"id": "200", "name": "Player B"}]}
         with (
             patch.object(squads, "require_config"),
             patch.object(squads, "TM_LEAGUES", ["TR1"]),
             patch.object(squads, "TM_SEASON", "2026"),
-            patch.object(squads, "api_get", side_effect=[competition, club_a, club_b]) as api,
+            patch.object(squads, "api_get", side_effect=[
+                competition, profile_a, club_a, profile_b, club_b
+            ]) as api,
             patch.object(squads, "load_league_state", return_value={}),
             patch.object(squads, "save_league_state") as save_state,
             patch.object(squads, "save_club_metadata") as save_club,
@@ -97,8 +101,10 @@ class SquadSyncTests(unittest.TestCase):
             count = squads.sync_squads_and_clubs()
         self.assertEqual(count, 2)
         self.assertEqual(api.call_args_list[0].args[0], "/competitions/TR1/clubs?season_id=2026")
-        self.assertEqual(api.call_args_list[1].args[0], "/clubs/10/players?season_id=2026")
-        self.assertEqual(api.call_args_list[2].args[0], "/clubs/20/players?season_id=2026")
+        self.assertEqual(api.call_args_list[1].args[0], "/clubs/10/profile")
+        self.assertEqual(api.call_args_list[2].args[0], "/clubs/10/players?season_id=2026")
+        self.assertEqual(api.call_args_list[3].args[0], "/clubs/20/profile")
+        self.assertEqual(api.call_args_list[4].args[0], "/clubs/20/players?season_id=2026")
         self.assertEqual(save_player.call_count, 2)
         self.assertEqual(save_club.call_count, 2)
         self.assertGreaterEqual(save_state.call_count, 3)
@@ -114,7 +120,9 @@ class SquadSyncTests(unittest.TestCase):
             patch.object(squads, "require_config"),
             patch.object(squads, "TM_LEAGUES", ["TR1"]),
             patch.object(squads, "TM_SEASON", "2026"),
-            patch.object(squads, "api_get", side_effect=[competition, {"id": "10", "players": []}]),
+            patch.object(squads, "api_get", side_effect=[
+                competition, {"id": "10", "name": "Club A"}, {"id": "10", "players": []}
+            ]),
             patch.object(squads, "load_league_state", return_value={}),
             patch.object(squads, "save_league_state") as save_state,
             patch.object(squads, "save_player") as save_player,
