@@ -4,6 +4,7 @@ name: SkorHane Transfermarkt Sync
 on:
   push:
     paths:
+      - ".github/workflows/transfermarkt-sync.yml"
       - "sync/sync_transfermarkt.py"
       - "tests/**"
   schedule:
@@ -169,8 +170,21 @@ jobs:
           HTTP_TIMEOUT_SECONDS: "45"
         run: python sync/sync_transfermarkt.py sync
 
+      - name: Import current squads
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'import-squads'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          TM_LEAGUES: TR1,TR2,TR3,TR4,GB1,ES1,L1,IT1,FR1
+          TM_SEASON: "2026"
+          TM_APIFY_MAX_PLAYERS: "20000"
+          REQUEST_DELAY_MIN_SECONDS: "1.5"
+          REQUEST_DELAY_MAX_SECONDS: "3.5"
+        run: python sync/sync_transfermarkt.py import-squads
+
       - name: Refresh player detail data
-        if: (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'refresh-details') || (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *' && steps.detail_queue.outputs.has_pending == 'true')
+        if: (github.event_name == 'workflow_dispatch' && (github.event.inputs.mode == 'refresh-details' || github.event.inputs.mode == 'import-squads' || github.event.inputs.mode == 'sync')) || (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *' && steps.detail_queue.outputs.has_pending == 'true') || (github.event_name == 'schedule' && github.event.schedule == '20 3 * * 1,4' && vars.ENABLE_TRANSFERMARKT_CRON == 'true')
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -197,19 +211,6 @@ jobs:
           REQUEST_DELAY_MIN_SECONDS: "1.5"
           REQUEST_DELAY_MAX_SECONDS: "3.5"
         run: python sync/sync_transfermarkt.py seed-history
-
-      - name: Import current squads
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'import-squads'
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
-          TM_LEAGUES: TR1,TR2,TR3,TR4,GB1,ES1,L1,IT1,FR1
-          TM_SEASON: "2026"
-          TM_APIFY_MAX_PLAYERS: "20000"
-          REQUEST_DELAY_MIN_SECONDS: "1.5"
-          REQUEST_DELAY_MAX_SECONDS: "3.5"
-        run: python sync/sync_transfermarkt.py import-squads
 
       - name: Test one player
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'one-player-test'
