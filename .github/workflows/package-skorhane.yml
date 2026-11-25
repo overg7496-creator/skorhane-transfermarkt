@@ -16,13 +16,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Validate Worker syntax
+        run: node --input-type=module --check < SkorHane-Worker.js
+
       - name: Build ZIP
         run: |
           mkdir -p package
           cp SkorHane-HTML-kodu-kopyalanabilir.txt package/SkorHane-HTML.html
           cp SkorHane-HTML-kodu-kopyalanabilir.txt package/SkorHane-HTML-kodu-kopyalanabilir.txt
           cp SkorHane-Worker.js package/SkorHane-Worker.js
-          cp SkorHane-Worker-kodu-kopyalanabilir.txt package/SkorHane-Worker-kodu-kopyalanabilir.txt
+          cp SkorHane-Worker.js package/SkorHane-Worker-kodu-kopyalanabilir.txt
           cat > package/KURULUM.txt <<'EOF'
           SKORHANE GUNCEL PAKET
 
