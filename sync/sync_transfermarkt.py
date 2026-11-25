@@ -312,9 +312,6 @@ def sync_kamerozkan(*, required: bool = False) -> int:
     if not isinstance(items, list):
         raise RuntimeError("Apify dataset yanıtı liste değil; mevcut DB verisi korunuyor.")
     valid_rows = [(row, player_id_from_row(row)) for row in items if isinstance(row, dict)]
-  if items:
-    LOG.info("APIFY DEBUG: ilk kayıt anahtarları=%s", list(items[0].keys()) if isinstance(items[0], dict) else type(items[0]).__name__)
-    LOG.info("APIFY DEBUG: ilk kaydın playerId=%r", items[0].get("playerId") if isinstance(items[0], dict) else None)
     valid_rows = [(row, tm_id) for row, tm_id in valid_rows if tm_id]
     if not valid_rows:
         raise RuntimeError("Apify çıktısında geçerli oyuncu kimliği yok; mevcut DB verisi korunuyor.")
