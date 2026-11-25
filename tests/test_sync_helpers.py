@@ -75,7 +75,7 @@ class SyncHelperTests(unittest.TestCase):
 
     def test_felipe_rotation_has_independent_cursor(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
-        self.assertIn("last_felipe_synced_at.asc.nullsfirst", script)
+        self.assertIn("last_felipe_synced_at.asc.nullsfirst,tm_id.asc", script)
         self.assertIn('"last_felipe_synced_at": datetime.now(timezone.utc).isoformat()', script)
 
     def test_history_source_cannot_replace_current_market_value(self):
