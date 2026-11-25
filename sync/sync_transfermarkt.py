@@ -584,7 +584,10 @@ def validate_detail_squad_window(seen_after: str, seen_before: str) -> tuple[str
 
 
 def load_pending_player_detail_candidates(
-    *, squad_seen_after: str | None = None, squad_seen_before: str | None = None
+    *,
+    squad_seen_after: str | None = None,
+    squad_seen_before: str | None = None,
+    squad_seen_after_imported: str | None = None,
 ) -> list[dict[str, Any]]:
     """Load pending active players; an optional bounded squad timestamp window isolates one import."""
     select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
@@ -614,7 +617,23 @@ def load_pending_player_detail_candidates(
             f"and=(last_squad_seen_at.gte.{squad_cutoff},"
             f"last_squad_seen_at.lt.{squad_seen_before})"
         )
-        squad_filter = "&" + quote(window, safe="=.")
+        if squad_seen_after_imported:
+            try:
+                after_imported_dt = datetime.fromisoformat(
+                    squad_seen_after_imported.replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise RuntimeError("Ana kuyruk için geçerli imported cohort bitiş ISO tarihi gerekli.") from exc
+            if after_imported_dt.tzinfo is None or after_imported_dt <= before_dt:
+                raise RuntimeError("Imported cohort bitişi ana kuyruk sınırından sonra ve saat dilimli olmalı.")
+            # Detail workers never own the squad timestamp, but older already-running
+            # workers may have touched it. Route any such pending post-window rows
+            # exclusively to the original queue so they cannot disappear between cohorts.
+            post_window = f"last_squad_seen_at.gte.{squad_seen_after_imported}"
+            combined = f"or=({window},{post_window})"
+            squad_filter = "&" + quote(combined, safe="=.,()")
+        else:
+            squad_filter = "&" + quote(window, safe="=.")
     else:
         squad_filter = f"&last_squad_seen_at=gte.{quote(squad_cutoff, safe='')}"
     while True:
@@ -687,8 +706,14 @@ def load_rotating_player_candidates(states: dict[str, dict[str, Any]]) -> list[d
 
 def has_pending_player_details() -> bool:
     states = load_player_detail_queue_states()
+    seen_after = os.getenv("TM_DETAIL_SQUAD_SEEN_AFTER", "").strip() or None
     seen_before = os.getenv("TM_DETAIL_SQUAD_SEEN_BEFORE", "").strip() or None
-    candidates = load_pending_player_detail_candidates(squad_seen_before=seen_before)
+    after_imported = os.getenv("TM_DETAIL_AFTER_IMPORTED_END", "").strip() or None
+    candidates = load_pending_player_detail_candidates(
+        squad_seen_after=seen_after,
+        squad_seen_before=seen_before,
+        squad_seen_after_imported=after_imported,
+    )
     now = datetime.now(timezone.utc)
     return any(
         str(player.get("tm_id") or "").strip()
@@ -743,8 +768,11 @@ def sync_felipeall(
         states: dict[str, dict[str, Any]] = {}
     elif backfill_only:
         states = load_player_detail_queue_states()
+        after_imported = os.getenv("TM_DETAIL_AFTER_IMPORTED_END", "").strip() or None
         players = load_pending_player_detail_candidates(
-            squad_seen_after=squad_seen_after, squad_seen_before=squad_seen_before
+            squad_seen_after=squad_seen_after,
+            squad_seen_before=squad_seen_before,
+            squad_seen_after_imported=after_imported,
         )
     else:
         states = load_player_detail_queue_states()
@@ -861,8 +889,10 @@ def sync_felipeall(
                 "team_name": club_name or player.get("team_name"),
                 "position": position,
                 "photo_url": photo,
-                "is_active": True,
             }
+            # Detail refresh is not a squad-membership event. Do not pass is_active
+            # here: tm_upsert_player updates last_squad_seen_at when that field is set.
+            # Only the squad importer may advance the cohort timestamp.
             if name and name != tm_id:
                 normalized["name"] = name
             if profile:
