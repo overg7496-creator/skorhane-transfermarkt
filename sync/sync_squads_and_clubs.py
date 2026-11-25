@@ -411,7 +411,10 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
                 if isinstance(profile, dict) and as_text(get_value(profile, "id")):
                     club_profile = profile
             except Exception as exc:
-                # A squad can still be imported when optional club-profile metadata is missing.
+                # Respect upstream throttling/block responses: stop rather than making more calls.
+                if re.search(r"HTTP\s+(?:408|425|429|500|502|503|504)", str(exc), re.IGNORECASE):
+                    raise
+                # A 404 or malformed optional profile does not block a valid squad response.
                 LOG.warning("%s kulüp profili alınamadı; kadro aktarımı devam ediyor: %s",
                             club_name, str(exc)[:500])
 
