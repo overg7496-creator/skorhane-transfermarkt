@@ -3954,9 +3954,9 @@ async function tmPlayer(env, id) {
   try {
     marketRows = await tmDbRows(env, "tm_market_values?select=valuation_date,value_eur,display_value,club_name&tm_id=eq." + encodeURIComponent(playerId) + "&order=valuation_date.desc&limit=100");
   } catch (_) {}
-  if (!marketRows.length) marketRows = listPayload(row.market_value_payload || {}, ["market_value_history", "history", "marketValues", "valuations", "items", "data"]);
+  if (!marketRows.length) marketRows = listPayload(row.market_value_payload || {}, ["market_value_history", "marketValueHistory", "history", "marketValues", "valuations", "items", "data"]);
   out.marketValueHistory = marketRows;
-  out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]);
+  out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]).map(item => ({ ...item, from: item.from || item.fromDate || "", until: item.until || item.untilDate || "" }));
   out.absences = listPayload(row.absences_payload || {}, ["absences", "data", "items"]);
   out.photo = row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "";
   const nationality = pick(b, "citizenship", "nationality", "nationalities");
@@ -4263,7 +4263,8 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
         out.coachRows = rows; st.wikipedia_teknik_direktor = rows.length ? "ok " + rows.length : "tablo bulunamadı";
       } catch (e) { st.wikipedia_teknik_direktor = "hata: " + (e.message || e); }
     })());
-  } else if (wantStats) {
+  } else if (!coach && (wantStats || wantInfo)) {
+    // Load Transfermarkt profile history for info requests as well as stats requests.
     tasks.push((async () => {
       try {
         let id = tmId;
@@ -4297,7 +4298,7 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
   const esRows = (out.es && out.es.seasons || []).map((r) => ({ ...r, "Sezon": String(r["Sezon"] || ""), "Takım": r["Takım"] || "", "Maç": r["Maç"] == null ? null : num(r["Maç"]), "Gol": r["Gol"] == null ? null : num(r["Gol"]), "Asist": r["Asist"] == null ? null : num(r["Asist"]), "İlk 11": r["İlk 11"] == null ? null : num(r["İlk 11"]), "Sarı Kart": r["Sarı Kart"] == null ? null : num(r["Sarı Kart"]), "Kırmızı Kart": r["Kırmızı Kart"] == null ? null : num(r["Kırmızı Kart"]), cats: r.cats || null }));
   // Oyuncu kariyer tablosunun tek veri kaynağı Transfermarkt'tır.
   // PitchAPI, API-Football, ESPN ve diğer sağlayıcılar sezon istatistiklerine eklenmez.
-  const rows = mergeCareerRows([out.tm && out.tm.seasons]);
+  const rows = wantStats ? mergeCareerRows([out.tm && out.tm.seasons]) : [];
   // Cross-check API-Football's transfer chronology with Transfermarkt transfer history.
   // Both sources write chronological timestamps onto the season/team rows, oldest stint first.
   if (out.tm && out.tm.transfers) applyTransferOrderToCareerRows(rows, out.tm.transfers);
@@ -7702,7 +7703,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf32:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf33:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
