@@ -68,6 +68,33 @@ class SyncHelperTests(unittest.TestCase):
                 sync.fetch_player_paged_rows("https://api/players/1", "/injuries", "injuries")
 
 
+
+    def test_required_endpoint_schema_is_validated(self):
+        from unittest.mock import patch
+
+        with patch.object(sync, "json_request", return_value={"error": "unexpected"}):
+            with self.assertRaisesRegex(RuntimeError, "zorunlu alan"):
+                sync.fetch_player_payload(
+                    "https://api/players/1", "/profile", "1 profil", ("id", "name")
+                )
+
+    def test_sync_stops_at_first_player_failure_and_does_not_mark_synced(self):
+        from unittest.mock import patch
+
+        players = [
+            {"tm_id": "1", "name": "Oyuncu 1"},
+            {"tm_id": "2", "name": "Oyuncu 2"},
+        ]
+        with (
+            patch.object(sync, "db_get", return_value=players),
+            patch.object(sync, "fetch_player_payload", side_effect=RuntimeError("HTTP 503")) as fetch,
+            patch.object(sync, "db_patch") as patch_db,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
+                sync.sync_felipeall()
+            self.assertEqual(fetch.call_count, 1)
+            patch_db.assert_not_called()
+
     def test_player_sync_never_uses_shared_public_api_by_default(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
         self.assertIn('FELIPE_API_BASE = os.getenv("FELIPE_API_BASE", "http://127.0.0.1:8000")', script)
