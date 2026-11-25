@@ -76,6 +76,11 @@ class SquadNormalizationTests(unittest.TestCase):
 
 class SquadSyncTests(unittest.TestCase):
 
+    def test_current_default_league_list_excludes_nonexistent_2026_group_four(self):
+        # TFF's 2026-2027 3. Lig has groups 01-03, not a fourth group.
+        self.assertNotIn("TR4D", squads.TM_LEAGUES)
+
+
     def test_running_checkpoint_resumes_across_utc_day_boundary(self):
         state = {
             "status": "running",

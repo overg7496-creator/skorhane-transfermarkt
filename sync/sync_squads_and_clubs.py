@@ -33,7 +33,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 FELIPE_API_BASE = os.getenv("FELIPE_API_BASE", "http://127.0.0.1:8000").rstrip("/")
 TM_LEAGUES = [x.strip().upper() for x in os.getenv(
-    "TM_LEAGUES", "TR1,TR2,TR3A,TR3B,TR4A,TR4B,TR4C,TR4D,GB1,ES1,L1,IT1,FR1"
+    "TM_LEAGUES", "TR1,TR2,TR3A,TR3B,TR4A,TR4B,TR4C,GB1,ES1,L1,IT1,FR1"
 ).split(",") if x.strip()]
 TM_SEASON = os.getenv("TM_SEASON", "2026").strip()
 DELAY_MIN = float(os.getenv("REQUEST_DELAY_MIN_SECONDS", "1.5"))
