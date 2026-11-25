@@ -55,6 +55,7 @@ Depo: https://github.com/felipeall/transfermarkt-api
 | Aktarım | Felipe API endpoint'i | Supabase hedefi |
 |---|---|---|
 | Lig → kulüpler | `GET /competitions/{competition_id}/clubs?season_id=` | Lig/kulüp ilerleme bilgisi `tm_source_records` |
+| Kulüp → takım profili | `GET /clubs/{club_id}/profile` | Logo, resmi ad, lig, teknik direktör ve stadyum alanları `tm_source_records` |
 | Kulüp → güncel kadro | `GET /clubs/{club_id}/players?season_id=` | `tm_players` |
 | Oyuncu fotoğrafı | Kadro yanıtındaki `image_url` | `tm_players.photo_url` |
 | Güncel piyasa değeri | Kadro yanıtındaki `market_value` | `tm_players.current_market_value_*` |
