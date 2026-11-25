@@ -657,6 +657,108 @@ def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any
     return result
 
 
+def load_player_detail_queue_states() -> dict[str, dict[str, Any]]:
+    """Load durable per-player retry/checkpoint state from tm_source_records."""
+    states: dict[str, dict[str, Any]] = {}
+    offset = 0
+    page_size = 1000
+    while True:
+        rows = db_get(
+            "tm_source_records?select=external_id,payload"
+            "&source=eq.felipeall&record_type=eq.player_detail_queue&record_key=eq.details"
+            f"&order=external_id.asc&limit={page_size}&offset={offset}"
+        )
+        if not isinstance(rows, list):
+            raise RuntimeError("Oyuncu detay kuyruğu kayıtları okunamadı.")
+        for row in rows:
+            tm_id = str(row.get("external_id") or "").strip()
+            payload = row.get("payload")
+            if tm_id and isinstance(payload, dict):
+                states[tm_id] = payload
+        if len(rows) < page_size:
+            break
+        offset += len(rows)
+    return states
+
+
+def load_pending_player_detail_candidates() -> list[dict[str, Any]]:
+    """Load all active players whose required detail profile has not completed."""
+    select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
+    squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+    candidates: list[dict[str, Any]] = []
+    offset = 0
+    page_size = 1000
+    while True:
+        query = (
+            f"tm_players?select={select}&is_active=eq.true"
+            f"&last_squad_seen_at=gte.{quote(squad_cutoff)}"
+            "&last_felipe_synced_at=is.null&order=tm_id.asc"
+            f"&limit={page_size}&offset={offset}"
+        )
+        rows = db_get(query)
+        if not isinstance(rows, list):
+            raise RuntimeError("Bekleyen oyuncu detay kuyruğu okunamadı.")
+        candidates.extend(row for row in rows if isinstance(row, dict))
+        if len(rows) < page_size:
+            break
+        offset += len(rows)
+    return candidates
+
+
+def detail_retry_is_due(state: dict[str, Any], now: datetime | None = None) -> bool:
+    status = str(state.get("status") or "pending")
+    if status in ("completed", "blocked"):
+        return False
+    retry_at = str(state.get("retry_at") or "").strip()
+    if not retry_at:
+        return True
+    try:
+        parsed = datetime.fromisoformat(retry_at.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed <= (now or datetime.now(timezone.utc))
+    except ValueError:
+        return True
+
+
+def has_pending_player_details() -> bool:
+    states = load_player_detail_queue_states()
+    candidates = load_pending_player_detail_candidates()
+    now = datetime.now(timezone.utc)
+    return any(
+        str(player.get("tm_id") or "").strip()
+        and detail_retry_is_due(states.get(str(player.get("tm_id") or "").strip(), {}), now)
+        for player in candidates
+    )
+
+
+def dispatch_refresh_details_continuation() -> bool:
+    """Queue the next run with the workflow's GITHUB_TOKEN."""
+    token = os.getenv("GITHUB_TOKEN", "")
+    repository = os.getenv("GITHUB_REPOSITORY", "")
+    ref = os.getenv("GITHUB_REF_NAME", "main")
+    if not token or not repository:
+        LOG.warning("Kalan detay kuyruğu var ancak GITHUB_TOKEN/GITHUB_REPOSITORY yok; otomatik devam atlandı.")
+        return False
+    url = f"https://api.github.com/repos/{repository}/actions/workflows/transfermarkt-sync.yml/dispatches"
+    payload = json.dumps({"ref": ref, "inputs": {"mode": "refresh-details"}}).encode("utf-8")
+    request = Request(url, data=payload, headers={
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "SkorHane-Transfermarkt-Queue",
+        "Content-Type": "application/json",
+    }, method="POST")
+    try:
+        with urlopen(request, timeout=30) as response:
+            response.read()
+            LOG.info("Kalan oyuncular için otomatik devam çalışması kuyruğa alındı (HTTP %s).", response.status)
+            return True
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:1000]
+        raise RuntimeError(f"GitHub otomatik devam dispatch başarısız: HTTP {exc.code}: {detail}") from exc
+
+
 def sync_felipeall(only_player: str | None = None) -> int:
     """Refresh Transfermarkt player profiles, season stats, transfers, injuries and valuations.
 
