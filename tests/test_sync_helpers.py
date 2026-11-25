@@ -78,7 +78,7 @@ class SyncHelperTests(unittest.TestCase):
                     "https://api/players/1", "/profile", "1 profil", ("id", "name")
                 )
 
-    def test_sync_stops_at_first_player_failure_and_does_not_mark_synced(self):
+    def test_sync_continues_after_player_failure_and_records_retry(self):
         from unittest.mock import patch
 
         players = [
@@ -88,12 +88,28 @@ class SyncHelperTests(unittest.TestCase):
         with (
             patch.object(sync, "db_get", return_value=players),
             patch.object(sync, "fetch_player_payload", side_effect=RuntimeError("HTTP 503")) as fetch,
+            patch.object(sync, "source_record") as save_queue,
             patch.object(sync, "db_patch") as patch_db,
         ):
-            with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
-                sync.sync_felipeall()
-            self.assertEqual(fetch.call_count, 1)
+            self.assertEqual(sync.sync_felipeall(), 0)
+            self.assertEqual(fetch.call_count, 2)
+            self.assertEqual(save_queue.call_count, 2)
             patch_db.assert_not_called()
+
+    def test_retry_checkpoint_waits_until_retry_time(self):
+        from datetime import datetime, timedelta, timezone
+
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        self.assertFalse(sync.detail_retry_is_due({"status": "retry", "retry_at": future}))
+        self.assertFalse(sync.detail_retry_is_due({"status": "blocked"}))
+        self.assertTrue(sync.detail_retry_is_due({"status": "retry", "retry_at": ""}))
+
+    def test_backfill_queue_is_resumable_and_uses_time_guard(self):
+        script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
+        self.assertIn("last_felipe_synced_at=is.null", script)
+        self.assertIn('"player_detail_queue"', script)
+        self.assertIn("dispatch_refresh_details_continuation()", script)
+        self.assertIn("TM_DETAIL_MAX_RUNTIME_SECONDS", script)
 
     def test_player_sync_never_uses_shared_public_api_by_default(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
