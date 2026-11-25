@@ -39,7 +39,7 @@ Supabase PostgreSQL
 Cloudflare Worker → SkorHane HTML
 ```
 
-- GitHub Actions, Felipe API'yi aynı runner üzerinde `127.0.0.1:8000` adresinde başlatır. Harici bir API anahtarı veya Apify hesabı gerekmez.
+- GitHub Actions, Felipe API'yi aynı runner üzerinde `127.0.0.1:8000` adresinde başlatır. Harici bir API token'ı gerekmez.
 - Supabase'e yazma işlemleri `SUPABASE_SERVICE_ROLE_KEY` ile sunucu tarafında yapılır. Bu anahtar HTML dosyasına veya istemci JavaScript'ine konulmamalıdır.
 - Kadro işçisi yalnızca normalize edilmiş alanları yazar; ham HTML ve tam upstream yanıtları Supabase'e kopyalanmaz.
 - UPSERT fonksiyonları dolu alanları korur. Hata, boş yanıt veya eksik alan mevcut dolu oyuncu verisini silmek için kullanılmaz.
