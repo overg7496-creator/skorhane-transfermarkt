@@ -569,17 +569,46 @@ def load_player_detail_queue_states() -> dict[str, dict[str, Any]]:
     return states
 
 
-def load_pending_player_detail_candidates() -> list[dict[str, Any]]:
-    """Load all active players whose required detail profile has not completed."""
+def validate_detail_squad_window(seen_after: str, seen_before: str) -> tuple[str, str]:
+    """Validate an explicit UTC timestamp window for a dedicated imported-squad queue."""
+    try:
+        after_dt = datetime.fromisoformat(seen_after.replace("Z", "+00:00"))
+        before_dt = datetime.fromisoformat(seen_before.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise RuntimeError("Yeni kadro kuyruğu için geçerli seen_after/seen_before ISO tarihleri gerekli.") from exc
+    if after_dt.tzinfo is None or before_dt.tzinfo is None:
+        raise RuntimeError("Yeni kadro kuyruğu tarihleri saat dilimi içermeli (UTC/Z).")
+    if before_dt <= after_dt:
+        raise RuntimeError("Yeni kadro kuyruğunda seen_before, seen_after tarihinden sonra olmalı.")
+    return seen_after, seen_before
+
+
+def load_pending_player_detail_candidates(
+    *, squad_seen_after: str | None = None, squad_seen_before: str | None = None
+) -> list[dict[str, Any]]:
+    """Load pending active players; an optional bounded squad timestamp window isolates one import."""
     select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
-    squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
     candidates: list[dict[str, Any]] = []
     offset = 0
     page_size = 1000
+    if squad_seen_after or squad_seen_before:
+        if not squad_seen_after or not squad_seen_before:
+            raise RuntimeError("Yeni kadro kuyruğu için hem başlangıç hem bitiş zamanı gerekli.")
+        squad_seen_after, squad_seen_before = validate_detail_squad_window(
+            squad_seen_after, squad_seen_before
+        )
+        window = (
+            f"and=(last_squad_seen_at.gte.{squad_seen_after},"
+            f"last_squad_seen_at.lt.{squad_seen_before})"
+        )
+        squad_filter = "&" + quote(window, safe="=.")
+    else:
+        squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+        squad_filter = f"&last_squad_seen_at=gte.{quote(squad_cutoff, safe='')}"
     while True:
         query = (
             f"tm_players?select={select}&is_active=eq.true"
-            f"&last_squad_seen_at=gte.{quote(squad_cutoff)}"
+            f"{squad_filter}"
             "&last_felipe_synced_at=is.null&order=tm_id.asc"
             f"&limit={page_size}&offset={offset}"
         )
@@ -655,16 +684,19 @@ def has_pending_player_details() -> bool:
     )
 
 
-def dispatch_refresh_details_continuation() -> bool:
-    """Queue the next run with the workflow's GITHUB_TOKEN."""
+def dispatch_refresh_details_continuation(
+    *, workflow_file: str = "transfermarkt-sync.yml", inputs: dict[str, str] | None = None
+) -> bool:
+    """Queue the next run with the workflow's GITHUB_TOKEN and preserve its queue scope."""
     token = os.getenv("GITHUB_TOKEN", "")
     repository = os.getenv("GITHUB_REPOSITORY", "")
     ref = os.getenv("GITHUB_REF_NAME", "main")
     if not token or not repository:
         LOG.warning("Kalan detay kuyruğu var ancak GITHUB_TOKEN/GITHUB_REPOSITORY yok; otomatik devam atlandı.")
         return False
-    url = f"https://api.github.com/repos/{repository}/actions/workflows/transfermarkt-sync.yml/dispatches"
-    payload = json.dumps({"ref": ref, "inputs": {"mode": "refresh-details"}}).encode("utf-8")
+    url = f"https://api.github.com/repos/{repository}/actions/workflows/{workflow_file}/dispatches"
+    dispatch_inputs = inputs if inputs is not None else {"mode": "refresh-details"}
+    payload = json.dumps({"ref": ref, "inputs": dispatch_inputs}).encode("utf-8")
     request = Request(url, data=payload, headers={
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {token}",
@@ -683,7 +715,10 @@ def dispatch_refresh_details_continuation() -> bool:
         return False
 
 
-def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = False) -> int:
+def sync_felipeall(
+    only_player: str | None = None, *, backfill_only: bool = False,
+    squad_seen_after: str | None = None, squad_seen_before: str | None = None,
+) -> int:
     """Refresh player details; backfill_only drains the initial queue safely across batches."""
     select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
     if only_player:
@@ -692,7 +727,9 @@ def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = Fals
         states: dict[str, dict[str, Any]] = {}
     elif backfill_only:
         states = load_player_detail_queue_states()
-        players = load_pending_player_detail_candidates()
+        players = load_pending_player_detail_candidates(
+            squad_seen_after=squad_seen_after, squad_seen_before=squad_seen_before
+        )
     else:
         states = load_player_detail_queue_states()
         players = load_rotating_player_candidates(states)
@@ -1011,7 +1048,14 @@ def sync_felipeall(only_player: str | None = None, *, backfill_only: bool = Fals
         sum(1 for state in states.values() if state.get("status") == "blocked"),
     )
     if backfill_only and stopped_for_time and remaining_due:
-        dispatch_refresh_details_continuation()
+        continuation_workflow = os.getenv("TM_DETAIL_CONTINUATION_WORKFLOW", "").strip()
+        if continuation_workflow and squad_seen_after and squad_seen_before:
+            dispatch_refresh_details_continuation(
+                workflow_file=continuation_workflow,
+                inputs={"seen_after": squad_seen_after, "seen_before": squad_seen_before},
+            )
+        else:
+            dispatch_refresh_details_continuation()
     return successful
 
 def patch_dcaribou_rate_limit() -> None:
@@ -1315,7 +1359,7 @@ def seed_dcaribou_history() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "refresh-rotation", "seed-history", "one-player-test", "has-pending-details"))
+    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "refresh-imported-details", "refresh-rotation", "seed-history", "one-player-test", "has-pending-details"))
     parser.add_argument("--player-id", default=os.getenv("TM_TEST_PLAYER_ID", ""))
     args = parser.parse_args()
     require_db()
@@ -1336,6 +1380,17 @@ def main() -> int:
         return 0
     if args.mode == "refresh-details":
         logged_run("felipeall", "refresh-details", lambda: sync_felipeall(backfill_only=True))
+        return 0
+    if args.mode == "refresh-imported-details":
+        seen_after = os.getenv("TM_DETAIL_SQUAD_SEEN_AFTER", "").strip()
+        seen_before = os.getenv("TM_DETAIL_SQUAD_SEEN_BEFORE", "").strip()
+        validate_detail_squad_window(seen_after, seen_before)
+        logged_run(
+            "felipeall", "refresh-imported-details",
+            lambda: sync_felipeall(
+                backfill_only=True, squad_seen_after=seen_after, squad_seen_before=seen_before
+            ),
+        )
         return 0
     if args.mode == "refresh-rotation":
         logged_run("felipeall", "refresh-rotation", sync_felipeall)
