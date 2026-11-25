@@ -76,9 +76,9 @@ def json_request(url: str, *, method: str = "GET", payload: Any = None,
                  source: str = "external", delay_range: tuple[float, float] | None = None) -> Any:
     """One-at-a-time HTTP with jitter, timeout and bounded backoff.
 
-    403/429/5xx/timeouts are logged and retried with a growing wait. A request that
-    remains blocked is returned as an exception to the caller; the current player
-    is skipped and the next player continues. No null payload is written.
+    Transient 403/429/5xx/timeouts are retried. If a required request still fails,
+    the exception propagates and the current player remains pending for the next run.
+    A player is never marked fully synced with a missing endpoint response.
     """
     body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     base_headers = {"Accept": "application/json", "User-Agent": "SkorHaneDataSync/1.0"}
@@ -97,9 +97,15 @@ def json_request(url: str, *, method: str = "GET", payload: Any = None,
                     return None
                 return json.loads(raw.decode("utf-8"))
         except HTTPError as exc:
-            last_error = exc
             code = exc.code
-            LOG.warning("%s HTTP %s (%s), deneme %s/%s", source, code, safe_url_for_log(url), attempt + 1, retries + 1)
+            error_body = exc.read().decode("utf-8", errors="replace").strip()
+            detail = safe_error_for_log(error_body[:1000]) if error_body else ""
+            last_error = RuntimeError(f"HTTP {code}: {detail}" if detail else f"HTTP {code}: {exc.reason}")
+            LOG.warning(
+                "%s HTTP %s (%s), deneme %s/%s%s",
+                source, code, safe_url_for_log(url), attempt + 1, retries + 1,
+                f", yanıt={detail}" if detail else "",
+            )
             if code not in (403, 408, 425, 429, 500, 502, 503, 504):
                 break
             retry_after = exc.headers.get("Retry-After") if exc.headers else None
@@ -525,15 +531,21 @@ def build_current_season_stats(matches: list[dict[str, Any]]) -> list[dict[str, 
 def get_player_current_matches(base: str, tm_id: str) -> list[dict[str, Any]]:
     all_rows: list[dict[str, Any]] = []
     for page in range(1, TM_MAX_MATCH_PAGES + 1):
-        try:
-            payload = json_request(
-                f"{base}/matches?season_id={quote(str(TM_SEASON))}&page_number={page}",
-                source="felipeall current-season matches",
-                delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
+        payload = json_request(
+            f"{base}/matches?season_id={quote(str(TM_SEASON))}&page_number={page}",
+            source=f"felipeall {tm_id} aktif sezon maçları",
+            delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
+        )
+        if payload is None or not isinstance(payload, (dict, list)):
+            raise RuntimeError(
+                f"felipeall {tm_id} maçlar sayfa {page}: geçersiz/boş yanıt; oyuncu tamamlanmadı."
             )
-        except Exception as exc:
-            LOG.warning("felipeall %s aktif sezon maçları sayfa %s alınamadı: %s", tm_id, page, exc)
-            break
+        if isinstance(payload, dict) and not any(
+            key in payload for key in ("matches", "data", "items", "results")
+        ):
+            raise RuntimeError(
+                f"felipeall {tm_id} maçlar sayfa {page}: beklenen maç listesi alanı yok; oyuncu tamamlanmadı."
+            )
         rows = api_payload_rows(payload, ("matches", "data", "items", "results"))
         if not rows:
             break
@@ -543,23 +555,25 @@ def get_player_current_matches(base: str, tm_id: str) -> list[dict[str, Any]]:
     return all_rows
 
 
-def fetch_optional_player_payload(base: str, endpoint: str, label: str) -> Any:
-    try:
-        return json_request(
-            base + endpoint,
-            source=f"felipeall {label}",
-            delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
-        )
-    except Exception as exc:
-        LOG.warning("felipeall %s alınamadı: %s; mevcut veri korunuyor.", label, exc)
-        return None
+def fetch_player_payload(base: str, endpoint: str, label: str) -> Any:
+    """Fetch a required player endpoint; never convert an upstream error into missing data."""
+    payload = json_request(
+        base + endpoint,
+        source=f"felipeall {label}",
+        delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
+    )
+    if payload is None:
+        raise RuntimeError(f"felipeall {label}: yanıt gövdesi boş; oyuncu tamamlanmadı.")
+    return payload
 
 
 def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any]:
     """Fetch every available Transfermarkt injury/absence page, with a safe page cap."""
-    first = fetch_optional_player_payload(base, f"{endpoint}?page_number=1", key)
+    first = fetch_player_payload(base, f"{endpoint}?page_number=1", key)
     if not isinstance(first, (dict, list)):
-        return {}
+        raise RuntimeError(f"felipeall {key}: ilk sayfa geçersiz yanıt; oyuncu tamamlanmadı.")
+    if isinstance(first, dict) and not any(k in first for k in (key, "data", "items", "results")):
+        raise RuntimeError(f"felipeall {key}: beklenen liste alanı yanıtta yok; oyuncu tamamlanmadı.")
     rows = iterable_from(first, (key,))
     if isinstance(first, list):
         return {key: rows, "page_number": 1, "last_page_number": 1}
@@ -568,12 +582,17 @@ def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any
     last_page = max(1, min(last_page, 30))
     loaded_pages = 1
     for page in range(2, last_page + 1):
-        payload = fetch_optional_player_payload(base, f"{endpoint}?page_number={page}", f"{key} sayfa {page}")
-        if payload is None:
-            break
+        payload = fetch_player_payload(base, f"{endpoint}?page_number={page}", f"{key} sayfa {page}")
+        if not isinstance(payload, (dict, list)):
+            raise RuntimeError(f"felipeall {key} sayfa {page}: geçersiz yanıt; oyuncu tamamlanmadı.")
+        if isinstance(payload, dict) and not any(k in payload for k in (key, "data", "items", "results")):
+            raise RuntimeError(f"felipeall {key} sayfa {page}: beklenen liste alanı yok; oyuncu tamamlanmadı.")
         page_rows = iterable_from(payload, (key,))
         if not page_rows:
-            break
+            raise RuntimeError(
+                f"felipeall {key} sayfa {page}: beklenen sayfada kayıt gelmedi; "
+                "sayfalama eksik kabul edilerek oyuncu tamamlanmadı."
+            )
         rows.extend(page_rows)
         loaded_pages += 1
     result = dict(first)
@@ -604,11 +623,15 @@ def sync_felipeall(only_player: str | None = None) -> int:
         if not tm_id:
             continue
         base = f"{FELIPE_API_BASE}/players/{quote(tm_id)}"
+        LOG.info(
+            "felipeall oyuncu başlıyor: %s/%s | %s | ID=%s",
+            idx, len(players), player.get("name") or "İsimsiz", tm_id,
+        )
 
-        profile = fetch_optional_player_payload(base, "/profile", "profile")
-        market_payload = fetch_optional_player_payload(base, "/market_value", "piyasa değeri geçmişi")
-        transfer_payload = fetch_optional_player_payload(base, "/transfers", "transfer geçmişi")
-        stats_payload = fetch_optional_player_payload(base, "/stats", "sezon istatistikleri")
+        profile = fetch_player_payload(base, "/profile", f"{tm_id} profil")
+        market_payload = fetch_player_payload(base, "/market_value", f"{tm_id} piyasa değeri geçmişi")
+        transfer_payload = fetch_player_payload(base, "/transfers", f"{tm_id} transfer geçmişi")
+        stats_payload = fetch_player_payload(base, "/stats", f"{tm_id} sezon istatistikleri")
         injuries_payload = fetch_player_paged_rows(base, "/injuries", "injuries")
         absences_payload = fetch_player_paged_rows(base, "/absences", "absences")
 
@@ -825,8 +848,7 @@ def sync_felipeall(only_player: str | None = None) -> int:
             "last_felipe_synced_at": datetime.now(timezone.utc).isoformat()
         })
         successful += 1
-        if idx % 10 == 0:
-            LOG.info("felipeall ilerleme: %s/%s oyuncu", idx, len(players))
+        LOG.info("felipeall oyuncu tamamen tamamlandı: %s/%s | ID=%s", idx, len(players), tm_id)
 
     LOG.info("felipeall tamamlandı: %s oyuncu işlendi", successful)
     return successful
