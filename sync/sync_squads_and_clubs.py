@@ -201,21 +201,47 @@ def normalize_squad_player(
         current_value = None
 
     team_name = as_text(get_value(row, "current_club", "currentClub")) or club_name
+    squad_fields: dict[str, Any] = {
+        "source": "felipeall",
+        "competition_id": competition_id,
+        "competition_name": competition_name,
+        "club_id": club_id,
+        "club_name": club_name,
+        "season_id": season_id,
+    }
+    optional_fields = {
+        "shirt_number": get_value(row, "shirt_number", "shirtNumber"),
+        "is_captain": get_value(row, "is_captain", "isCaptain"),
+        "date_of_birth": normalize_date(get_value(row, "date_of_birth", "dateOfBirth")),
+        "age": get_value(row, "age"),
+        "nationality": get_value(row, "nationality"),
+        "height": get_value(row, "height"),
+        "foot": as_text(get_value(row, "foot")),
+        "joined_on": normalize_date(get_value(row, "joined_on", "joinedOn", "joined_date", "joinedDate")),
+        "signed_from": as_text(get_value(row, "signed_from", "signedFrom")),
+        "contract_expires": normalize_date(get_value(row, "contract", "contract_expires", "contractExpires")),
+    }
+    for key, value in optional_fields.items():
+        if value is None or value == "":
+            continue
+        if key == "nationality" and isinstance(value, list):
+            squad_fields[key] = [str(item) for item in value if item]
+        elif key in {"age", "height", "shirt_number"}:
+            try:
+                squad_fields[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+        elif key == "is_captain" and isinstance(value, bool):
+            squad_fields[key] = value
+        elif isinstance(value, (str, int, bool, list)):
+            squad_fields[key] = value
+
     player: dict[str, Any] = {
         "name": name,
         "team_name": team_name,
         "position": as_text(get_value(row, "position")),
         "photo_url": as_text(get_value(row, "image_url", "imageUrl", "photo_url", "photoUrl")),
-        "profile_payload": {
-            "squad_import": {
-                "source": "felipeall",
-                "competition_id": competition_id,
-                "competition_name": competition_name,
-                "club_id": club_id,
-                "club_name": club_name,
-                "season_id": season_id,
-            }
-        },
+        "profile_payload": {"squad_import": squad_fields},
         "is_active": True,
     }
     # Missing fields are omitted, never sent as empty values to the merge RPC.
@@ -279,6 +305,25 @@ def save_player(tm_id: str, player: dict[str, Any], transfer: dict[str, Any] | N
     })
     if transfer:
         db_rpc("tm_upsert_transfer", {"p_row": transfer})
+
+
+def save_club_metadata(
+    competition_id: str, competition_name: str, club_id: str, club_name: str, season_id: str
+) -> None:
+    """Store only compact, normalized team metadata; no source HTML/large JSON."""
+    db_rpc("tm_upsert_source_record", {
+        "p_source": "felipeall",
+        "p_record_type": "club_metadata",
+        "p_external_id": club_id,
+        "p_record_key": f"{competition_id}:{season_id}",
+        "p_payload": {
+            "club_id": club_id,
+            "club_name": club_name,
+            "competition_id": competition_id,
+            "competition_name": competition_name,
+            "season_id": season_id,
+        },
+    })
 
 
 def sync_squads_and_clubs(*, force: bool = False) -> int:
@@ -367,6 +412,7 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
                 LOG.warning("%s kadrosundan kullanılabilir oyuncu çıkmadı; checkpoint yazılmadı.", club_name)
                 continue
 
+            save_club_metadata(competition_id, competition_name, club_id, club_name, api_season)
             completed.add(club_id)
             save_league_state(competition_id, api_season, {
                 "status": "running",
