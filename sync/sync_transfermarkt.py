@@ -516,42 +516,74 @@ def build_current_season_stats(matches: list[dict[str, Any]]) -> list[dict[str, 
             played = status.lower() in ("played", "starting_xi", "starting xi", "substitute", "substituted")
         if played:
             aggregate["appearances"] += 1
-        started = match.get("isStartingEleven") is True or match.get("started") is True or match.get("startingXI") is True
+        started = (
+            match.get("isStarting") is True
+            or match.get("isStartingEleven") is True
+            or match.get("started") is True
+            or match.get("startingXI") is True
+        )
         if started:
             aggregate["starts"] += 1
         aggregate["goals"] += numeric(match, "goals", "playerGoals") or 0
         aggregate["assists"] += numeric(match, "assists", "playerAssists") or 0
         aggregate["minutes"] += minutes or 0
-        aggregate["yellowCards"] += numeric(match, "yellowCards", "yellow", "bookingsYellow") or 0
-        aggregate["secondYellowCards"] += numeric(match, "secondYellowCards") or 0
-        aggregate["redCards"] += numeric(match, "redCards", "red") or 0
+        aggregate["yellowCards"] += numeric(match, "yellowCard", "yellowCards", "yellow", "bookingsYellow") or 0
+        aggregate["secondYellowCards"] += numeric(match, "secondYellowCard", "secondYellowCards") or 0
+        aggregate["redCards"] += numeric(match, "redCard", "redCards", "red") or 0
     return [v for v in groups.values() if v["appearances"] or v["goals"] or v["minutes"]]
 
 
 def get_player_current_matches(base: str, tm_id: str) -> list[dict[str, Any]]:
+    """Fetch every page reported by the API; never mark a capped result as complete."""
+    first = json_request(
+        f"{base}/matches?season_id={quote(str(TM_SEASON))}&page_number=1",
+        source=f"felipeall {tm_id} aktif sezon maçları",
+        delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
+    )
+    if not isinstance(first, (dict, list)):
+        raise RuntimeError(f"felipeall {tm_id} maçlar: ilk sayfa geçersiz/boş yanıt; oyuncu tamamlanmadı.")
+    if isinstance(first, list):
+        return [row for row in first if isinstance(row, dict)]
+    if not any(key in first for key in ("matches", "data", "items", "results")):
+        raise RuntimeError(f"felipeall {tm_id} maçlar: beklenen maç listesi alanı yok; oyuncu tamamlanmadı.")
+
+    last_page = numeric(first, "lastPageNumber", "last_page_number")
+    if last_page is None or last_page < 1:
+        raise RuntimeError(f"felipeall {tm_id} maçlar: lastPageNumber eksik/geçersiz; oyuncu tamamlanmadı.")
+    if last_page > TM_MAX_MATCH_PAGES:
+        raise RuntimeError(
+            f"felipeall {tm_id} maçlar: {last_page} sayfa bulundu fakat TM_MAX_MATCH_PAGES="
+            f"{TM_MAX_MATCH_PAGES}; eksik veriyi tamamlandı saymamak için işlem durduruldu."
+        )
+
     all_rows: list[dict[str, Any]] = []
-    for page in range(1, TM_MAX_MATCH_PAGES + 1):
-        payload = json_request(
+    for page in range(1, last_page + 1):
+        payload = first if page == 1 else json_request(
             f"{base}/matches?season_id={quote(str(TM_SEASON))}&page_number={page}",
             source=f"felipeall {tm_id} aktif sezon maçları",
             delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
         )
-        if payload is None or not isinstance(payload, (dict, list)):
+        if not isinstance(payload, (dict, list)):
+            raise RuntimeError(f"felipeall {tm_id} maçlar sayfa {page}: geçersiz/boş yanıt; oyuncu tamamlanmadı.")
+        if isinstance(payload, list):
+            rows = [row for row in payload if isinstance(row, dict)]
+        else:
+            page_last = numeric(payload, "lastPageNumber", "last_page_number")
+            if page_last != last_page:
+                raise RuntimeError(
+                    f"felipeall {tm_id} maçlar sayfa {page}: sayfa sayısı değişti "
+                    f"({last_page} -> {page_last}); oyuncu yeniden denenmeli."
+                )
+            if not any(key in payload for key in ("matches", "data", "items", "results")):
+                raise RuntimeError(
+                    f"felipeall {tm_id} maçlar sayfa {page}: beklenen maç listesi alanı yok; oyuncu tamamlanmadı."
+                )
+            rows = api_payload_rows(payload, ("matches", "data", "items", "results"))
+        if page < last_page and not rows:
             raise RuntimeError(
-                f"felipeall {tm_id} maçlar sayfa {page}: geçersiz/boş yanıt; oyuncu tamamlanmadı."
+                f"felipeall {tm_id} maçlar sayfa {page}: beklenen sayfada kayıt yok; oyuncu tamamlanmadı."
             )
-        if isinstance(payload, dict) and not any(
-            key in payload for key in ("matches", "data", "items", "results")
-        ):
-            raise RuntimeError(
-                f"felipeall {tm_id} maçlar sayfa {page}: beklenen maç listesi alanı yok; oyuncu tamamlanmadı."
-            )
-        rows = api_payload_rows(payload, ("matches", "data", "items", "results"))
-        if not rows:
-            break
         all_rows.extend(rows)
-        if len(rows) < 50:
-            break
     return all_rows
 
 
@@ -579,7 +611,13 @@ def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any
         return {key: rows, "page_number": 1, "last_page_number": 1}
 
     last_page = numeric(first, "last_page_number", "lastPageNumber") or 1
-    last_page = max(1, min(last_page, 30))
+    if last_page < 1:
+        raise RuntimeError(f"felipeall {key}: lastPageNumber geçersiz; oyuncu tamamlanmadı.")
+    if last_page > 30:
+        raise RuntimeError(
+            f"felipeall {key}: {last_page} sayfa bulundu; güvenli üst sınır 30. "
+            "Veri kesilmesin diye oyuncu tamamlandı sayılmadı."
+        )
     loaded_pages = 1
     for page in range(2, last_page + 1):
         payload = fetch_player_payload(base, f"{endpoint}?page_number={page}", f"{key} sayfa {page}")
@@ -675,7 +713,9 @@ def sync_felipeall(only_player: str | None = None) -> int:
         if current_value is None:
             current_value = value_from(market_obj, ("market_value", "marketValue"))
         current_value_eur = parse_money_eur(current_value)
-        market_history = iterable_from(market_payload, ("market_value_history", "history", "marketValues", "valuations"))
+        market_history = iterable_from(
+            market_payload, ("market_value_history", "marketValueHistory", "history", "marketValues", "valuations")
+        )
         latest_market_date = normalize_date(
             value_from(market_obj, ("last_updated", "lastUpdated"))
             or (market_history[0].get("date") if market_history else None)
@@ -727,7 +767,7 @@ def sync_felipeall(only_player: str | None = None) -> int:
             club_names[club_id] = club_name
         transfer_rows = iterable_from(transfer_payload, ("transfers",))
         for transfer in transfer_rows:
-            for key in ("club_from", "club_to", "from_club", "to_club"):
+            for key in ("club_from", "club_to", "from_club", "to_club", "clubFrom", "clubTo"):
                 club = transfer.get(key)
                 if isinstance(club, dict):
                     cid = safe_text(club.get("id"))
@@ -737,8 +777,8 @@ def sync_felipeall(only_player: str | None = None) -> int:
 
         # All transfer rows (not only the current squad's joinedDate) are persisted.
         for transfer in transfer_rows:
-            from_club = safe_text(transfer.get("club_from"), transfer.get("from_club"))
-            to_club = safe_text(transfer.get("club_to"), transfer.get("to_club"))
+            from_club = safe_text(transfer.get("club_from"), transfer.get("from_club"), transfer.get("clubFrom"))
+            to_club = safe_text(transfer.get("club_to"), transfer.get("to_club"), transfer.get("clubTo"))
             transfer_date = normalize_date(value_from(transfer, ("date", "transfer_date", "transferDate"))) or ""
             fee = value_from(transfer, ("fee", "fee_eur", "transfer_fee"))
             fee_text = safe_text(transfer.get("fee_text"), transfer.get("feeText"), fee)
@@ -761,8 +801,8 @@ def sync_felipeall(only_player: str | None = None) -> int:
             valuation_date = normalize_date(item.get("date") or item.get("valuation_date"))
             if not valuation_date:
                 continue
-            value = value_from(item, ("market_value", "value_eur", "value"))
-            club = safe_text(item.get("club_name"), item.get("club"))
+            value = value_from(item, ("market_value", "marketValue", "value_eur", "value"))
+            club = safe_text(item.get("club_name"), item.get("clubName"), item.get("club"))
             rpc("tm_upsert_market_value", {"p_row": {
                 "tm_id": tm_id,
                 "valuation_date": valuation_date,
@@ -779,9 +819,9 @@ def sync_felipeall(only_player: str | None = None) -> int:
         raw_stat_rows = iterable_from(stats_payload, ("stats",))
         normalized_stats: list[dict[str, Any]] = []
         for row in raw_stat_rows:
-            season = safe_text(row.get("season_id"), row.get("seasonID"), row.get("season"))
+            season = safe_text(row.get("season_id"), row.get("seasonId"), row.get("seasonID"), row.get("season"))
             competition = safe_text(row.get("competition_name"), row.get("competitionName"), row.get("competition"))
-            club_id_for_stat = safe_text(row.get("club_id"), row.get("clubID")) or ""
+            club_id_for_stat = safe_text(row.get("club_id"), row.get("clubId"), row.get("clubID")) or ""
             stat_club = safe_text(row.get("club_name"), row.get("clubName"), club_names.get(club_id_for_stat))
             if not season or not stat_club:
                 continue
@@ -793,7 +833,7 @@ def sync_felipeall(only_player: str | None = None) -> int:
                 "starts": numeric(row, "starts"),
                 "goals": numeric(row, "goals"),
                 "assists": numeric(row, "assists"),
-                "minutes": numeric(row, "minutes_played", "minutes"),
+                "minutes": numeric(row, "minutes_played", "minutesPlayed", "minutes"),
                 "yellowCards": numeric(row, "yellow_cards", "yellowCards"),
                 "secondYellowCards": numeric(row, "second_yellow_cards", "secondYellowCards"),
                 "redCards": numeric(row, "red_cards", "redCards"),
