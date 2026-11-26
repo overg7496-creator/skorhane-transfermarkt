@@ -193,3 +193,22 @@ grant select on public.tm_league_player_season_totals to service_role;
 grant select on public.tm_league_goal_leaders to service_role;
 grant select on public.tm_league_assist_leaders to service_role;
 grant select on public.tm_team_season_summary to service_role;
+
+-- Includes inactive/former players from imported historical squads whose full
+-- Transfermarkt profile snapshots have not yet been populated.
+create or replace view public.tm_detail_preseed_candidates
+with (security_invoker = true)
+as
+select
+  p.tm_id, p.name, p.team_name, p.position, p.photo_url,
+  p.last_synced_at, p.last_felipe_synced_at, p.last_squad_seen_at
+from public.tm_players p
+where p.last_felipe_synced_at is null
+  and exists (
+    select 1
+    from public.tm_team_season_squads q
+    where q.tm_id = p.tm_id
+  );
+
+revoke all on public.tm_detail_preseed_candidates from anon, authenticated;
+grant select on public.tm_detail_preseed_candidates to service_role;
