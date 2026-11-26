@@ -36,6 +36,8 @@ TM_LEAGUES = [x.strip().upper() for x in os.getenv(
     "TM_LEAGUES", "TR1,TR2,TR3A,TR3B,TR4A,TR4B,TR4C,GB1,ES1,L1,IT1,FR1"
 ).split(",") if x.strip()]
 TM_SEASON = os.getenv("TM_SEASON", "2026").strip()
+TM_SEASONS = list(dict.fromkeys(x.strip() for x in os.getenv("TM_SEASONS", TM_SEASON).split(",") if x.strip()))
+TM_CONTINUE_COUNT = int(os.getenv("TM_CONTINUE_COUNT", "0"))
 DELAY_MIN = float(os.getenv("REQUEST_DELAY_MIN_SECONDS", "1.5"))
 DELAY_MAX = float(os.getenv("REQUEST_DELAY_MAX_SECONDS", "3.0"))
 HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT_SECONDS", "45"))
@@ -50,8 +52,10 @@ def require_config() -> None:
         raise RuntimeError("FELIPE_API_BASE tanımlı değil.")
     if not TM_LEAGUES:
         raise RuntimeError("TM_LEAGUES boş.")
-    if not TM_SEASON:
-        raise RuntimeError("TM_SEASON boş.")
+    if not TM_SEASONS or any(not re.fullmatch(r"(?:19|20)\d{2}", season) for season in TM_SEASONS):
+        raise RuntimeError("TM_SEASONS en az bir geçerli sezon başlangıç yılı içermeli (örn. 2026,2025,2024).")
+    if TM_CONTINUE_COUNT < 0 or TM_CONTINUE_COUNT > 20:
+        raise RuntimeError("TM_CONTINUE_COUNT 0-20 arasında olmalı.")
     if DELAY_MIN < 0 or DELAY_MAX < DELAY_MIN:
         raise RuntimeError("REQUEST_DELAY_MIN_SECONDS / REQUEST_DELAY_MAX_SECONDS geçersiz.")
     if SQUAD_SYNC_MAX_RUNTIME_SECONDS < 60:
@@ -313,6 +317,55 @@ def save_player(tm_id: str, player: dict[str, Any], transfer: dict[str, Any] | N
     if transfer:
         db_rpc("tm_upsert_transfer", {"p_row": transfer})
 
+    # Store season-keyed roster membership separately from the latest player profile.
+    squad = (player.get("profile_payload") or {}).get("squad_import") or {}
+    if squad:
+        db_rpc("tm_upsert_team_season_squad", {"p_row": {
+            "competition_id": squad.get("competition_id"),
+            "competition_name": squad.get("competition_name"),
+            "season_id": squad.get("season_id"),
+            "club_id": squad.get("club_id"),
+            "club_name": squad.get("club_name"),
+            "tm_id": tm_id,
+            "player_name": player.get("name"),
+            "position": player.get("position"),
+            "photo_url": player.get("photo_url"),
+            "shirt_number": squad.get("shirt_number"),
+            "age": squad.get("age"),
+            "nationality": squad.get("nationality"),
+            "contract_expires": squad.get("contract_expires"),
+            "market_value_eur": player.get("current_market_value_eur"),
+            "payload": squad,
+        }})
+
+
+def save_competition_table(competition_id: str, season_id: str, payload: dict[str, Any]) -> None:
+    """Persist a validated non-empty table; do not replace old data with empty responses."""
+    candidates = []
+    if isinstance(payload, dict):
+        for key in ("table", "standings", "rows", "data"):
+            value = payload.get(key)
+            if isinstance(value, list) and value:
+                candidates = value
+                break
+            if isinstance(value, dict):
+                for nested in ("table", "standings", "rows"):
+                    if isinstance(value.get(nested), list) and value[nested]:
+                        candidates = value[nested]
+                        break
+            if candidates:
+                break
+    if not candidates:
+        LOG.warning("%s/%s puan tablosu boş/beklenmeyen biçimde; eski kayıt korunuyor.", competition_id, season_id)
+        return
+    db_rpc("tm_upsert_source_record", {
+        "p_source": "felipeall",
+        "p_record_type": "competition_table",
+        "p_external_id": competition_id,
+        "p_record_key": season_id,
+        "p_payload": payload,
+    })
+
 
 def save_club_metadata(
     competition_id: str, competition_name: str, club_id: str, club_name: str,
@@ -385,7 +438,14 @@ def dispatch_squad_continuation() -> bool:
         LOG.error("Kadro aktarımında süre sınırı doldu ancak otomatik devam için GitHub token/repository yok.")
         return False
     url = f"https://api.github.com/repos/{repository}/actions/workflows/import-missing-leagues.yml/dispatches"
-    payload = json.dumps({"ref": ref}).encode("utf-8")
+    payload = json.dumps({
+        "ref": ref,
+        "inputs": {
+            "tm_leagues": os.getenv("TM_LEAGUES", ",".join(TM_LEAGUES)),
+            "tm_seasons": os.getenv("TM_SEASONS", ",".join(TM_SEASONS)),
+            "continue_count": str(TM_CONTINUE_COUNT + 1),
+        },
+    }).encode("utf-8")
     request = Request(url, data=payload, headers={
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {token}",
@@ -404,140 +464,130 @@ def dispatch_squad_continuation() -> bool:
         return False
 
 def sync_squads_and_clubs(*, force: bool = False) -> int:
-    """Fetch league clubs and their current squads, one club at a time."""
+    """Import a resumable matrix of competitions and historical seasons."""
     require_config()
     today = datetime.now(timezone.utc).date().isoformat()
     started = time.monotonic()
     total_players = 0
     failed_clubs: list[str] = []
     stopped_for_time = False
+    LOG.info("Kadro aktarımı başlıyor: ligler=%s | sezonlar=%s",
+             ",".join(TM_LEAGUES), ",".join(TM_SEASONS))
 
-    LOG.info("Kadro aktarımı başlıyor: ligler=%s sezon=%s", ",".join(TM_LEAGUES), TM_SEASON)
     for competition_id in TM_LEAGUES:
-        if time.monotonic() - started >= SQUAD_SYNC_MAX_RUNTIME_SECONDS:
-            stopped_for_time = True
-            LOG.warning("Güvenli süre sınırına ulaşıldı; kalan ligler sonraki çalışmaya bırakılıyor.")
-            break
-        competition_path = (
-            f"/competitions/{quote(competition_id, safe='')}/clubs?"
-            + urlencode({"season_id": TM_SEASON})
-        )
-        competition = api_get(competition_path)
-        clubs = get_value(competition, "clubs")
-        if not isinstance(clubs, list) or not clubs:
-            raise RuntimeError(
-                f"{competition_id} ligi için kulüp listesi geçerli/boş değil. "
-                "Güvenlik için hiçbir mevcut kayıt değiştirilmedi."
-            )
-
-        competition_name = as_text(get_value(competition, "name")) or competition_id
-        api_season = as_text(get_value(competition, "season_id", "seasonId")) or TM_SEASON
-        state = load_league_state(competition_id, api_season)
-        completed, has_checkpoint = completed_club_checkpoint(state, today=today, force=force)
-        if not has_checkpoint:
-            save_league_state(competition_id, api_season, {
-                "status": "running",
-                "sync_date": today,
-                "total_clubs": len(clubs),
-                "completed_club_ids": [],
-                "last_error": None,
-            })
-
-        LOG.info("%s (%s): %s kulüp; bugün tamamlanan=%s",
-                 competition_name, competition_id, len(clubs), len(completed))
-        for club in clubs:
-            club_id = as_text(get_value(club, "id", "clubId", "club_id"))
-            club_name = as_text(get_value(club, "name", "clubName", "club_name"))
-            if not club_id or not club_name:
-                failed_clubs.append(f"{competition_id}:kimliksiz-kulüp")
-                LOG.warning("%s liginde ID/adı olmayan kulüp atlandı.", competition_id)
-                continue
-            if club_id in completed:
-                continue
+        for requested_season in TM_SEASONS:
             if time.monotonic() - started >= SQUAD_SYNC_MAX_RUNTIME_SECONDS:
                 stopped_for_time = True
-                LOG.warning("Güvenli süre sınırına ulaşıldı; %s kulübünden sonra kayıtlı noktada duruluyor.", club_name)
+                LOG.warning("Güvenli süreye ulaşıldı; sonraki lig/sezon checkpoint'ten devam edecek.")
                 break
 
-            club_profile: dict[str, Any] | None = None
-            try:
-                profile = api_get(f"/clubs/{quote(club_id, safe='')}/profile")
-                if isinstance(profile, dict) and as_text(get_value(profile, "id")):
-                    club_profile = profile
-            except Exception as exc:
-                # Respect upstream throttling/block responses: stop rather than making more calls.
-                if re.search(r"HTTP\s+(?:408|425|429|500|502|503|504)", str(exc), re.IGNORECASE):
-                    raise
-                # A 404 or malformed optional profile does not block a valid squad response.
-                LOG.warning("%s kulüp profili alınamadı; kadro aktarımı devam ediyor: %s",
-                            club_name, str(exc)[:500])
-
-            path = (
-                f"/clubs/{quote(club_id, safe='')}/players?"
-                + urlencode({"season_id": api_season})
-            )
-            squad = api_get(path)
-            players = get_value(squad, "players")
-            if not isinstance(players, list) or not players:
-                failed_clubs.append(f"{competition_id}/{club_id}")
-                LOG.warning("%s kadrosu geçerli/boş değil; sonraki çalıştırmada tekrar denenecek.", club_name)
-                continue
-
-            saved_here = 0
-            for row in players:
-                if not isinstance(row, dict):
-                    continue
-                normalized = normalize_squad_player(
-                    row,
-                    competition_id=competition_id,
-                    competition_name=competition_name,
-                    club_id=club_id,
-                    club_name=club_name,
-                    season_id=api_season,
+            competition_path = f"/competitions/{quote(competition_id, safe='')}/clubs?" + urlencode({"season_id": requested_season})
+            competition = api_get(competition_path)
+            clubs = get_value(competition, "clubs")
+            if not isinstance(clubs, list) or not clubs:
+                raise RuntimeError(
+                    f"{competition_id}/{requested_season} ligi için kulüp listesi geçerli/boş değil. "
+                    "Güvenlik için mevcut kayıtlar değiştirilmedi."
                 )
-                if not normalized:
-                    LOG.warning("%s kadrosunda ID/adı eksik oyuncu atlandı.", club_name)
+
+            competition_name = as_text(get_value(competition, "name")) or competition_id
+            api_season = as_text(get_value(competition, "season_id", "seasonId")) or requested_season
+            state = load_league_state(competition_id, api_season)
+            completed, has_checkpoint = completed_club_checkpoint(state, today=today, force=force)
+            if not has_checkpoint:
+                save_league_state(competition_id, api_season, {
+                    "status": "running", "sync_date": today, "total_clubs": len(clubs),
+                    "completed_club_ids": [], "last_error": None,
+                })
+
+            LOG.info("%s (%s) sezon %s: %s kulüp; tamamlanan=%s",
+                     competition_name, competition_id, api_season, len(clubs), len(completed))
+            for club in clubs:
+                club_id = as_text(get_value(club, "id", "clubId", "club_id"))
+                club_name = as_text(get_value(club, "name", "clubName", "club_name"))
+                if not club_id or not club_name:
+                    failed_clubs.append(f"{competition_id}/{api_season}:kimliksiz-kulüp")
                     continue
-                tm_id, player_payload, transfer_payload = normalized
-                save_player(tm_id, player_payload, transfer_payload)
-                saved_here += 1
+                if club_id in completed:
+                    continue
+                if time.monotonic() - started >= SQUAD_SYNC_MAX_RUNTIME_SECONDS:
+                    stopped_for_time = True
+                    LOG.warning("Süre sınırına ulaşıldı; %s kulübünde checkpoint bırakılıyor.", club_name)
+                    break
 
-            if saved_here == 0:
-                failed_clubs.append(f"{competition_id}/{club_id}")
-                LOG.warning("%s kadrosundan kullanılabilir oyuncu çıkmadı; checkpoint yazılmadı.", club_name)
-                continue
+                club_profile: dict[str, Any] | None = None
+                try:
+                    profile = api_get(f"/clubs/{quote(club_id, safe='')}/profile")
+                    if isinstance(profile, dict) and as_text(get_value(profile, "id")):
+                        club_profile = profile
+                except Exception as exc:
+                    if re.search(r"HTTP\s+(?:408|425|429|500|502|503|504)", str(exc), re.IGNORECASE):
+                        raise
+                    LOG.warning("%s kulüp profili alınamadı; kadro devam ediyor: %s", club_name, str(exc)[:500])
 
-            save_club_metadata(competition_id, competition_name, club_id, club_name, api_season, club_profile)
-            completed.add(club_id)
-            save_league_state(competition_id, api_season, {
-                "status": "running",
-                "sync_date": today,
-                "total_clubs": len(clubs),
-                "completed_club_ids": sorted(completed),
-                "last_completed_club_id": club_id,
-                "last_error": None,
-            })
-            total_players += saved_here
-            LOG.info("%s: %s oyuncu UPSERT edildi (%s/%s kulüp tamamlandı).",
-                     club_name, saved_here, len(completed), len(clubs))
+                squad_path = f"/clubs/{quote(club_id, safe='')}/players?" + urlencode({"season_id": api_season})
+                squad = api_get(squad_path)
+                players = get_value(squad, "players")
+                if not isinstance(players, list) or not players:
+                    failed_clubs.append(f"{competition_id}/{api_season}/{club_id}")
+                    LOG.warning("%s kadrosu boş/geçersiz; checkpoint yazılmadı.", club_name)
+                    continue
 
-        all_club_ids = {
-            as_text(get_value(item, "id", "clubId", "club_id"))
-            for item in clubs
-        }
-        all_club_ids.discard(None)
-        if all_club_ids.issubset(completed):
-            save_league_state(competition_id, api_season, {
-                "status": "completed",
-                "sync_date": today,
-                "total_clubs": len(clubs),
-                "completed_club_ids": sorted(completed),
-                "last_error": None,
-            })
-            LOG.info("%s tamamlandı: %s kulüp.", competition_name, len(all_club_ids))
-        else:
-            LOG.warning("%s kısmi kaldı: %s/%s kulüp tamamlandı.",
-                        competition_name, len(all_club_ids & completed), len(all_club_ids))
+                saved_here = 0
+                for row in players:
+                    if not isinstance(row, dict):
+                        continue
+                    normalized = normalize_squad_player(
+                        row, competition_id=competition_id, competition_name=competition_name,
+                        club_id=club_id, club_name=club_name, season_id=api_season,
+                    )
+                    if not normalized:
+                        LOG.warning("%s kadrosunda ID/adı eksik oyuncu atlandı.", club_name)
+                        continue
+                    tm_id, player_payload, transfer_payload = normalized
+                    save_player(tm_id, player_payload, transfer_payload)
+                    saved_here += 1
+
+                if saved_here == 0:
+                    failed_clubs.append(f"{competition_id}/{api_season}/{club_id}")
+                    LOG.warning("%s kadrosundan kullanılabilir oyuncu çıkmadı.", club_name)
+                    continue
+
+                save_club_metadata(competition_id, competition_name, club_id, club_name, api_season, club_profile)
+                completed.add(club_id)
+                save_league_state(competition_id, api_season, {
+                    "status": "running", "sync_date": today, "total_clubs": len(clubs),
+                    "completed_club_ids": sorted(completed), "last_completed_club_id": club_id,
+                    "last_error": None,
+                })
+                total_players += saved_here
+                LOG.info("%s: %s oyuncu yazıldı (%s/%s kulüp).", club_name, saved_here, len(completed), len(clubs))
+
+            all_club_ids = {as_text(get_value(item, "id", "clubId", "club_id")) for item in clubs}
+            all_club_ids.discard(None)
+            if all_club_ids.issubset(completed):
+                save_league_state(competition_id, api_season, {
+                    "status": "completed", "sync_date": today, "total_clubs": len(clubs),
+                    "completed_club_ids": sorted(completed), "last_error": None,
+                })
+                try:
+                    table_payload = api_get(
+                        f"/competitions/{quote(competition_id, safe='')}/table?"
+                        + urlencode({"season_id": api_season})
+                    )
+                    if isinstance(table_payload, dict):
+                        save_competition_table(competition_id, api_season, table_payload)
+                except Exception as exc:
+                    if re.search(r"HTTP\s+(?:408|425|429|500|502|503|504)", str(exc), re.IGNORECASE):
+                        stopped_for_time = True
+                        LOG.warning("%s/%s tablo isteği ertelendi; sonraki çalışma deneyecek: %s",
+                                    competition_id, api_season, str(exc)[:500])
+                        break
+                    LOG.warning("%s/%s tablosu alınamadı; kadro verisi korunuyor: %s",
+                                competition_id, api_season, str(exc)[:500])
+            else:
+                LOG.warning("%s/%s kısmi: %s/%s kulüp.",
+                            competition_id, api_season, len(all_club_ids & completed), len(all_club_ids))
 
         if stopped_for_time:
             break
@@ -545,14 +595,13 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
     if failed_clubs:
         raise RuntimeError(
             f"Kadro senkronizasyonu kısmi kaldı: {total_players} oyuncu yazıldı; "
-            f"{len(failed_clubs)} kulüp sonraki çalıştırmaya bırakıldı: "
-            + ", ".join(failed_clubs[:20])
+            f"{len(failed_clubs)} kulüp tamamlanamadı: " + ", ".join(failed_clubs[:20])
         )
     if stopped_for_time:
         if dispatch_squad_continuation():
-            LOG.info("Kadro aktarımı güvenli biçimde durdu; sonraki çalışma checkpoint\u2019ten devam edecek.")
+            LOG.info("Sonraki çalışma checkpoint'ten devam edecek.")
         else:
-            LOG.error("Kadro aktarımı checkpoint\u2019te durdu ancak otomatik devam başlatılamadı.")
+            LOG.error("Checkpoint kaydedildi ancak otomatik devam başlatılamadı.")
     LOG.info("Kadro aktarımı bu çalışmada %s oyuncu UPSERT etti.", total_players)
     return total_players
 
