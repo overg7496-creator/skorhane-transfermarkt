@@ -437,6 +437,9 @@ def dispatch_squad_continuation() -> bool:
     if not token or not repository:
         LOG.error("Kadro aktarımında süre sınırı doldu ancak otomatik devam için GitHub token/repository yok.")
         return False
+    if TM_CONTINUE_COUNT >= 20:
+        LOG.error("Otomatik devam güvenlik sınırı (20 zincir) aşıldı; workflow elle yeniden başlatılmalı.")
+        return False
     url = f"https://api.github.com/repos/{repository}/actions/workflows/import-missing-leagues.yml/dispatches"
     payload = json.dumps({
         "ref": ref,
@@ -482,7 +485,15 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
                 break
 
             competition_path = f"/competitions/{quote(competition_id, safe='')}/clubs?" + urlencode({"season_id": requested_season})
-            competition = api_get(competition_path)
+            try:
+                competition = api_get(competition_path)
+            except Exception as exc:
+                if re.search(r"HTTP\s+(?:408|425|429|500|502|503|504)", str(exc), re.IGNORECASE):
+                    stopped_for_time = True
+                    LOG.warning("%s/%s upstream sınırı; sonraki çalışma checkpoint'ten devam edecek: %s",
+                                competition_id, requested_season, str(exc)[:500])
+                    break
+                raise
             clubs = get_value(competition, "clubs")
             if not isinstance(clubs, list) or not clubs:
                 raise RuntimeError(
@@ -502,6 +513,7 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
 
             LOG.info("%s (%s) sezon %s: %s kulüp; tamamlanan=%s",
                      competition_name, competition_id, api_season, len(clubs), len(completed))
+            season_players_added = 0
             for club in clubs:
                 club_id = as_text(get_value(club, "id", "clubId", "club_id"))
                 club_name = as_text(get_value(club, "name", "clubName", "club_name"))
@@ -522,11 +534,24 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
                         club_profile = profile
                 except Exception as exc:
                     if re.search(r"HTTP\s+(?:408|425|429|500|502|503|504)", str(exc), re.IGNORECASE):
-                        raise
+                        stopped_for_time = True
+                        LOG.warning("%s kulüp profilinde upstream sınırı; checkpoint bırakılıyor: %s",
+                                    club_name, str(exc)[:500])
+                        break
                     LOG.warning("%s kulüp profili alınamadı; kadro devam ediyor: %s", club_name, str(exc)[:500])
 
+                if stopped_for_time:
+                    break
                 squad_path = f"/clubs/{quote(club_id, safe='')}/players?" + urlencode({"season_id": api_season})
-                squad = api_get(squad_path)
+                try:
+                    squad = api_get(squad_path)
+                except Exception as exc:
+                    if re.search(r"HTTP\s+(?:408|425|429|500|502|503|504)", str(exc), re.IGNORECASE):
+                        stopped_for_time = True
+                        LOG.warning("%s kadrosunda upstream sınırı; checkpoint bırakılıyor: %s",
+                                    club_name, str(exc)[:500])
+                        break
+                    raise
                 players = get_value(squad, "players")
                 if not isinstance(players, list) or not players:
                     failed_clubs.append(f"{competition_id}/{api_season}/{club_id}")
@@ -561,6 +586,7 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
                     "last_error": None,
                 })
                 total_players += saved_here
+                season_players_added += saved_here
                 LOG.info("%s: %s oyuncu yazıldı (%s/%s kulüp).", club_name, saved_here, len(completed), len(clubs))
 
             all_club_ids = {as_text(get_value(item, "id", "clubId", "club_id")) for item in clubs}
@@ -570,21 +596,22 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
                     "status": "completed", "sync_date": today, "total_clubs": len(clubs),
                     "completed_club_ids": sorted(completed), "last_error": None,
                 })
-                try:
-                    table_payload = api_get(
-                        f"/competitions/{quote(competition_id, safe='')}/table?"
-                        + urlencode({"season_id": api_season})
-                    )
-                    if isinstance(table_payload, dict):
-                        save_competition_table(competition_id, api_season, table_payload)
-                except Exception as exc:
-                    if re.search(r"HTTP\s+(?:408|425|429|500|502|503|504)", str(exc), re.IGNORECASE):
-                        stopped_for_time = True
-                        LOG.warning("%s/%s tablo isteği ertelendi; sonraki çalışma deneyecek: %s",
+                if season_players_added > 0 or not has_checkpoint:
+                    try:
+                        table_payload = api_get(
+                            f"/competitions/{quote(competition_id, safe='')}/table?"
+                            + urlencode({"season_id": api_season})
+                        )
+                        if isinstance(table_payload, dict):
+                            save_competition_table(competition_id, api_season, table_payload)
+                    except Exception as exc:
+                        if re.search(r"HTTP\s+(?:408|425|429|500|502|503|504)", str(exc), re.IGNORECASE):
+                            stopped_for_time = True
+                            LOG.warning("%s/%s tablo isteği ertelendi; sonraki çalışma deneyecek: %s",
+                                        competition_id, api_season, str(exc)[:500])
+                            break
+                        LOG.warning("%s/%s tablosu alınamadı; kadro verisi korunuyor: %s",
                                     competition_id, api_season, str(exc)[:500])
-                        break
-                    LOG.warning("%s/%s tablosu alınamadı; kadro verisi korunuyor: %s",
-                                competition_id, api_season, str(exc)[:500])
             else:
                 LOG.warning("%s/%s kısmi: %s/%s kulüp.",
                             competition_id, api_season, len(all_club_ids & completed), len(all_club_ids))
