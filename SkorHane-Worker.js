@@ -1542,6 +1542,7 @@ async function apiFootballLeagueDataById(env, id, year) {
       fixtures: fixturesR.status === "rejected" ? String(fixturesR.reason && fixturesR.reason.message || fixturesR.reason) : "",
       goals: goalsR.status === "rejected" ? String(goalsR.reason && goalsR.reason.message || goalsR.reason) : "",
       assists: assistsR.status === "rejected" ? String(assistsR.reason && assistsR.reason.message || assistsR.reason) : "",
+      totals: totalsR.status === "rejected" ? String(totalsR.reason && totalsR.reason.message || totalsR.reason) : "",
     },
   };
 }
@@ -4114,7 +4115,9 @@ function tmLeaderRows(rows, metric) {
     appearances: Number(row.appearances) || 0, assists: Number(row.assists) || 0,
     goals: Number(row.goals) || 0, minutes: Number(row.minutes) || 0,
     source: "Supabase/Transfermarkt"
-  })).filter(row => row.playerId && row.player && row.value > 0);
+  })).filter(row => row.playerId && row.player && row.value > 0)
+    .sort((a,b) => b.value-a.value || a.player.localeCompare(b.player, "tr"))
+    .slice(0,50).map((row,index) => ({...row, rank:row.rank || index+1}));
 }
 async function tmLeagueData(env, code, year) {
   const competitionId = tmCompetitionIdForCode(code);
@@ -4128,19 +4131,30 @@ async function tmLeagueData(env, code, year) {
   const assistsQuery = "tm_league_assist_leaders?select=leader_rank,tm_id,player_name,photo_url,club_name,goals,assists,appearances,minutes" +
     "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
     "&order=leader_rank.asc&limit=50";
+  const totalsQuery = "tm_league_player_season_totals?select=tm_id,player_name,photo_url,club_name,appearances,starts,goals,assists,minutes,yellow_cards,red_cards,goals_conceded,clean_sheets" +
+    "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) + "&limit=1000";
   const tableQuery = "tm_source_records?select=payload&source=eq.felipeall&record_type=eq.competition_table" +
     "&external_id=eq." + encodeURIComponent(competitionId) + "&record_key=eq." + encodeURIComponent(season) + "&limit=1";
-  const [statesR, goalsR, assistsR, tableR] = await Promise.allSettled([
-    tmDbRows(env, statesQuery), tmDbRows(env, goalsQuery), tmDbRows(env, assistsQuery), tmDbRows(env, tableQuery)
+  const [statesR, goalsR, assistsR, totalsR, tableR] = await Promise.allSettled([
+    tmDbRows(env, statesQuery), tmDbRows(env, goalsQuery), tmDbRows(env, assistsQuery),
+    tmDbRows(env, totalsQuery), tmDbRows(env, tableQuery)
   ]);
   const states = statesR.status === "fulfilled" ? statesR.value : [];
   const goals = goalsR.status === "fulfilled" ? tmLeaderRows(goalsR.value, "goals") : [];
   const assists = assistsR.status === "fulfilled" ? tmLeaderRows(assistsR.value, "assists") : [];
+  const totals = totalsR.status === "fulfilled" ? totalsR.value : [];
+  const metricFields = {
+    appearances:"appearances", starts:"starts", minutes:"minutes", yellow:"yellow_cards",
+    red:"red_cards", goalsConceded:"goals_conceded", cleanSheets:"clean_sheets"
+  };
+  const leaders = Object.fromEntries(Object.entries(metricFields).map(([key, field]) => [
+    key, tmLeaderRows(totals, field)
+  ]));
   const tableRecord = tableR.status === "fulfilled" ? tableR.value[0] : null;
   return {
-    found: !!(goals.length || assists.length || states.length || tableRecord),
+    found: !!(goals.length || assists.length || Object.values(leaders).some(rows => rows.length) || states.length || tableRecord),
     code: competitionId, requestedCode:code, season:Number(season),
-    seasons:tmSeasonRows(states), goals, assists,
+    seasons:tmSeasonRows(states), goals, assists, leaders,
     standings:tmExtractTableRows(tableRecord && tableRecord.payload),
     syncState: states.find(row => String(row.record_key) === season)?.payload || null,
     errors: {
