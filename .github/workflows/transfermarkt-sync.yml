@@ -44,7 +44,7 @@ permissions:
 
 concurrency:
   group: skorhane-transfermarkt-sync
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   sync:
@@ -55,7 +55,6 @@ jobs:
       # The imported queue owns [2026-11-25 20:26:06, 21:00:04) UTC.
       TM_DETAIL_SQUAD_SEEN_AFTER: ${{ github.event.inputs.seen_after || '2026-11-12T08:00:00Z' }}
       TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ github.event.inputs.seen_before || '2026-11-25T20:26:06Z' }}
-      TM_DETAIL_EXPECTED_COHORT_SIZE: "2402"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

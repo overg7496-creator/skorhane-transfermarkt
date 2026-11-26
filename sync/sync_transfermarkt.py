@@ -636,7 +636,12 @@ def load_pending_player_detail_candidates(
                 f"beklenen {expected_size}, veritabanında bulunan {len(candidates)} aktif oyuncu. "
                 "Yanlış gruba taşmamak için hiçbir oyuncu işlenmedi."
             )
-    return [row for row in candidates if not row.get("last_felipe_synced_at")]
+    pending = [row for row in candidates if not row.get("last_felipe_synced_at")]
+    LOG.info(
+        "Sabit kadro aralığı detay kuyruğu: toplam=%s, daha önce tamamlanan=%s, kalan=%s",
+        len(candidates), len(candidates) - len(pending), len(pending),
+    )
+    return pending
 
 
 def detail_retry_is_due(state: dict[str, Any], now: datetime | None = None) -> bool:

@@ -231,6 +231,30 @@ class SyncHelperTests(unittest.TestCase):
             )
         self.assertEqual([row["tm_id"] for row in pending], ["2"])
 
+
+    def test_original_cohort_processes_only_unfinished_players_not_a_fixed_2402(self):
+        from unittest.mock import patch
+
+        rows = [
+            {"tm_id": "1", "last_felipe_synced_at": "2026-11-26T08:00:00Z"},
+            {"tm_id": "2", "last_felipe_synced_at": None},
+            {"tm_id": "3", "last_felipe_synced_at": None},
+        ]
+        with (
+            patch.object(sync, "db_get", return_value=rows),
+            patch.dict(os.environ, {"TM_DETAIL_EXPECTED_COHORT_SIZE": ""}),
+        ):
+            pending = sync.load_pending_player_detail_candidates(
+                squad_seen_after="2026-11-12T08:00:00Z",
+                squad_seen_before="2026-11-25T20:26:06Z",
+            )
+        self.assertEqual([row["tm_id"] for row in pending], ["2", "3"])
+
+    def test_main_workflow_cancels_old_run_and_has_no_fixed_2402_queue_count(self):
+        workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
+        self.assertIn("cancel-in-progress: true", workflow)
+        self.assertNotIn('TM_DETAIL_EXPECTED_COHORT_SIZE: "2402"', workflow)
+
     def test_imported_detail_queue_rejects_incomplete_or_reversed_window(self):
         with self.assertRaisesRegex(RuntimeError, "hem başlangıç hem bitiş"):
             sync.load_pending_player_detail_candidates(squad_seen_after="2026-11-25T20:26:06Z")
