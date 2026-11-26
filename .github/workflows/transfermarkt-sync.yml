@@ -10,10 +10,15 @@ on:
         options:
           - refresh-player-missing
           - one-player-test
+          - preseed-players
         default: refresh-player-missing
       player_id:
-        description: "Transfermarkt oyuncu ID'si (ör. Victor Osimhen: 401923)"
-        required: true
+        description: "Tek Transfermarkt oyuncu ID'si (ör. Victor Osimhen: 401923)"
+        required: false
+        type: string
+      player_ids:
+        description: "Ön doldurma için oyuncu ID listesi (virgül, boşluk veya noktalı virgül)"
+        required: false
         type: string
 
 permissions:
@@ -21,7 +26,7 @@ permissions:
 
 concurrency:
   # Same player is serialized; different player IDs remain independent.
-  group: skorhane-transfermarkt-player-${{ github.event.inputs.player_id }}
+  group: skorhane-transfermarkt-${{ github.event.inputs.mode }}-${{ github.event.inputs.player_id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -30,6 +35,8 @@ jobs:
     timeout-minutes: 45
     env:
       TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id }}
+      TM_PRESEED_PLAYER_IDS: ${{ github.event.inputs.player_ids }}
+      TM_PRESEED_MAX_PLAYERS: "50"
       FELIPE_API_BASE: http://127.0.0.1:8000
       HTTP_MAX_RETRIES: "4"
       HTTP_TIMEOUT_SECONDS: "45"
@@ -103,7 +110,17 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python sync/sync_transfermarkt.py one-player-test
 
+      - name: Pre-seed selected players
+        if: github.event.inputs.mode == 'preseed-players'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TM_PRESEED_PLAYER_IDS: ${{ github.event.inputs.player_ids }}
+          TM_PRESEED_MAX_PLAYERS: "50"
+        run: python sync/sync_transfermarkt.py preseed-players --player-ids "$TM_PRESEED_PLAYER_IDS"
+
       - name: Verify persisted player details in Supabase
+        if: github.event.inputs.mode == 'refresh-player-missing' || github.event.inputs.mode == 'one-player-test'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
