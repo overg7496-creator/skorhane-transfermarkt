@@ -4075,7 +4075,7 @@ async function understat(name) {
   return rows.map((x) => ({ year: Number(x.season), team: String(x.team || ""), m: Number(x.games), g: Number(x.goals), a: Number(x.assists) })).filter((x) => x.year);
 }
 async function tmPlayerSummary(env, id, fallback = {}) {
-  const playerId = String(id || "").replace(/\\D/g, "");
+  const playerId = String(id || "").replace(/\D/g, "");
   if (!playerId) return { photo: "", bio: {}, err: "geçersiz Transfermarkt oyuncu kimliği" };
   const fields = "tm_id,name,team_name,position,photo_url,profile_payload,current_market_value_eur,current_market_value_text,current_market_value_date";
   const rows = await tmDbRows(env, "tm_players?select=" + fields + "&tm_id=eq." + encodeURIComponent(playerId) + "&limit=1");
