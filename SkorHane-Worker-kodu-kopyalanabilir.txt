@@ -2897,8 +2897,23 @@ async function ssFindByTeams(env, date, home, away, todayTR) {
 // ---------- Oyuncu: Transfermarkt DB + TheSportsDB + SportScore + ESPN + API-Football + Sportmonks ----------
 // Transfermarkt verisi yalnızca senkronizasyon cron'u tarafından PostgreSQL'e yazılır.
 // Bu Worker'ın HTTP endpoint'leri Transfermarkt'a doğrudan istek atmaz.
+function tmSupabaseBase(env) {
+  const raw = String(env && env.SUPABASE_URL || "").trim();
+  if (!raw) throw new Error("SUPABASE_URL yapılandırılmadı");
+  let parsed;
+  try { parsed = new URL(raw); }
+  catch (_) { throw new Error("SUPABASE_URL geçerli bir Project URL değil"); }
+  // Strip an accidentally pasted REST suffix so /rest/v1 is never duplicated.
+  const path = parsed.pathname.replace(/\/+$/, "").replace(/(?:\/rest\/v1)+$/i, "");
+  if (path) throw new Error("SUPABASE_URL Project URL olmalı; beklenmeyen yol: " + path);
+  parsed.pathname = "";
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.origin;
+}
+
 async function tmDbRows(env, query) {
-  const base = String(env && env.SUPABASE_URL || "").replace(/\/$/, "");
+  const base = tmSupabaseBase(env);
   const key = String(env && env.SUPABASE_SERVICE_ROLE_KEY || "");
   if (!base || !key) throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY yapılandırılmadı");
   const url = base + "/rest/v1/" + query;
@@ -2916,7 +2931,7 @@ async function tmDbRows(env, query) {
 }
 
 async function tmDbWrite(env, path, method, payload) {
-  const base = String(env && env.SUPABASE_URL || "").replace(/\/$/, "");
+  const base = tmSupabaseBase(env);
   const key = String(env && env.SUPABASE_SERVICE_ROLE_KEY || "");
   if (!base || !key) throw new Error("Supabase bağlantısı yapılandırılmadı");
   const response = await fetch(base + "/rest/v1/" + path, {
