@@ -1,15 +1,6 @@
 name: SkorHane Detail Queue Regression Tests
 
 on:
-  push:
-    paths:
-      - "sync/sync_transfermarkt.py"
-      - "tests/**"
-      - ".github/workflows/transfermarkt-sync.yml"
-      - ".github/workflows/refresh-imported-player-details.yml"
-      - ".github/workflows/import-missing-leagues.yml"
-      - ".github/workflows/resume-long-sync.yml"
-      - ".github/workflows/validate-detail-queues.yml"
   workflow_dispatch:
 
 permissions:
