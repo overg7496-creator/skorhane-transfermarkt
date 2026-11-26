@@ -481,12 +481,17 @@ class SyncHelperTests(unittest.TestCase):
             sync.replace_player_snapshots("123", {"stats_payload": {"stats": []}})
         patch_db.assert_not_called()
 
-    def test_transfermarkt_ui_shows_refresh_lifecycle_and_auto_reloads(self):
+    def test_transfermarkt_ui_silently_refreshes_all_player_sections_in_place(self):
         html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertIn("function scheduleTmRefreshProbe", html)
-        self.assertIn("my.tmRefreshStatus='completed'", html)
-        self.assertIn("tmRefreshRetryAt", html)
-        self.assertIn("setTimeout(async()=>", html)
+        self.assertIn("api('/player?part=info'+qs)", html)
+        self.assertIn("api('/player?part=stats'+qs)", html)
+        self.assertIn("my.info=freshInfo", html)
+        self.assertIn("my.stats=freshStats", html)
+        self.assertIn("attempt===0?6000:12000", html)
+        self.assertIn("skorhane.playerstats.legacy.v7.", html)
+        self.assertNotIn("Eksik Transfermarkt kayıtları yenileme kuyruğuna alındı", html)
+        self.assertNotIn("profili kısa süre sonra yeniden aç", html)
 
     def test_worker_and_copyable_worker_match_and_cache_is_bumped(self):
         worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
