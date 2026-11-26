@@ -125,11 +125,17 @@ create table if not exists public.tm_player_season_stats (
   yellow_cards integer,
   second_yellow_cards integer,
   red_cards integer,
+  goals_conceded integer,
+  clean_sheets integer,
   payload jsonb not null default '{}'::jsonb,
   source text not null,
   updated_at timestamptz not null default now(),
   unique (tm_id, season_id, competition_name, club_name)
 );
+
+-- Additive migration for existing Supabase installations; safe to re-run.
+alter table public.tm_player_season_stats add column if not exists goals_conceded integer;
+alter table public.tm_player_season_stats add column if not exists clean_sheets integer;
 
 create index if not exists tm_player_season_stats_lookup_idx
   on public.tm_player_season_stats (tm_id, season_id desc);
@@ -317,13 +323,14 @@ as $$
 begin
   insert into public.tm_player_season_stats(
     tm_id, season_id, competition_name, club_name, appearances, starts, goals, assists,
-    minutes, yellow_cards, second_yellow_cards, red_cards, payload, source
+    minutes, yellow_cards, second_yellow_cards, red_cards, goals_conceded, clean_sheets, payload, source
   ) values (
     p_row->>'tm_id', p_row->>'season_id', coalesce(p_row->>'competition_name',''), coalesce(p_row->>'club_name',''),
     nullif(p_row->>'appearances','')::integer, nullif(p_row->>'starts','')::integer,
     nullif(p_row->>'goals','')::integer, nullif(p_row->>'assists','')::integer,
     nullif(p_row->>'minutes','')::integer, nullif(p_row->>'yellow_cards','')::integer,
     nullif(p_row->>'second_yellow_cards','')::integer, nullif(p_row->>'red_cards','')::integer,
+    nullif(p_row->>'goals_conceded','')::integer, nullif(p_row->>'clean_sheets','')::integer,
     public.tm_clean_jsonb(p_row->'payload'), coalesce(p_row->>'source','unknown')
   )
   on conflict (tm_id, season_id, competition_name, club_name) do update set
@@ -335,6 +342,8 @@ begin
     yellow_cards = coalesce(excluded.yellow_cards, tm_player_season_stats.yellow_cards),
     second_yellow_cards = coalesce(excluded.second_yellow_cards, tm_player_season_stats.second_yellow_cards),
     red_cards = coalesce(excluded.red_cards, tm_player_season_stats.red_cards),
+    goals_conceded = coalesce(excluded.goals_conceded, tm_player_season_stats.goals_conceded),
+    clean_sheets = coalesce(excluded.clean_sheets, tm_player_season_stats.clean_sheets),
     payload = public.tm_merge_jsonb(tm_player_season_stats.payload, excluded.payload),
     source = excluded.source, updated_at = now();
 end;
