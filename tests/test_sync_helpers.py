@@ -272,7 +272,7 @@ class SyncHelperTests(unittest.TestCase):
 
     def test_backfill_queue_is_resumable_and_uses_time_guard(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
-        self.assertIn("last_felipe_synced_at=is.null", script)
+        self.assertIn('return [row for row in candidates if not row.get("last_felipe_synced_at")]', script)
         self.assertIn('"player_detail_queue"', script)
         self.assertIn("dispatch_refresh_details_continuation()", script)
         self.assertIn("TM_DETAIL_MAX_RUNTIME_SECONDS", script)
