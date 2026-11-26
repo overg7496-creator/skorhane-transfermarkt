@@ -1737,6 +1737,7 @@ def sync_preseed_players(raw_player_ids: str | None) -> int:
         )
     successful = 0
     missing_ids: list[str] = []
+    failed_ids: list[str] = []
     for index, player_id in enumerate(player_ids, 1):
         rows = db_get(
             f"tm_players?select=tm_id,name&tm_id=eq.{quote(player_id)}&limit=1"
@@ -1753,15 +1754,38 @@ def sync_preseed_players(raw_player_ids: str | None) -> int:
             "Ön doldurma başlıyor: %s/%s | %s | Transfermarkt ID=%s",
             index, len(player_ids), player_name, player_id,
         )
-        successful += sync_felipeall(only_player=player_id, missing_only=True)
-    LOG.info(
-        "Ön doldurma tamamlandı: listede=%s, başarıyla güncellenen=%s, tm_players içinde bulunmayan=%s.",
-        len(player_ids), successful, len(missing_ids),
-    )
-    if missing_ids:
-        raise RuntimeError(
-            "Şu oyuncu ID'leri önce tm_players tablosuna aktarılmalı: " + ", ".join(missing_ids)
+        sync_started = datetime.now(timezone.utc) - timedelta(seconds=5)
+        sync_felipeall(only_player=player_id, missing_only=True)
+        latest = db_get(
+            f"tm_players?select=last_felipe_synced_at&tm_id=eq.{quote(player_id)}&limit=1"
         )
+        stamp = latest[0].get("last_felipe_synced_at") if latest else None
+        try:
+            parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")) if stamp else None
+            if parsed and parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            parsed = None
+        if parsed and parsed >= sync_started:
+            successful += 1
+            LOG.info("Ön doldurma doğrulandı: %s (ID=%s).", player_name, player_id)
+        else:
+            failed_ids.append(player_id)
+            LOG.error(
+                "Ön doldurma tamamlanamadı/doğrulanamadı: %s (ID=%s).",
+                player_name, player_id,
+            )
+    LOG.info(
+        "Ön doldurma tamamlandı: listede=%s, hazır/doğrulanmış=%s, bulunmayan=%s, başarısız=%s.",
+        len(player_ids), successful, len(missing_ids), len(failed_ids),
+    )
+    if missing_ids or failed_ids:
+        parts = []
+        if missing_ids:
+            parts.append("tm_players içinde bulunmayan: " + ", ".join(missing_ids))
+        if failed_ids:
+            parts.append("detayları doğrulanamayan: " + ", ".join(failed_ids))
+        raise RuntimeError("Ön doldurma kısmi tamamlandı; " + " | ".join(parts))
     return successful
 
 
