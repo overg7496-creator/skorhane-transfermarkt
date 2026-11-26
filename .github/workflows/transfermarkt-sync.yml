@@ -297,7 +297,7 @@ jobs:
               if rows:
                   row = rows[0]
                   with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                      output.write(f"player_id={row['tm_id']}\\n")
+                      output.write("player_id=" + str(row["tm_id"]) + "\n")
                   print(f"Canlı Supabase oyuncu testi: {row.get('name')} (Transfermarkt ID={row['tm_id']})")
                   break
           else:
