@@ -94,7 +94,7 @@ Diğer lig/kadro aktarım iş akışları otomatik başlamaz. `SkorHane Eksik Li
 6. GitHub → Actions → **SkorHane Transfermarkt Tek Oyuncu Yenileme** → Run workflow.
 7. İlk doğrulama için `refresh-player-missing` seç ve `player_id` alanına `401923` (Victor Osimhen) yaz. Sadece eksik/eski alanlar çağrılır.
 8. Workflow tamamlandığında Actions logundaki Supabase doğrulama bölümünde güncel değer, sezon satırı, değer geçmişi, transfer ve sakatlık sayısını kontrol et.
-9. SkorHane'de aynı oyuncu profilini aç. Eksik veri varsa Worker kuyruğa alır; ekran 30 saniye aralıklarla kontrol ederek yeni verileri otomatik yükler.
+9. SkorHane'de aynı oyuncu profilini aç. Eksik veri varsa Worker kuyruğa alır; oyuncu ekranı profili ve tüm Transfermarkt bölümlerini 6 saniye sonra, ardından 12 saniyelik aralıklarla aynı ekranda otomatik yeniler. Kuyruk uyarısı göstermez ve profili yeniden açtırmaz.
 10. Bir endpoint'in tam cevabını ayrıca denemek gerektiğinde aynı workflow'da `one-player-test` modunu seç.
 
 Supabase'te elle kontrol için:
