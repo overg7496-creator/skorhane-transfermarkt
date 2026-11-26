@@ -548,3 +548,50 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("goals_conceded,clean_sheets&tm_id=eq.", worker)
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_preseed_player_ids_are_deduplicated_and_validated(self):
+        self.assertEqual(
+            sync.parse_preseed_player_ids("401923, 1113451;401923\n12345"),
+            ["401923", "1113451", "12345"],
+        )
+        with self.assertRaisesRegex(RuntimeError, "Geçersiz"):
+            sync.parse_preseed_player_ids("401923, abc")
+
+    def test_preseed_player_ids_are_bounded(self):
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"TM_PRESEED_MAX_PLAYERS": "2"}):
+            with self.assertRaisesRegex(RuntimeError, "en fazla 2"):
+                sync.parse_preseed_player_ids("1,2,3")
+
+    def test_preseed_mode_calls_missing_only_refresh_for_each_player(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(sync, "db_get", side_effect=[
+                [{"tm_id": "401923", "name": "Victor Osimhen"}],
+                [{"tm_id": "1113451", "name": "Kojo Peprah Oppong"}],
+            ]),
+            patch.object(sync, "sync_felipeall", side_effect=[1, 1]) as run,
+        ):
+            self.assertEqual(sync.sync_preseed_players("401923,1113451"), 2)
+        self.assertEqual(run.call_args_list[0].kwargs, {"only_player": "401923", "missing_only": True})
+        self.assertEqual(run.call_args_list[1].kwargs, {"only_player": "1113451", "missing_only": True})
+
+    def test_player_profile_does_not_wait_for_background_dispatch(self):
+        worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
+        worker_copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
+        html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
+        self.assertEqual(worker, worker_copy)
+        self.assertIn("executionCtx.waitUntil(refreshPromise)", worker)
+        self.assertIn('"pf42:"', worker)
+        self.assertIn("const loading=false", html)
+        self.assertIn("const freshStats=await api('/player?part=stats'+qs)", html)
+        self.assertNotIn("const freshInfo=await api('/player?part=info'+qs)", html)
+
+    def test_preseed_workflow_exposes_player_list_input(self):
+        workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
+        self.assertIn("preseed-players", workflow)
+        self.assertIn("player_ids:", workflow)
+        self.assertIn('python sync/sync_transfermarkt.py preseed-players --player-ids "$TM_PRESEED_PLAYER_IDS"', workflow)
