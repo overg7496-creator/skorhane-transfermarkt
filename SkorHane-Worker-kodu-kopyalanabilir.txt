@@ -2910,6 +2910,123 @@ async function tmDbRows(env, query) {
   const rows = await response.json();
   return Array.isArray(rows) ? rows : [];
 }
+
+async function tmDbWrite(env, path, method, payload) {
+  const base = String(env && env.SUPABASE_URL || "").replace(/\/$/, "");
+  const key = String(env && env.SUPABASE_SERVICE_ROLE_KEY || "");
+  if (!base || !key) throw new Error("Supabase bağlantısı yapılandırılmadı");
+  const response = await fetch(base + "/rest/v1/" + path, {
+    method,
+    headers: {
+      apikey: key, Authorization: "Bearer " + key,
+      Accept: "application/json", "Content-Type": "application/json",
+      Prefer: "return=representation"
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!response.ok) throw new Error("Supabase yazma HTTP " + response.status);
+  const raw = await response.text();
+  return raw ? JSON.parse(raw) : [];
+}
+
+function tmSeasonLabel(value) {
+  if (value == null) return "";
+  const raw = String(value).trim().replace(/[–-]/g, "/");
+  const pair = raw.match(/(?:^|[^0-9])(\d{2,4})\s*\/\s*(\d{2,4})(?:$|[^0-9])/);
+  if (pair) {
+    const first = Number(pair[1]), second = Number(pair[2]);
+    const start = first >= 1000 ? first : 2000 + first;
+    let end = second >= 1000 ? second : Math.floor(start / 100) * 100 + second;
+    if (end < start) end += 100;
+    return String(start) + "/" + String(end % 100).padStart(2, "0");
+  }
+  const year = raw.match(/(?:^|[^0-9])((?:19|20)\d{2})(?:$|[^0-9])/);
+  return year ? String(Number(year[1])) + "/" + String((Number(year[1]) + 1) % 100).padStart(2, "0") : "";
+}
+
+function tmHasArrayPayload(payload, keys) {
+  return !!payload && typeof payload === "object" && keys.some(key => Array.isArray(payload[key]));
+}
+
+async function queueTmPlayerRefresh(env, playerId, row) {
+  const token = String(env && env.GITHUB_ACTIONS_TOKEN || "").trim();
+  const snapshotChecks = [
+    ["stats_payload", ["stats", "data", "items"]],
+    ["transfers_payload", ["transfers", "history", "items", "data"]],
+    ["market_value_payload", ["marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"]],
+    ["injuries_payload", ["injuries", "data", "items"]]
+  ];
+  const syncAt = Date.parse(row && row.last_felipe_synced_at || "");
+  const stale = !Number.isFinite(syncAt) || Date.now() - syncAt > 7 * 86400000;
+  const missing = !row.profile_payload || typeof row.profile_payload !== "object" ||
+    snapshotChecks.some(([field, keys]) => !tmHasArrayPayload(row[field], keys));
+  const required = stale || missing;
+  if (!required) return { required: false, queued: false, configured: !!token };
+  if (!token) return { required: true, queued: false, configured: false, reason: "GITHUB_ACTIONS_TOKEN tanımlı değil" };
+
+  const queueQuery = "tm_source_records?select=id,payload,fetched_at&source=eq.skorhane_worker&record_type=eq.player_detail_refresh&external_id=eq." +
+    encodeURIComponent(playerId) + "&record_key=eq.details&limit=1";
+  const queueRows = await tmDbRows(env, queueQuery);
+  const existing = queueRows[0] || null;
+  const fetchedAt = existing && Date.parse(existing.fetched_at || "");
+  const queueStatus = String(existing && existing.payload && existing.payload.status || "");
+  if (Number.isFinite(fetchedAt) && Date.now() - fetchedAt < 15 * 60000 && ["queued", "running"].includes(queueStatus)) {
+    return { required: true, queued: true, configured: true, state: "already-queued" };
+  }
+
+  const now = new Date().toISOString();
+  const queuePayload = {
+    status: "queued", player_id: String(playerId),
+    requested_at: now, reason: stale ? "stale-player-details" : "missing-player-fields"
+  };
+  const snapshot = {
+    source: "skorhane_worker", record_type: "player_detail_refresh",
+    external_id: String(playerId), record_key: "details",
+    payload: queuePayload, fetched_at: now
+  };
+  let queueId = existing && existing.id;
+  if (queueId != null) {
+    await tmDbWrite(env, "tm_source_records?id=eq." + encodeURIComponent(String(queueId)), "PATCH",
+      { payload: queuePayload, fetched_at: now });
+  } else {
+    try {
+      const inserted = await tmDbWrite(env, "tm_source_records", "POST", snapshot);
+      queueId = inserted && inserted[0] && inserted[0].id;
+    } catch (error) {
+      // A concurrent profile open may have won the unique-key insert. Re-read
+      // the durable lock rather than dispatching duplicate detail jobs.
+      const raced = await tmDbRows(env, queueQuery);
+      if (raced.length) return { required: true, queued: true, configured: true, state: "concurrent-queue" };
+      throw error;
+    }
+  }
+
+  try {
+    const response = await fetch("https://api.github.com/repos/overg7496-creator/skorhane-transfermarkt/actions/workflows/transfermarkt-sync.yml/dispatches", {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: "Bearer " + token,
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "SkorHane-Player-Refresh",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ ref: "main", inputs: { mode: "refresh-player-missing", player_id: String(playerId) } }),
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) throw new Error("GitHub workflow dispatch HTTP " + response.status);
+    return { required: true, queued: true, configured: true, state: "queued" };
+  } catch (error) {
+    if (queueId != null) {
+      await tmDbWrite(env, "tm_source_records?id=eq." + encodeURIComponent(String(queueId)), "PATCH", {
+        payload: { ...queuePayload, status: "dispatch-failed", error: String(error && error.message || error).slice(0, 300) },
+        fetched_at: new Date().toISOString()
+      }).catch(() => {});
+    }
+    return { required: true, queued: false, configured: true, reason: String(error && error.message || error) };
+  }
+}
 const TSDB = "https://www.thesportsdb.com/api/v1/json/123/";
 const pick = (o, ...ks) => { for (const k of ks) if (o && o[k] != null && o[k] !== "") return o[k]; return ""; };
 const nkp = (n) => String(n || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -3908,6 +4025,14 @@ async function tmPlayer(env, id) {
   const rows = await tmDbRows(env, "tm_players?select=*&tm_id=eq." + encodeURIComponent(playerId) + "&limit=1");
   const row = rows[0];
   if (!row) return { ...out, err: "Transfermarkt oyuncusu henüz veritabanına senkronize edilmemiş" };
+  const refreshState = await queueTmPlayerRefresh(env, playerId, row).catch(error => ({
+    required: true, queued: false, configured: !!(env && env.GITHUB_ACTIONS_TOKEN),
+    reason: String(error && error.message || error)
+  }));
+  out.refreshRequired = !!refreshState.required;
+  out.refreshQueued = !!refreshState.queued;
+  out.refreshConfigured = !!refreshState.configured;
+  out.refreshReason = refreshState.reason || "";
   const profileRaw = row.profile_payload || {};
   const b = profileRaw.player || profileRaw.data || profileRaw.profile || profileRaw;
   const statsRaw = row.stats_payload || {};
@@ -3961,15 +4086,23 @@ async function tmPlayer(env, id) {
   out.photo = row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "";
   const nationality = pick(b, "citizenship", "nationality", "nationalities");
   const nat = Array.isArray(nationality) ? nationality.join(", ") : nationality || "";
-  const club = b.club || b.team || {};
+  const club = b.currentClub || b.club || b.team || {};
   const clubName = typeof club === "string" ? club : (club && (club.name || club.displayName)) || b.clubName || b.currentClub || row.team_name || "";
   const position = b.position || {};
   const height = pick(b, "height", "heightM", "heightMeters", "height_cm");
   const latestMarketValue = Array.isArray(out.marketValueHistory) ? (out.marketValueHistory[0] || {}) : {};
+  const rawCurrentMarketValue = pick(b, "marketValue", "marketValueFormatted", "market_value");
+  const currentMarketValue = rawCurrentMarketValue && typeof rawCurrentMarketValue === "object"
+    ? pick(rawCurrentMarketValue, "displayValue", "display_value", "text", "value", "amount")
+    : rawCurrentMarketValue;
+  const rawLatestMarketValue = pick(latestMarketValue, "display_value", "displayValue", "market_value", "marketValue", "value_eur", "value");
+  const latestMarketValueDisplay = rawLatestMarketValue && typeof rawLatestMarketValue === "object"
+    ? pick(rawLatestMarketValue, "displayValue", "display_value", "text", "value", "amount")
+    : rawLatestMarketValue;
   out.bio = {
     ...dateBio(pick(b, "dateOfBirth", "date_of_birth")),
     "Ayak": footTr(pick(b, "foot", "preferredFoot", "preferred_foot")),
-    "Piyasa Değeri": valueTr(pick(b, "marketValue", "marketValueFormatted", "market_value")) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : "") || valueTr(pick(latestMarketValue, "display_value", "displayValue", "market_value", "marketValue", "value_eur", "value")),
+    "Piyasa Değeri": valueTr(currentMarketValue) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : "") || valueTr(latestMarketValueDisplay),
     "Şu Anki Takım": clubName,
     "Boy": height ? (typeof height === "number" && height < 3 ? String(height).replace(".", ",") + " m" : height + "") : "",
     "Uyruk": nat,
@@ -3981,11 +4114,8 @@ async function tmPlayer(env, id) {
     const mp = new Map();
     for (const x of statsRows) {
       const rawSeason = pick(x, "seasonID", "seasonId", "season_id", "season", "seasonName");
-      const sm = String(rawSeason && typeof rawSeason === "object" ? pick(rawSeason, "name", "displayName", "year", "id") : rawSeason).match(/(?:19|20)\d{2}(?:\s*[-/–]\s*\d{2,4})?/);
-      if (!sm) continue;
-      let se = sm[0].replace(/\s+/g, "").replace(/[–-]/g, "/");
-      if (/^\d{4}$/.test(se)) se = se + "/" + String(Number(se) + 1).slice(2);
-      else se = se.replace(/\/(\d{4})$/, (_, y) => "/" + y.slice(2));
+      const se = tmSeasonLabel(rawSeason && typeof rawSeason === "object" ? pick(rawSeason, "name", "displayName", "year", "id") : rawSeason);
+      if (!se) continue;
       const clubRaw = pick(x, "clubName", "club_name", "teamName", "team_name", "club", "team");
       const clubObject = clubRaw && typeof clubRaw === "object" ? clubRaw : null;
       const clubName = clubObject ? pick(clubObject, "name", "displayName", "shortName") : clubRaw;
@@ -4288,7 +4418,7 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
         const result = await tmPlayer(env, id);
         out.tm = result;
         out.tmId = id;
-        st.transfermarkt = result.err ? "hata: " + result.err : "ok";
+        st.transfermarkt = result.err ? "hata: " + result.err : (result.refreshQueued ? "ok - eksik veriler yenileme kuyruğuna alındı" : "ok");
       } catch (error) {
         st.transfermarkt = "hata: " + (error && error.message || error);
       }
@@ -4387,7 +4517,7 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     return {date,from,to,kind:endLoan?'Kiralıktan dönüş':loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
   }).filter(x=>x.from||x.to||x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const transfers=tmTransfers;
-  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], sources: st, stats: null };
+  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], tmRefreshRequired: !!(out.tm && out.tm.refreshRequired), tmRefreshQueued: !!(out.tm && out.tm.refreshQueued), tmRefreshConfigured: out.tm ? !!out.tm.refreshConfigured : null, tmRefreshReason: out.tm && out.tm.refreshReason || "", sources: st, stats: null };
 }
 
 // ---------- PitchAPI: seçilen oyuncunun erişilebilir geçmiş sezonlarını maç maç birleştir ----------
@@ -7714,11 +7844,11 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf34:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf35:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
-          return { body: r, ttl: part === "info" ? 21600 : hasCareer ? 21600 : providerErrors ? 90 : 1800 };
+          return { body: r, ttl: r.tmRefreshQueued ? 25 : part === "info" ? 21600 : hasCareer ? 21600 : providerErrors ? 90 : 1800 };
         });
       } else if (p === "/team") {
         let code = q.get("code") || "";
