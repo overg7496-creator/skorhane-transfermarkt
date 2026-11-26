@@ -422,20 +422,20 @@ def safe_text(*values: Any) -> str | None:
 
 
 def normalize_transfer_club(*values: Any) -> str | None:
-    """Read Felipe club objects; use an ID label only when a club name is absent."""
+    """Prefer any available official club name; use an ID label only as a last resort."""
     for value in values:
         if isinstance(value, dict):
             name = safe_text(value.get("name"), value.get("displayName"), value.get("display_name"),
                              value.get("shortName"), value.get("clubName"))
-            if name:
-                return name
+        else:
+            name = safe_text(value)
+        if name:
+            return name
+    for value in values:
+        if isinstance(value, dict):
             club_id = safe_text(value.get("id"), value.get("clubId"), value.get("club_id"))
             if club_id:
                 return f"Kulüp #{club_id}"
-        else:
-            name = safe_text(value)
-            if name:
-                return name
     return None
 
 
