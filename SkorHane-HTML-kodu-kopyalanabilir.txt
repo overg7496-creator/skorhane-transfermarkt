@@ -3224,7 +3224,7 @@ function leagueTeamRateRows(fixtures){
 
 function changeLeagueSeason(year){
   if(!cur||cur.kind!=='league')return;
-  const my=cur;my.tab='hafta';my.season=Number(year)||currentTeamSeason();my.week='all';my.data=null;my.err='';my.pitchLoading=false;my.pitchLoaded=false;my.pitchError='';my.pitchProgress='';my.pitchGoals=null;my.pitchAssists=null;my.pitchFixtures=null;my.pitchFixturesLoaded=false;my.pitchMetricLoaded='';my.pitchMetricRows=[];my.pitchMetricError='';my.pitchMetricLoading=false;my.pitchMetricLoadedByKey={};my.pitchMetricLoadingByKey={};my.pitchMetricRowsByKey={};my.pitchMetricErrorsByKey={};my.pitchMetricTokens={};my.pitchFixtureRequest=(my.pitchFixtureRequest||0)+1;my.pitchFixtureLoading=false;my.pitchFixturesLoading=false;my.pitchMetricRequest=(my.pitchMetricRequest||0)+1;
+  const my=cur;my.tab='hafta';my.season=Number(year)||currentTeamSeason();my.week='all';my.data=null;my.tmLeagueData=null;my.err='';my.pitchLoading=false;my.pitchLoaded=false;my.pitchError='';my.pitchProgress='';my.pitchGoals=null;my.pitchAssists=null;my.pitchFixtures=null;my.pitchFixturesLoaded=false;my.pitchMetricLoaded='';my.pitchMetricRows=[];my.pitchMetricError='';my.pitchMetricLoading=false;my.pitchMetricLoadedByKey={};my.pitchMetricLoadingByKey={};my.pitchMetricRowsByKey={};my.pitchMetricErrorsByKey={};my.pitchMetricTokens={};my.pitchFixtureRequest=(my.pitchFixtureRequest||0)+1;my.pitchFixtureLoading=false;my.pitchFixturesLoading=false;my.pitchMetricRequest=(my.pitchMetricRequest||0)+1;
   renderLeague();loadLeagueData(my);
 }
 function openLeague(name,code,meta=null){
