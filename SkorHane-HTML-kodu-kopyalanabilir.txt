@@ -3954,17 +3954,53 @@ async function loadPitchPlayerProfilePhoto(my){
   catch(_){}
   finally{if(cur===my)my.pitchProfilePhotoLoading=false;}
 }
+function scheduleTmRefreshProbe(my,qs,attempt=0){
+  if(!my||cur!==my||my.tmRefreshTimer||attempt>=6)return;
+  my.tmRefreshTimer=setTimeout(async()=>{
+    my.tmRefreshTimer=null;
+    if(cur!==my)return;
+    my.tmRefreshStatus='checking';renderPlayer();
+    try{
+      const fresh=await api('/player?part=stats'+qs);
+      if(cur!==my)return;
+      my.stats=fresh;my.statsLoaded=true;my.serr='';
+      if(Array.isArray(my.pitchCareerRows))mergePitchCareerIntoStats(my.stats,my.pitchCareerRows);
+      savePlayerStatsCache(my.it.name,fresh);
+      const state=String(fresh.tmRefreshState||'');
+      if(!fresh.tmRefreshRequired){
+        my.tmRefreshStatus='completed';my.tmRefreshFailure='';my.tmRefreshRetryAt='';
+      }else if(fresh.tmRefreshQueued&&['queued','running','already-queued','concurrent-queue'].includes(state)&&attempt<5){
+        my.tmRefreshStatus='queued';my.tmRefreshFailure='';renderPlayer();
+        scheduleTmRefreshProbe(my,qs,attempt+1);return;
+      }else if(state==='retry-wait'){
+        my.tmRefreshStatus='retry-wait';my.tmRefreshRetryAt=fresh.tmRefreshRetryAt||'';
+      }else{
+        my.tmRefreshStatus='failed';my.tmRefreshFailure=fresh.tmRefreshReason||'Transfermarkt yenilemesi tamamlanamadı.';
+      }
+      renderPlayer();
+      if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info);
+    }catch(error){
+      if(cur!==my)return;
+      if(attempt<5){
+        my.tmRefreshStatus='queued';my.tmRefreshFailure='';renderPlayer();
+        scheduleTmRefreshProbe(my,qs,attempt+1);
+      }else{
+        my.tmRefreshStatus='failed';my.tmRefreshFailure=error&&error.message||String(error);renderPlayer();
+      }
+    }
+  },30000);
+}
 function openPlayer(it){
   if(!it||!it.name){return}
   const cachedLegacyStats=it.role==='coach'?null:readPlayerStatsCache(it.name);
-  cur={kind:'player',prev:cur,it,info:null,stats:cachedLegacyStats,err:'',serr:'',tab:'ozet',f:'toplam',pitchCareerLoading:false,pitchRecentLoading:false,pitchRecentLoaded:false,pitchRecentMatches:[],pitchRecentCompetition:'all',pitchRecentError:'',pitchCareerLoaded:false,pitchCareerError:'',pitchCareerProgress:''};
+  cur={kind:'player',prev:cur,it,info:null,stats:cachedLegacyStats,err:'',serr:'',tab:'ozet',f:'toplam',pitchCareerLoading:false,pitchRecentLoading:false,pitchRecentLoaded:false,pitchRecentMatches:[],pitchRecentCompetition:'all',pitchRecentError:'',pitchCareerLoaded:false,pitchCareerError:'',pitchCareerProgress:'',tmRefreshTimer:null,tmRefreshStatus:'',tmRefreshFailure:'',tmRefreshRetryAt:''};
   $('#shTitle').textContent=trPlayerName(it.name);$('#sheet').scrollTop=0;
   renderPlayer();
   const my=cur,qs='&slug='+encodeURIComponent(it.slug||slugOf(it.url||it.link)||'')+'&name='+encodeURIComponent(it.name)+'&tm='+encodeURIComponent(it.tm||it.transfermarktId||'')+'&tsdb='+encodeURIComponent(it.tsdb||it.tsdbPlayerId||'')+'&af='+encodeURIComponent(it.af||it.afPlayerId||'')+'&espn='+encodeURIComponent(it.espn||it.espnPlayerId||'')+'&team='+encodeURIComponent(it.team||it.teamName||'')+'&pos='+encodeURIComponent(it.pos||it.position||'')+'&wiki='+encodeURIComponent(it.wiki||'')+'&pitch='+encodeURIComponent(it.pitchId||'')+'&pitchCode='+encodeURIComponent(it.pitchCode||it.pitchLeagueCode||guessPitchCodeFromTeam(it.team||it.teamName||'')||'')+'&pitchYear='+encodeURIComponent(it.pitchYear||'')+'&photo='+encodeURIComponent((Array.isArray(it.photos)&&it.photos[0])||it.logo||it.photo||'')+(it.role==='coach'?'&role=coach':'');
   my.infoLoaded=false;my.statsLoaded=false;
   loadPitchPlayerProfilePhoto(my);loadPitchPlayerRecent(my);
-  api('/player?part=info'+qs).then(j=>{if(cur===my){my.info=j;my.infoLoaded=true;renderPlayer();loadPitchPlayerProfilePhoto(my);loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,j)}}).catch(e=>{if(cur===my){my.err=e.message||String(e);my.infoLoaded=true;renderPlayer();loadPitchPlayerProfilePhoto(my);loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info)}});
-  api('/player?part=stats'+qs).then(j=>{if(cur===my){my.stats=j;my.statsLoaded=true;savePlayerStatsCache(it.name,j);if(Array.isArray(my.pitchCareerRows))mergePitchCareerIntoStats(my.stats,my.pitchCareerRows);renderPlayer();loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info)}}).catch(e=>{if(cur===my){my.serr=e.message||String(e);my.statsLoaded=true;if(Array.isArray(my.pitchCareerRows)&&my.pitchCareerRows.length){my.stats={player:{name:it.name},bio:{},seasons:[],national:[],sources:{}};mergePitchCareerIntoStats(my.stats,my.pitchCareerRows)}renderPlayer();loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info)}});
+  api('/player?part=info'+qs).then(j=>{if(cur===my){my.info=j;my.infoLoaded=true;renderPlayer();if(j.tmRefreshRequired&&j.tmRefreshQueued)scheduleTmRefreshProbe(my,qs,0);loadPitchPlayerProfilePhoto(my);loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,j)}}).catch(e=>{if(cur===my){my.err=e.message||String(e);my.infoLoaded=true;renderPlayer();loadPitchPlayerProfilePhoto(my);loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info)}});
+  api('/player?part=stats'+qs).then(j=>{if(cur===my){my.stats=j;my.statsLoaded=true;savePlayerStatsCache(it.name,j);if(Array.isArray(my.pitchCareerRows))mergePitchCareerIntoStats(my.stats,my.pitchCareerRows);renderPlayer();if(j.tmRefreshRequired&&j.tmRefreshQueued)scheduleTmRefreshProbe(my,qs,0);loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info)}}).catch(e=>{if(cur===my){my.serr=e.message||String(e);my.statsLoaded=true;if(Array.isArray(my.pitchCareerRows)&&my.pitchCareerRows.length){my.stats={player:{name:it.name},bio:{},seasons:[],national:[],sources:{}};mergePitchCareerIntoStats(my.stats,my.pitchCareerRows)}renderPlayer();loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info)}});
 }
 const PL_TR={season:'Sezon',year:'Sezon',team:'Takım',club:'Takım',competition:'Lig',league:'Lig',tournament:'Lig',appearances:'Maç',matches:'Maç',games:'Maç',played:'Maç',matches_played:'Maç',starts:'İlk 11',minutes:'Dakika',minutes_played:'Dakika',goals:'Gol',assists:'Asist',yellow_cards:'Sarı',yellow:'Sarı',red_cards:'Kırmızı',red:'Kırmızı',rating:'Puan',average_rating:'Puan',name:'Ad',position:'Mevki',nationality:'Uyruk',country:'Ülke',age:'Yaş',height:'Boy',weight:'Kilo',foot:'Ayak',preferred_foot:'Ayak',shirt_number:'Forma No',number:'Forma No',birth_date:'Doğum Tarihi',date_of_birth:'Doğum Tarihi',market_value:'Piyasa Değeri',contract_until:'Sözleşme',shots:'Şut',shots_on_target:'İsabetli Şut',passes:'Pas',tackles:'Top Kapma',clean_sheets:'Gol Yemeden',saves:'Kurtarış',penalties:'Penaltı',seasons:'Sezonlar',stats:'İstatistikler',statistics:'İstatistikler',career:'Kariyer',total:'Toplam',summary:'Özet',history:'Geçmiş',transfers:'Transferler',honours:'Başarılar',trophies:'Kupalar',height_cm:'Boy (cm)',weight_kg:'Kilo (kg)',jersey_number:'Forma No',fouls:'Faul',offsides:'Ofsayt',dribbles:'Çalım',key_passes:'Kilit Pas',duels_won:'Kazanılan İkili Mücadele',goals_conceded:'Yenen Gol',own_goals:'Kendi Kalesine',expected_goals:'Beklenen Gol (xG)',expected_assists:'Beklenen Asist (xA)',xg:'Beklenen Gol (xG)',xa:'Beklenen Asist (xA)',total_shots:'Toplam Şut',accurate_passes:'İsabetli Pas',total_passes:'Toplam Pas',keypasses:'Kilit Pas',key_passes:'Kilit Pas',crosses:'Orta',clearances:'Uzaklaştırma',blocks:'Blok',aerials_won:'Kazanılan Hava Topu',successful_dribbles:'Başarılı Çalım',touches:'Topla Buluşma',big_chances_created:'Yaratılan Net Fırsat',big_chances_missed:'Kaçırılan Net Fırsat',fouls:'Faul',yellow_cards:'Sarı Kart',red_cards:'Kırmızı Kart',minutes_played:'Oynadığı Dakika',penalties_saved:'Kurtarılan Penaltı'};
 const plLabel=k=>PL_TR[String(k).toLowerCase()]||String(k).replace(/_/g,' ').replace(/^./,c=>c.toUpperCase());
@@ -4200,12 +4236,26 @@ function renderPlayer(){
   $('#shTitle').textContent=trPlayerName(cur.it.name);
   const i=cur.info,t=cur.stats;
   const photos=[cur.pitchPhoto,(i&&i.pitchPhoto),...((i&&i.profilePhotos)||[]),...((i&&i.player&&i.player.photos)||[]),...((t&&t.player&&t.player.photos)||[]),...(Array.isArray(cur.it.photos)?cur.it.photos:[]),cur.it.logo,cur.it.photo,cur.it.image,(i&&i.player&&i.player.logo),(t&&t.player&&t.player.logo)].filter((x,i,a)=>typeof x==='string'&&/^https:\/\//i.test(x)&&a.indexOf(x)===i);
-  const j={player:{name:(i&&i.player&&i.player.name)||cur.it.name,logo:photos[0]||'',photos},about:(i&&i.about)||'',aboutLang:i&&i.aboutLang,bio:Object.assign({},i&&i.bio,t&&t.bio),seasons:(t&&t.seasons)||[],national:(t&&t.national)||[],coach:(t&&t.coach)||[],transfers:(t&&t.transfers)||(i&&i.transfers)||[],injuries:(t&&t.injuries)||(i&&i.injuries)||[],marketValueHistory:(t&&Array.isArray(t.marketValueHistory)&&t.marketValueHistory.length?t.marketValueHistory:(i&&i.marketValueHistory)||[]),historyProviderAvailable:!!(t&&t.sources&&t.sources.transfermarkt&&!/hata|bulunamadı/i.test(String(t.sources.transfermarkt))),tmRefreshRequired:!!(t&&t.tmRefreshRequired),tmRefreshQueued:!!(t&&t.tmRefreshQueued),tmRefreshConfigured:t&&t.tmRefreshConfigured,tmRefreshReason:(t&&t.tmRefreshReason)||'',totals:(t&&t.totals)||null,careerOrder:(t&&t.careerOrder)||{},sources:Object.assign({},i&&i.sources,t&&t.sources)};
+  const j={player:{name:(i&&i.player&&i.player.name)||cur.it.name,logo:photos[0]||'',photos},about:(i&&i.about)||'',aboutLang:i&&i.aboutLang,bio:Object.assign({},i&&i.bio,t&&t.bio),seasons:(t&&t.seasons)||[],national:(t&&t.national)||[],coach:(t&&t.coach)||[],transfers:(t&&t.transfers)||(i&&i.transfers)||[],injuries:(t&&t.injuries)||(i&&i.injuries)||[],marketValueHistory:(t&&Array.isArray(t.marketValueHistory)&&t.marketValueHistory.length?t.marketValueHistory:(i&&i.marketValueHistory)||[]),historyProviderAvailable:!!(t&&t.sources&&t.sources.transfermarkt&&!/hata|bulunamadı/i.test(String(t.sources.transfermarkt))),tmRefreshRequired:!!(t&&t.tmRefreshRequired),tmRefreshQueued:!!(t&&t.tmRefreshQueued),tmRefreshConfigured:t&&t.tmRefreshConfigured,tmRefreshReason:(t&&t.tmRefreshReason)||'',tmRefreshState:(t&&t.tmRefreshState)||'',tmRefreshRetryAt:(t&&t.tmRefreshRetryAt)||'',totals:(t&&t.totals)||null,careerOrder:(t&&t.careerOrder)||{},sources:Object.assign({},i&&i.sources,t&&t.sources)};
   const loading=!cur.statsLoaded&&!cur.serr;
   let h=playerHTML(cur.it,j,loading,cur.tab,cur.f);
-  if(j.tmRefreshQueued)h='<div class="empty"><small>Eksik Transfermarkt kayıtları arka planda yenileme kuyruğuna alındı. Güncellemenin görünmesi için profili kısa süre sonra yeniden aç.</small></div>'+h;
-  else if(j.tmRefreshRequired&&!j.tmRefreshConfigured)h='<div class="empty"><small>Otomatik Transfermarkt yenilemesi yapılandırılmamış. Cloudflare Worker ayarlarına GITHUB_ACTIONS_TOKEN secret anahtarı eklenmeli.</small></div>'+h;
-  else if(j.tmRefreshRequired&&j.tmRefreshReason)h='<div class="empty"><small>Transfermarkt otomatik yenilemesi başlatılamadı: '+esc(j.tmRefreshReason)+'</small></div>'+h;
+  let refreshNotice='';
+  if(cur.tmRefreshStatus==='completed')refreshNotice='<div class="empty"><small>Transfermarkt verileri güncellendi. Profildeki piyasa değeri, sezon istatistikleri, transfer ve sakatlık kayıtları yeniden yüklendi.</small></div>';
+  else if(cur.tmRefreshStatus==='checking')refreshNotice='<div class="empty"><small>Transfermarkt yenilemesi kontrol ediliyor; güncel kayıtlar alınıyor…</small></div>';
+  else if(cur.tmRefreshStatus==='queued')refreshNotice='<div class="empty"><small>Eksik Transfermarkt kayıtları arka planda yenileniyor. Bu ekran tamamlandığında kendini güncelleyecek.</small></div>';
+  else if(cur.tmRefreshStatus==='retry-wait'){
+    const retryText=cur.tmRefreshRetryAt&&Number.isFinite(Date.parse(cur.tmRefreshRetryAt))?' Yeniden deneme: '+new Date(cur.tmRefreshRetryAt).toLocaleString('tr-TR')+'.':'';
+    refreshNotice='<div class="empty"><small>Transfermarkt geçici bir hata verdi. Güvenli yeniden deneme kuyruğunda bekliyor.'+esc(retryText)+'</small></div>';
+  }else if(cur.tmRefreshStatus==='failed')refreshNotice='<div class="empty"><small>Transfermarkt yenilemesi tamamlanamadı: '+esc(cur.tmRefreshFailure||j.tmRefreshReason||'Bilinmeyen hata')+'</small></div>';
+  else if(j.tmRefreshState==='blocked')refreshNotice='<div class="empty"><small>Bu oyuncunun Transfermarkt verisi sağlayıcı tarafından bulunamadı veya kalıcı hata verdi: '+esc(j.tmRefreshReason||'')+'</small></div>';
+  else if(j.tmRefreshState==='dispatch-failed')refreshNotice='<div class="empty"><small>GitHub Actions yenilemesi başlatılamadı: '+esc(j.tmRefreshReason||'')+'</small></div>';
+  else if(j.tmRefreshState==='retry-wait'){
+    const retryText=j.tmRefreshRetryAt&&Number.isFinite(Date.parse(j.tmRefreshRetryAt))?' Yeniden deneme: '+new Date(j.tmRefreshRetryAt).toLocaleString('tr-TR')+'.':'';
+    refreshNotice='<div class="empty"><small>Transfermarkt geçici hata sonrası yeniden deneme zamanını bekliyor.'+esc(retryText)+'</small></div>';
+  }else if(j.tmRefreshQueued)refreshNotice='<div class="empty"><small>Eksik Transfermarkt kayıtları yenileme kuyruğuna alındı. Profil arka planda güncellenecek.</small></div>';
+  else if(j.tmRefreshRequired&&!j.tmRefreshConfigured)refreshNotice='<div class="empty"><small>Otomatik Transfermarkt yenilemesi yapılandırılmamış. Cloudflare Worker ayarlarına GITHUB_ACTIONS_TOKEN secret anahtarı eklenmeli.</small></div>';
+  else if(j.tmRefreshRequired&&j.tmRefreshReason)refreshNotice='<div class="empty"><small>Transfermarkt otomatik yenilemesi başlatılamadı: '+esc(j.tmRefreshReason)+'</small></div>';
+  if(refreshNotice)h=refreshNotice+h;
   if(cur.serr&&!t)h+='<div class="empty"><small>İstatistikler şu anda görüntülenemiyor.</small></div>';
   if(cur.err&&!i)h+='<div class="empty"><small>Bu bölüm şu anda görüntülenemiyor.</small></div>';
   $('#shBody').innerHTML=h;
