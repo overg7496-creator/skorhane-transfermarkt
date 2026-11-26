@@ -2,6 +2,15 @@ name: SkorHane Sync Worker Tests
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "sync/**"
+      - "tests/**"
+      - "database/**"
+      - "SkorHane-Worker.js"
+      - "SkorHane-Worker-kodu-kopyalanabilir.txt"
+      - ".github/workflows/test-sync-workers.yml"
 
 permissions:
   contents: read
