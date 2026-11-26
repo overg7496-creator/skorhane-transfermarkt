@@ -1,2 +1,3 @@
-# The recurring sync worker uses Python standard library only.
-# dcaribou is installed from its public Git repository only for the one-off seed-history job.
+# Single-player Transfermarkt sync uses Python standard library only.
+# felipeall/transfermarkt-api is installed inside the GitHub Actions runner.
+# dcaribou is installed from its public Git repository only for the optional manual seed-history job.
