@@ -4074,11 +4074,47 @@ async function understat(name) {
   const rows = (d.groups && d.groups.season) || [];
   return rows.map((x) => ({ year: Number(x.season), team: String(x.team || ""), m: Number(x.games), g: Number(x.goals), a: Number(x.assists) })).filter((x) => x.year);
 }
+async function tmPlayerSummary(env, id, fallback = {}) {
+  const playerId = String(id || "").replace(/\\D/g, "");
+  if (!playerId) return { photo: "", bio: {}, err: "geçersiz Transfermarkt oyuncu kimliği" };
+  const fields = "tm_id,name,team_name,position,photo_url,profile_payload,current_market_value_eur,current_market_value_text,current_market_value_date";
+  const rows = await tmDbRows(env, "tm_players?select=" + fields + "&tm_id=eq." + encodeURIComponent(playerId) + "&limit=1");
+  const row = rows[0];
+  if (!row) return { photo: "", bio: {}, err: "Transfermarkt oyuncusu henüz veritabanına senkronize edilmemiş" };
+  const raw = row.profile_payload && typeof row.profile_payload === "object" ? row.profile_payload : {};
+  const b = raw.player || raw.data || raw.profile || raw;
+  const nationality = pick(b, "citizenship", "nationality", "nationalities");
+  const nat = Array.isArray(nationality) ? nationality.join(", ") : nationality || "";
+  const club = b.currentClub || b.club || b.team || {};
+  const clubName = (typeof club === "string" ? club : (club && (club.name || club.displayName)) || b.clubName || "") || row.team_name || fallback.team || "";
+  const position = b.position || {};
+  const height = pick(b, "height", "heightM", "heightMeters", "height_cm");
+  const currentValueRaw = pick(b, "marketValue", "marketValueFormatted", "market_value");
+  const currentValue = currentValueRaw && typeof currentValueRaw === "object"
+    ? pick(currentValueRaw, "displayValue", "display_value", "text", "value", "amount")
+    : currentValueRaw;
+  const bio = {
+    ...dateBio(pick(b, "dateOfBirth", "date_of_birth")),
+    "Ayak": footTr(pick(b, "foot", "preferredFoot", "preferred_foot")),
+    "Piyasa Değeri": valueTr(currentValue) || valueTr(row.current_market_value_text) ||
+      (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : ""),
+    "Şu Anki Takım": clubName,
+    "Boy": height ? (typeof height === "number" && height < 3 ? String(height).replace(".", ",") + " m" : height + "") : "",
+    "Uyruk": nat,
+    "Mevki": (typeof position === "string" ? position : (position && (position.main || position.name || position.displayName))) || row.position || fallback.position || "",
+    "Forma No": pick(b, "shirtNumber", "squad_shirt_number", "shirt_number")
+  };
+  const contract = (club && (club.contractExpires || club.contract_expires)) || b.contractUntil || b.contract_until || b.contractExpires || b.contract_expires;
+  if (contract) bio["Sözleşme Bitişi"] = contract;
+  return { photo: row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "", bio, name: row.name || b.name || fallback.name || "", tmId: playerId };
+}
+
 async function tmPlayer(env, id) {
   const out = { photo: "", bio: {}, seasons: [], transfers: [], marketValueHistory: [], injuries: [], absences: [] };
   const playerId = String(id || "").replace(/\D/g, "");
   if (!playerId) return { ...out, err: "geçersiz Transfermarkt oyuncu kimliği" };
-  const rows = await tmDbRows(env, "tm_players?select=*&tm_id=eq." + encodeURIComponent(playerId) + "&limit=1");
+  const playerFields = "tm_id,name,team_name,position,photo_url,profile_payload,stats_payload,current_season_payload,transfers_payload,market_value_payload,injuries_payload,absences_payload,current_market_value_eur,current_market_value_text,last_felipe_synced_at";
+  const rows = await tmDbRows(env, "tm_players?select=" + playerFields + "&tm_id=eq." + encodeURIComponent(playerId) + "&limit=1");
   const dbRow = rows[0];
   if (!dbRow) return { ...out, err: "Transfermarkt oyuncusu henüz veritabanına senkronize edilmemiş" };
   const sourceRecords = await tmDbRows(env,
@@ -4118,16 +4154,21 @@ async function tmPlayer(env, id) {
   const b = profileRaw.player || profileRaw.data || profileRaw.profile || profileRaw;
   const statsRaw = row.stats_payload || {};
   let statsRows = Array.isArray(statsRaw) ? statsRaw : (statsRaw.stats || statsRaw.data || statsRaw.items || []);
+  let transferRows = [], marketRows = [];
   // Merge two DB-backed sources: felipeall's active-season totals and
   // dcaribou's one-time historical appearance aggregates. Do not let the
   // presence of current-season rows hide the older seasons.
   try {
     const selectStats = "select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,second_yellow_cards,red_cards,goals_conceded,clean_sheets&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc&limit=1000";
     const selectHistoryStats = "select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,red_cards&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc&limit=1000";
-    const [dbStats, historyStats] = await Promise.all([
+    const [dbStats, historyStats, transferResult, marketResult] = await Promise.all([
       tmDbRows(env, "tm_player_season_stats?" + selectStats),
-      tmDbRows(env, "tm_appearance_season_totals?" + selectHistoryStats)
+      tmDbRows(env, "tm_appearance_season_totals?" + selectHistoryStats),
+      tmDbRows(env, "tm_transfers?select=transfer_date,from_club,to_club,transfer_type,fee_text,fee_eur&tm_id=eq." + encodeURIComponent(playerId) + "&order=transfer_date.desc&limit=100").catch(() => []),
+      tmDbRows(env, "tm_market_values?select=valuation_date,value_eur,display_value,club_name&tm_id=eq." + encodeURIComponent(playerId) + "&order=valuation_date.desc&limit=100").catch(() => [])
     ]);
+    transferRows = transferResult;
+    marketRows = marketResult;
     const normalizeRows = rows => rows.map(x => ({
       seasonID: x.season_id, competitionName: x.competition_name, clubName: x.club_name,
       appearances: x.appearances, starts: x.starts, goals: x.goals, assists: x.assists,
@@ -4149,7 +4190,6 @@ async function tmPlayer(env, id) {
   const transferRaw = row.transfers_payload || {};
   const payloadTransfers = listPayload(transferRaw, ["transfers", "history", "items", "data"]);
   try {
-    const transferRows = await tmDbRows(env, "tm_transfers?select=transfer_date,from_club,to_club,transfer_type,fee_text,fee_eur&tm_id=eq." + encodeURIComponent(playerId) + "&order=transfer_date.desc&limit=100");
     const transferClubName = value => {
       if (value == null) return "";
       if (typeof value === "string" || typeof value === "number") return String(value);
@@ -4173,10 +4213,6 @@ async function tmPlayer(env, id) {
   } catch (_) {
     out.transfers = payloadTransfers;
   }
-  let marketRows = [];
-  try {
-    marketRows = await tmDbRows(env, "tm_market_values?select=valuation_date,value_eur,display_value,club_name&tm_id=eq." + encodeURIComponent(playerId) + "&order=valuation_date.desc&limit=100");
-  } catch (_) {}
   if (!marketRows.length) marketRows = listPayload(row.market_value_payload || {}, ["market_value_history", "marketValueHistory", "history", "marketValues", "valuations", "items", "data"]);
   out.marketValueHistory = marketRows;
   out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]).map(item => ({ ...item, injury: item.injury || item.reason || item.type || item.description || item.injuryType || "", from_date: item.from_date || item.fromDate || item.from || item.startDate || item.start || "", until_date: item.until_date || item.untilDate || item.until || item.endDate || item.end || "", season: item.season || item.seasonName || item.season_id || "", days: item.days ?? item.daysMissed ?? item.durationDays, games_missed: item.games_missed ?? item.gamesMissed ?? item.missedMatches }));
@@ -4476,16 +4512,30 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
   let ss = null;
   const tasks = [];
   const title = async () => wikiT || (name ? await cached("wt2:" + role + ":" + nkp(name), async () => { const r = await wikiSearch(name, coach ? "coach" : "player"); const target=nkp(name); const exact=r.filter(x => nkp(x.name) === target || nkp(x.wiki) === target); const m = exact.length === 1 ? exact[0] : (r.length===1?r[0]:null); return { body: { t: m ? m.wiki : "" }, ttl: m ? 21600 : 60 }; }).then((c) => c.body.t) : "");
-  if (wantInfo && slug && !coach) tasks.push((async () => { try { ss = await ssPlayerInfo(env, slug); st.sportscore = "ok"; } catch (e) { st.sportscore = "hata: " + e.message; } })());
-  if (wantInfo && name && espnId && !coach) tasks.push((async () => { try { out.es = await espnPlayer(name, 1, espnId); st.espn_profil = out.es && (out.es.headshot || Object.values(out.es.bio || {}).some(Boolean)) ? "ok" : (out.es.note || "profil verisi yok"); } catch (e) { st.espn_profil = "hata: " + (e.message || e); } })());
   if (coach && apiFootballKey(env)) tasks.push((async () => { try { out.afCoach = await apiFootballCoachCareer(env, name, afId); st.api_football_coach = out.afCoach && out.afCoach.career.length ? "ok " + out.afCoach.career.length + " takım" : "kariyer verisi yok"; } catch (e) { st.api_football_coach = "hata: " + (e.message || e); } })());
   if (wantInfo && !coach) {
-    // Profil cevabını fotoğraf aramasına kilitleme. Fotoğraf, istemcide ayrı
-    // /pitch-player-photo isteğiyle paralel yüklenir; profil kartı beklemez.
+    // İlk profil cevabı yalnızca Supabase'teki hafif oyuncu özetini okur.
+    // Harici Wikipedia/SportScore istekleri profil açılışını bekletmez.
     st.pitchapi_photo = "fotoğraf ayrı istekle yükleniyor";
     st.player_photos = "fotoğraf ayrı istekle yükleniyor";
+    if (!wantStats) tasks.push((async () => {
+      try {
+        let id = tmId;
+        if (!id && name) {
+          const candidates = await tmSearch(env, name);
+          const match = selectPlayerCandidate(candidates, name, teamHint, posHint);
+          id = match && match.tm;
+        }
+        if (!id) { st.transfermarkt = "Transfermarkt oyuncusu bulunamadı"; return; }
+        out.tm = await tmPlayerSummary(env, id, { name, team: teamHint, position: posHint });
+        out.tmId = id;
+        st.transfermarkt = out.tm.err ? "hata: " + out.tm.err : "ok";
+      } catch (error) {
+        st.transfermarkt = "hata: " + (error && error.message || error);
+      }
+    })());
   }
-  if (wantInfo) tasks.push((async () => {
+  if (wantInfo && coach) tasks.push((async () => {
     try {
       const t = await title();
       if (!t) { st.wikipedia = "bulunamadı"; return; }
@@ -4505,8 +4555,8 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
         out.coachRows = rows; st.wikipedia_teknik_direktor = rows.length ? "ok " + rows.length : "tablo bulunamadı";
       } catch (e) { st.wikipedia_teknik_direktor = "hata: " + (e.message || e); }
     })());
-  } else if (!coach && (wantStats || wantInfo)) {
-    // Load Transfermarkt profile history for info requests as well as stats requests.
+  } else if (!coach && wantStats) {
+    // Full history is loaded only by the stats/history request.
     tasks.push((async () => {
       try {
         let id = tmId;
@@ -7948,7 +7998,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf40:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf41:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
