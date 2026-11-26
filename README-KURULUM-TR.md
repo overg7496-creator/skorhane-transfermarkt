@@ -67,7 +67,7 @@ Cloudflare Worker → Settings → Variables and Secrets bölümünde şu secret
 | `SUPABASE_SERVICE_ROLE_KEY` | Worker'ın sunucu tarafı Supabase erişimi |
 | `GITHUB_ACTIONS_TOKEN` | Tek oyuncu workflow'unu tetikleyen fine-grained GitHub PAT |
 
-`GITHUB_ACTIONS_TOKEN` için yalnızca bu depoya erişim ver. Fine-grained PAT izinleri `Actions: Read and write` ve `Contents: Read` olmalı. Token'ı `SkorHane-HTML-kodu-kopyalanabilir.txt` içine koyma; yalnızca Cloudflare secret olarak sakla. Token sızdıysa GitHub'dan iptal edip yenisini üret.
+`GITHUB_ACTIONS_TOKEN` için yalnızca bu depoya erişim ver. Fine-grained PAT için yalnızca bu depoda `Actions: Read and write` izni ver; workflow dispatch endpoint'i için gereken izin budur. Token'ı `SkorHane-HTML-kodu-kopyalanabilir.txt` içine koyma; yalnızca Cloudflare secret olarak sakla. Token sızdıysa GitHub'dan iptal edip yenisini üret.
 
 `SkorHane-Worker.js` dosyasının tamamını Cloudflare `skor3` Worker koduyla değiştir ve Deploy et. `SkorHane-Worker-kodu-kopyalanabilir.txt` aynı içeriğin kopyasıdır.
 
