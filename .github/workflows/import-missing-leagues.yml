@@ -1,7 +1,7 @@
 name: SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı
 
 on:
-  # Bu dosya veya kadro aktarım işçisi güncellendiğinde ayrı aktarımı başlat.
+  # Yalnızca Actions ekranından manuel olarak başlatılır.
   workflow_dispatch:
 
 permissions:
