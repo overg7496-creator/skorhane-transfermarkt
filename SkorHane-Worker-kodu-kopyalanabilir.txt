@@ -4113,10 +4113,26 @@ async function tmPlayer(env, id) {
   const payloadTransfers = listPayload(transferRaw, ["transfers", "history", "items", "data"]);
   try {
     const transferRows = await tmDbRows(env, "tm_transfers?select=transfer_date,from_club,to_club,transfer_type,fee_text,fee_eur&tm_id=eq." + encodeURIComponent(playerId) + "&order=transfer_date.desc&limit=100");
+    const transferClubName = value => {
+      if (value == null) return "";
+      if (typeof value === "string" || typeof value === "number") return String(value);
+      return String(value.name || value.displayName || value.display_name || value.shortName || (value.id != null ? "Kulüp #" + value.id : ""));
+    };
+    const transferFeeText = value => {
+      if (value == null) return "";
+      if (typeof value === "object") return String(value.displayValue || value.display_value || value.text || value.value || value.amount || "");
+      return String(value);
+    };
     out.transfers = transferRows.length ? transferRows.map(x => ({
       date: x.transfer_date || "", from: x.from_club || "", to: x.to_club || "",
       kind: x.transfer_type || "", fee: x.fee_text || (x.fee_eur != null ? Number(x.fee_eur).toLocaleString("tr-TR") + " €" : "")
-    })) : payloadTransfers;
+    })) : payloadTransfers.map(x => ({
+      date: x.date || x.transferDate || x.transfer_date || "",
+      from: transferClubName(x.clubFrom || x.club_from || x.from_club || x.from || x.fromClub),
+      to: transferClubName(x.clubTo || x.club_to || x.to_club || x.to || x.toClub),
+      kind: x.transferType || x.transfer_type || x.type || "",
+      fee: transferFeeText(x.fee || x.feeText || x.fee_text || x.transferFee || x.transfer_fee)
+    }));
   } catch (_) {
     out.transfers = payloadTransfers;
   }
@@ -7889,7 +7905,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf35:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf36:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
