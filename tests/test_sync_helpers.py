@@ -55,12 +55,37 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("tm_source_records?select=record_type,payload,fetched_at", worker)
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
-        self.assertIn('"pf40:"', worker)
+        self.assertIn('"pf41:"', worker)
         self.assertIn("function tmSupabaseBase(env)", worker)
         self.assertIn("SUPABASE_URL Project URL olmalı", worker)
         self.assertIn('refreshState = await queueTmPlayerRefresh', worker)
         self.assertIn('refreshRetryAt = refreshState.retryAt', worker)
         self.assertIn('tmRefreshState:', worker)
+
+
+    def test_player_profile_uses_cached_summary_and_lightweight_worker_path(self):
+        worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
+        worker_copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
+        html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
+        self.assertEqual(worker, worker_copy)
+        self.assertIn("async function tmPlayerSummary(env, id, fallback = {})", worker)
+        self.assertIn("if (!wantStats) tasks.push", worker)
+        self.assertIn("if (wantInfo && coach)", worker)
+        self.assertIn("else if (!coach && wantStats)", worker)
+        self.assertIn("playerFields = \"tm_id,name,team_name,position,photo_url,profile_payload", worker)
+        self.assertIn("readPlayerInfoCache", html)
+        self.assertIn("savePlayerInfoCache(it.name,j)", html)
+        self.assertIn("infoLoaded:!!cachedLegacyInfo", html)
+        self.assertIn("transferResult, marketResult", worker)
+
+    def test_single_player_workflow_uses_short_local_delay_and_dependency_cache(self):
+        workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
+        source = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
+        self.assertIn('FELIPE_DELAY_MIN_SECONDS: "0.8"', workflow)
+        self.assertIn('FELIPE_DELAY_MAX_SECONDS: "1.2"', workflow)
+        self.assertIn("uses: actions/cache@v4", workflow)
+        self.assertIn('os.getenv("FELIPE_DELAY_MIN_SECONDS", "0.8")', source)
+        self.assertIn('os.getenv("FELIPE_DELAY_MAX_SECONDS", "1.2")', source)
 
     def test_required_player_endpoint_failure_propagates(self):
         from unittest.mock import patch
@@ -497,7 +522,7 @@ class SyncHelperTests(unittest.TestCase):
         worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
         copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, copy)
-        self.assertIn('"pf40:"', worker)
+        self.assertIn('"pf41:"', worker)
 
     def test_database_saves_goalkeeper_season_fields(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
