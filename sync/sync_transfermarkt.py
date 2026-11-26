@@ -291,6 +291,11 @@ DETAIL_ENDPOINTS = {
 }
 
 
+# One-time repair boundary: snapshots fetched before this code fix must be
+# rechecked, because older code treated empty arrays as proof that data existed.
+DETAIL_REPAIR_CUTOFF = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
+
+
 def player_detail_refresh_plan(tm_id: str, player: dict[str, Any]) -> set[str]:
     """Return only missing or stale Felipe endpoint names for one player."""
     record_types = ",".join(item[1] for item in DETAIL_ENDPOINTS.values())
@@ -301,14 +306,10 @@ def player_detail_refresh_plan(tm_id: str, player: dict[str, Any]) -> set[str]:
     )
     fetched = {str(row.get("record_type")): row.get("fetched_at") for row in rows if isinstance(row, dict)}
     stale_days = max(1, int(os.getenv("TM_DETAIL_STALE_DAYS", "7")))
-    cutoff = datetime.now(timezone.utc) - timedelta(days=stale_days)
+    cutoff = max(datetime.now(timezone.utc) - timedelta(days=stale_days), DETAIL_REPAIR_CUTOFF)
     due: set[str] = set()
     for endpoint, (column, record_type, keys) in DETAIL_ENDPOINTS.items():
         payload = player.get(column)
-        if endpoint == "profile":
-            has_payload = isinstance(payload, dict) and bool(payload)
-        else:
-            has_payload = isinstance(payload, dict) and any(isinstance(payload.get(key), list) for key in keys)
         stamp = fetched.get(record_type)
         fresh = False
         if stamp:
@@ -319,6 +320,15 @@ def player_detail_refresh_plan(tm_id: str, player: dict[str, Any]) -> set[str]:
                 fresh = parsed >= cutoff
             except ValueError:
                 fresh = False
+        if endpoint == "profile":
+            has_payload = isinstance(payload, dict) and bool(payload)
+        else:
+            arrays = [payload.get(key) for key in keys] if isinstance(payload, dict) else []
+            has_schema = any(isinstance(value, list) for value in arrays)
+            has_rows = any(isinstance(value, list) and len(value) > 0 for value in arrays)
+            # A genuinely empty endpoint is accepted only after a fresh,
+            # post-repair source fetch. Old [] values are treated as missing.
+            has_payload = has_rows or (fresh and has_schema)
         if not has_payload or not fresh:
             due.add(endpoint)
     return due
