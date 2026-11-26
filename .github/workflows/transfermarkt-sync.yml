@@ -26,7 +26,7 @@ permissions:
 
 concurrency:
   # Same player is serialized; different player IDs remain independent.
-  group: skorhane-transfermarkt-${{ github.event.inputs.mode }}-${{ github.event.inputs.player_id || github.run_id }}
+  group: skorhane-transfermarkt-${{ github.event.inputs.player_ids || github.event.inputs.player_id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -36,7 +36,7 @@ jobs:
     env:
       TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id }}
       TM_PRESEED_PLAYER_IDS: ${{ github.event.inputs.player_ids }}
-      TM_PRESEED_MAX_PLAYERS: "50"
+      TM_PRESEED_MAX_PLAYERS: "20"
       FELIPE_API_BASE: http://127.0.0.1:8000
       HTTP_MAX_RETRIES: "4"
       HTTP_TIMEOUT_SECONDS: "45"
@@ -116,7 +116,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TM_PRESEED_PLAYER_IDS: ${{ github.event.inputs.player_ids }}
-          TM_PRESEED_MAX_PLAYERS: "50"
+          TM_PRESEED_MAX_PLAYERS: "20"
         run: python sync/sync_transfermarkt.py preseed-players --player-ids "$TM_PRESEED_PLAYER_IDS"
 
       - name: Verify persisted player details in Supabase
