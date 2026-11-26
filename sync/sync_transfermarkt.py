@@ -1718,7 +1718,7 @@ def parse_preseed_player_ids(raw: str | None) -> list[str]:
     if invalid:
         raise RuntimeError("Geçersiz Transfermarkt oyuncu ID'si: " + ", ".join(invalid[:10]))
     ids = list(dict.fromkeys(tokens))
-    maximum = max(1, int(os.getenv("TM_PRESEED_MAX_PLAYERS", "50")))
+    maximum = max(1, int(os.getenv("TM_PRESEED_MAX_PLAYERS", "20")))
     if len(ids) > maximum:
         raise RuntimeError(
             f"Tek ön doldurma çalışmasında en fazla {maximum} oyuncu destekleniyor; "
