@@ -3972,6 +3972,8 @@ function scheduleTmRefreshProbe(my,qs,attempt=0){
       }else if(fresh.tmRefreshQueued&&['queued','running','already-queued','concurrent-queue'].includes(state)&&attempt<5){
         my.tmRefreshStatus='queued';my.tmRefreshFailure='';renderPlayer();
         scheduleTmRefreshProbe(my,qs,attempt+1);return;
+      }else if(fresh.tmRefreshQueued&&['queued','running','already-queued','concurrent-queue'].includes(state)){
+        my.tmRefreshStatus='waiting';my.tmRefreshFailure='';
       }else if(state==='retry-wait'){
         my.tmRefreshStatus='retry-wait';my.tmRefreshRetryAt=fresh.tmRefreshRetryAt||'';
       }else{
@@ -4243,6 +4245,7 @@ function renderPlayer(){
   if(cur.tmRefreshStatus==='completed')refreshNotice='<div class="empty"><small>Transfermarkt verileri güncellendi. Profildeki piyasa değeri, sezon istatistikleri, transfer ve sakatlık kayıtları yeniden yüklendi.</small></div>';
   else if(cur.tmRefreshStatus==='checking')refreshNotice='<div class="empty"><small>Transfermarkt yenilemesi kontrol ediliyor; güncel kayıtlar alınıyor…</small></div>';
   else if(cur.tmRefreshStatus==='queued')refreshNotice='<div class="empty"><small>Eksik Transfermarkt kayıtları arka planda yenileniyor. Bu ekran tamamlandığında kendini güncelleyecek.</small></div>';
+  else if(cur.tmRefreshStatus==='waiting')refreshNotice='<div class="empty"><small>Transfermarkt yenilemesi hâlâ sürüyor. İşlem uzadı; sonucu görmek için profili kısa süre sonra yeniden aç.</small></div>';
   else if(cur.tmRefreshStatus==='retry-wait'){
     const retryText=cur.tmRefreshRetryAt&&Number.isFinite(Date.parse(cur.tmRefreshRetryAt))?' Yeniden deneme: '+new Date(cur.tmRefreshRetryAt).toLocaleString('tr-TR')+'.':'';
     refreshNotice='<div class="empty"><small>Transfermarkt geçici bir hata verdi. Güvenli yeniden deneme kuyruğunda bekliyor.'+esc(retryText)+'</small></div>';
