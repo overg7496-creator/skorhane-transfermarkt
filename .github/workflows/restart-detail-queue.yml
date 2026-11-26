@@ -1,9 +1,7 @@
 name: Restart original player detail queue
 
 on:
-  push:
-    paths:
-      - ".github/workflows/restart-detail-queue.yml"
+  workflow_dispatch:
 
 permissions:
   actions: write
