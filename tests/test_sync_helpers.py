@@ -297,10 +297,12 @@ class SyncHelperTests(unittest.TestCase):
     def test_main_workflow_is_manual_and_serializes_by_player_id(self):
         workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn("skorhane-transfermarkt-player-", workflow)
+        self.assertIn("skorhane-transfermarkt-", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertNotRegex(workflow, r"(?m)^\s+(?:schedule|push):")
-        self.assertIn("required: true", workflow[workflow.index("player_id:"):workflow.index("permissions:")])
+        self.assertIn("required: false", workflow[workflow.index("player_id:"):workflow.index("permissions:")])
+        self.assertIn("player_ids:", workflow)
+        self.assertIn('TM_PRESEED_MAX_PLAYERS: "20"', workflow)
         self.assertNotIn("TM_DETAIL_EXPECTED_COHORT_SIZE", workflow)
 
     def test_empty_legacy_player_snapshots_are_requeued_after_repair_cutoff(self):
@@ -512,10 +514,10 @@ class SyncHelperTests(unittest.TestCase):
     def test_transfermarkt_ui_silently_refreshes_all_player_sections_in_place(self):
         html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertIn("function scheduleTmRefreshProbe", html)
-        self.assertIn("api('/player?part=info'+qs)", html)
-        self.assertIn("api('/player?part=stats'+qs)", html)
-        self.assertIn("my.info=freshInfo", html)
+        self.assertIn("const freshStats=await api('/player?part=stats'+qs)", html)
         self.assertIn("my.stats=freshStats", html)
+        self.assertNotIn("const freshInfo=await api('/player?part=info'+qs)", html)
+        self.assertNotIn("my.info=freshInfo", html)
         self.assertIn("attempt===0?6000:12000", html)
         self.assertIn("skorhane.playerstats.legacy.v7.", html)
         self.assertNotIn("Eksik Transfermarkt kayıtları yenileme kuyruğuna alındı", html)
@@ -525,7 +527,7 @@ class SyncHelperTests(unittest.TestCase):
         worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
         copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, copy)
-        self.assertIn('"pf41:"', worker)
+        self.assertIn('"pf42:"', worker)
 
     def test_database_saves_goalkeeper_season_fields(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
