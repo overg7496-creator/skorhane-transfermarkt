@@ -4104,9 +4104,10 @@ async function tmPlayer(env, id) {
   // presence of current-season rows hide the older seasons.
   try {
     const selectStats = "select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,second_yellow_cards,red_cards,goals_conceded,clean_sheets&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc&limit=1000";
+    const selectHistoryStats = "select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,red_cards&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc&limit=1000";
     const [dbStats, historyStats] = await Promise.all([
       tmDbRows(env, "tm_player_season_stats?" + selectStats),
-      tmDbRows(env, "tm_appearance_season_totals?" + selectStats)
+      tmDbRows(env, "tm_appearance_season_totals?" + selectHistoryStats)
     ]);
     const normalizeRows = rows => rows.map(x => ({
       seasonID: x.season_id, competitionName: x.competition_name, clubName: x.club_name,
@@ -7922,7 +7923,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf37:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf38:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
