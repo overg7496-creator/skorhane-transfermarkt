@@ -4096,6 +4096,14 @@ function tmSeasonRows(sourceRows) {
 function tmExtractTableRows(payload) {
   if (Array.isArray(payload)) return payload;
   if (!payload || typeof payload !== "object") return [];
+  if (Array.isArray(payload.tables)) {
+    return payload.tables.flatMap(table => (Array.isArray(table && table.rows) ? table.rows : [])
+      .map(row => ({
+        ...row,
+        tableName: String(table && table.name || ""),
+        team: { id:String(row.clubId || ""), name:String(row.clubName || "") }
+      })));
+  }
   for (const key of ["table", "standings", "rows", "data"]) {
     const value = payload[key];
     if (Array.isArray(value)) return value;
@@ -4203,7 +4211,7 @@ async function tmTeamData(env, code, year, teamName) {
   const tableRows = tmExtractTableRows(tableRecord && tableRecord.payload);
   const teamRow = tableRows.find(row => {
     const t = row && (row.team || row.club || row);
-    return teamSearchKey(t && (t.name || t.club_name || t.team_name) || "") === teamSearchKey(club.club_name || teamName);
+    return teamSearchKey(t && (t.name || t.club_name || t.team_name || t.clubName) || "") === teamSearchKey(club.club_name || teamName);
   }) || {};
   const teamStats = {
     matches:Number(teamRow.matches_played ?? teamRow.played ?? teamRow.matches ?? teamRow.matchesPlayed) || 0,
