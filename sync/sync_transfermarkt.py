@@ -1087,7 +1087,7 @@ def sync_felipeall(
                     club = transfer.get(key)
                     if isinstance(club, dict):
                         cid = safe_text(club.get("id"))
-                        cname = safe_text(club.get("name"), club.get("display_name"))
+                        cname = safe_text(club.get("name"), club.get("displayName"), club.get("display_name"))
                         if cid and cname:
                             club_names[cid] = cname
     
@@ -1107,7 +1107,7 @@ def sync_felipeall(
                     "to_club": to_club or "",
                     "transfer_type": safe_text(transfer.get("transfer_type"), transfer.get("transferType")),
                     "fee_text": fee_text,
-                    "fee_eur": parse_money_eur(fee),
+                    "fee_eur": parse_money_eur(fee_text or fee),
                     "payload": transfer,
                     "source": "felipeall",
                 }})
