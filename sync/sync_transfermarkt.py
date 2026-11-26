@@ -412,13 +412,25 @@ def safe_text(*values: Any) -> str | None:
             continue
         if isinstance(value, dict):
             value = (value.get("name") or value.get("displayName") or value.get("display_name")
-                     or value.get("displayValue") or value.get("display_value") or value.get("value")
-                     or value.get("text"))
+                     or value.get("shortName") or value.get("displayValue") or value.get("display_value")
+                     or value.get("value") or value.get("text"))
         if isinstance(value, (int, float)):
             return str(value)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def normalize_transfer_club(value: Any) -> str | None:
+    """Read the Felipe club object; use an ID label only when its name is absent."""
+    if isinstance(value, dict):
+        name = safe_text(value.get("name"), value.get("displayName"), value.get("display_name"),
+                         value.get("shortName"), value.get("clubName"))
+        if name:
+            return name
+        club_id = safe_text(value.get("id"), value.get("clubId"), value.get("club_id"))
+        return f"Kulüp #{club_id}" if club_id else None
+    return safe_text(value)
 
 
 def player_id_from_row(row: dict[str, Any]) -> str | None:
@@ -982,6 +994,12 @@ def sync_felipeall(
                 db_patch(f"tm_players?tm_id=eq.{quote(tm_id)}", {
                     "last_felipe_synced_at": datetime.now(timezone.utc).isoformat()
                 })
+                if state:
+                    db_delete(
+                        f"tm_source_records?source=eq.felipeall&record_type=eq.player_detail_queue"
+                        f"&external_id=eq.{quote(tm_id)}&record_key=eq.details"
+                    )
+                    states.pop(tm_id, None)
                 update_worker_refresh_queue(tm_id, "completed",
                                             completed_at=datetime.now(timezone.utc).isoformat())
                 LOG.info("Oyuncunun Transfermarkt detayları güncel; API çağrısı yapılmadı (ID=%s).", tm_id)
@@ -1185,13 +1203,17 @@ def sync_felipeall(
                     if isinstance(club, dict):
                         cid = safe_text(club.get("id"))
                         cname = safe_text(club.get("name"), club.get("displayName"), club.get("display_name"))
-                        if cid and cname:
-                            club_names[cid] = cname
+                        if cid:
+                            club_names[cid] = cname or f"Kulüp #{cid}"
     
             # All transfer rows (not only the current squad's joinedDate) are persisted.
             for transfer in transfer_rows:
-                from_club = safe_text(transfer.get("club_from"), transfer.get("from_club"), transfer.get("clubFrom"))
-                to_club = safe_text(transfer.get("club_to"), transfer.get("to_club"), transfer.get("clubTo"))
+                from_club = normalize_transfer_club(
+                    transfer.get("club_from"), transfer.get("from_club"), transfer.get("clubFrom")
+                )
+                to_club = normalize_transfer_club(
+                    transfer.get("club_to"), transfer.get("to_club"), transfer.get("clubTo")
+                )
                 transfer_date = normalize_date(value_from(transfer, ("date", "transfer_date", "transferDate"))) or ""
                 fee = value_from(transfer, ("fee", "fee_eur", "transfer_fee"))
                 fee_text = safe_text(transfer.get("fee_text"), transfer.get("feeText"), fee)
