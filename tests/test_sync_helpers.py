@@ -56,6 +56,8 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
         self.assertIn('"pf39:"', worker)
+        self.assertIn("function tmSupabaseBase(env)", worker)
+        self.assertIn("SUPABASE_URL Project URL olmalı", worker)
         self.assertIn('refreshState = await queueTmPlayerRefresh', worker)
         self.assertIn('refreshRetryAt = refreshState.retryAt', worker)
         self.assertIn('tmRefreshState:', worker)
