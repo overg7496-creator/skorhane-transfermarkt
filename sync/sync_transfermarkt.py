@@ -889,6 +889,11 @@ def sync_felipeall(
         if missing_only:
             due = player_detail_refresh_plan(tm_id, player)
             if not due:
+                # All per-endpoint snapshots are fresh. Align the aggregate marker too,
+                # otherwise Worker would enqueue this same player on every profile open.
+                db_patch(f"tm_players?tm_id=eq.{quote(tm_id)}", {
+                    "last_felipe_synced_at": datetime.now(timezone.utc).isoformat()
+                })
                 LOG.info("Oyuncunun Transfermarkt detayları güncel; API çağrısı yapılmadı (ID=%s).", tm_id)
                 continue
             player["_refresh_endpoints"] = sorted(due)
@@ -1035,7 +1040,7 @@ def sync_felipeall(
                 normalized["absences_payload"] = absences_payload
             if current_payload:
                 normalized["current_season_payload"] = current_payload
-            if current_value_eur is not None:
+            if current_value_eur is not None and ({"profile", "market_value"} & refresh_endpoints):
                 normalized["current_market_value_eur"] = current_value_eur
                 normalized["current_market_value_text"] = safe_text(current_value)
                 normalized["current_market_value_observed_at"] = datetime.now(timezone.utc).isoformat()
