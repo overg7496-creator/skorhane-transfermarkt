@@ -78,6 +78,7 @@ jobs:
           FELIPE_API_BASE: http://127.0.0.1:8000
           TM_SEASON: "2026"
           TM_MAX_PLAYERS_PER_RUN: "80"
+          TM_DETAIL_PRESEED_ALL_HISTORY: "true"
           TM_DETAIL_MAX_RUNTIME_SECONDS: "16200"
           TM_DETAIL_CONTINUATION_WORKFLOW: refresh-imported-player-details.yml
           FELIPE_DELAY_MIN_SECONDS: "8.0"
