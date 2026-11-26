@@ -3965,23 +3965,18 @@ function scheduleTmRefreshProbe(my,qs,attempt=0){
     if(cur!==my)return;
     my.tmRefreshStatus='checking';
     try{
-      // Reload both halves of the player screen together: profile/summary and all Transfermarkt history tabs.
-      const [freshInfo,freshStats]=await Promise.all([
-        api('/player?part=info'+qs),
-        api('/player?part=stats'+qs)
-      ]);
+      // History refresh only: the lightweight summary is fetched once and stays visible.
+      const freshStats=await api('/player?part=stats'+qs);
       if(cur!==my)return;
-      my.info=freshInfo;my.infoLoaded=true;my.err='';
       my.stats=freshStats;my.statsLoaded=true;my.serr='';
       if(Array.isArray(my.pitchCareerRows))mergePitchCareerIntoStats(my.stats,my.pitchCareerRows);
       savePlayerStatsCache(my.it.name,freshStats);
-      const pending=!!(freshInfo.tmRefreshRequired||freshStats.tmRefreshRequired);
-      const queued=!!(freshInfo.tmRefreshQueued||freshStats.tmRefreshQueued);
-      const state=String(freshStats.tmRefreshState||freshInfo.tmRefreshState||'');
+      const pending=!!freshStats.tmRefreshRequired;
+      const queued=!!freshStats.tmRefreshQueued;
+      const state=String(freshStats.tmRefreshState||'');
       if(!pending){
         my.tmRefreshStatus='completed';my.tmRefreshFailure='';my.tmRefreshRetryAt='';
         renderPlayer();
-        loadPitchPlayerProfilePhoto(my);
         if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info);
         return;
       }
@@ -3992,8 +3987,8 @@ function scheduleTmRefreshProbe(my,qs,attempt=0){
         return;
       }
       my.tmRefreshStatus=state==='retry-wait'?'retry-wait':(queued?'waiting':'failed');
-      my.tmRefreshRetryAt=freshStats.tmRefreshRetryAt||freshInfo.tmRefreshRetryAt||'';
-      my.tmRefreshFailure=freshStats.tmRefreshReason||freshInfo.tmRefreshReason||'';
+      my.tmRefreshRetryAt=freshStats.tmRefreshRetryAt||'';
+      my.tmRefreshFailure=freshStats.tmRefreshReason||'';
       renderPlayer();
     }catch(error){
       if(cur!==my)return;
@@ -4254,11 +4249,8 @@ function renderPlayer(){
   const i=cur.info,t=cur.stats;
   const photos=[cur.pitchPhoto,(i&&i.pitchPhoto),...((i&&i.profilePhotos)||[]),...((i&&i.player&&i.player.photos)||[]),...((t&&t.player&&t.player.photos)||[]),...(Array.isArray(cur.it.photos)?cur.it.photos:[]),cur.it.logo,cur.it.photo,cur.it.image,(i&&i.player&&i.player.logo),(t&&t.player&&t.player.logo)].filter((x,i,a)=>typeof x==='string'&&/^https:\/\//i.test(x)&&a.indexOf(x)===i);
   const j={player:{name:(i&&i.player&&i.player.name)||cur.it.name,logo:photos[0]||'',photos},about:(i&&i.about)||'',aboutLang:i&&i.aboutLang,bio:Object.assign({},i&&i.bio,t&&t.bio),seasons:(t&&t.seasons)||[],national:(t&&t.national)||[],coach:(t&&t.coach)||[],transfers:(t&&t.transfers)||(i&&i.transfers)||[],injuries:(t&&t.injuries)||(i&&i.injuries)||[],marketValueHistory:(t&&Array.isArray(t.marketValueHistory)&&t.marketValueHistory.length?t.marketValueHistory:(i&&i.marketValueHistory)||[]),historyProviderAvailable:!!(t&&t.sources&&t.sources.transfermarkt&&!/hata|bulunamadı/i.test(String(t.sources.transfermarkt))),tmRefreshRequired:!!(t&&t.tmRefreshRequired),tmRefreshQueued:!!(t&&t.tmRefreshQueued),tmRefreshConfigured:t&&t.tmRefreshConfigured,tmRefreshReason:(t&&t.tmRefreshReason)||'',tmRefreshState:(t&&t.tmRefreshState)||'',tmRefreshRetryAt:(t&&t.tmRefreshRetryAt)||'',totals:(t&&t.totals)||null,careerOrder:(t&&t.careerOrder)||{},sources:Object.assign({},i&&i.sources,t&&t.sources)};
-  const refreshState=String((t&&t.tmRefreshState)||(i&&i.tmRefreshState)||'');
-  const refreshPending=!!((t&&t.tmRefreshRequired)||(i&&i.tmRefreshRequired))&&(
-    !!((t&&t.tmRefreshQueued)||(i&&i.tmRefreshQueued))||['queued','running','already-queued','concurrent-queue','retry-wait'].includes(refreshState)
-  );
-  const loading=(!cur.statsLoaded&&!cur.serr)||refreshPending||['checking','queued','waiting'].includes(cur.tmRefreshStatus);
+  // Transfermarkt yenilemesi arka planda yürür; tarihçe bölümleri loading satırında tutulmaz.
+  const loading=false;
   let h=playerHTML(cur.it,j,loading,cur.tab,cur.f);
   if(cur.serr&&!t)h+='<div class="empty"><small>İstatistikler şu anda görüntülenemiyor.</small></div>';
   if(cur.err&&!i)h+='<div class="empty"><small>Bu bölüm şu anda görüntülenemiyor.</small></div>';
