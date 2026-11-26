@@ -5,12 +5,14 @@ on:
     inputs:
       seen_after:
         description: "Kadro aktarımının başlangıç zamanı (ISO 8601 UTC)"
-        required: true
+        required: false
         type: string
+        default: ""
       seen_before:
-        description: "Kadro aktarımının bitiş zamanı (ISO 8601 UTC)"
-        required: true
+        description: "Kadro aktarımının bitiş zamanı (ISO 8601 UTC); boşsa son 14 günlük eksik kayıtlar taranır."
+        required: false
         type: string
+        default: ""
 permissions:
   contents: read
   actions: write
@@ -72,7 +74,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           FELIPE_API_BASE: http://127.0.0.1:8000
           TM_SEASON: "2026"
           TM_MAX_PLAYERS_PER_RUN: "80"
