@@ -22,6 +22,7 @@ on:
           - refresh-details
           - refresh-rotation
           - one-player-test
+          - refresh-player-missing
           - sync
           - seed-history
         default: sync
@@ -124,7 +125,8 @@ jobs:
             github.event.inputs.mode == 'refresh-details' ||
             github.event.inputs.mode == 'refresh-rotation' ||
             github.event.inputs.mode == 'import-squads' ||
-            github.event.inputs.mode == 'one-player-test'))
+            github.event.inputs.mode == 'one-player-test' ||
+            github.event.inputs.mode == 'refresh-player-missing'))
         env:
           RATE_LIMITING_ENABLE: "false"
           TFMKT_MAX_CONCURRENCY: "1"
@@ -224,8 +226,7 @@ jobs:
       - name: Refresh player detail data
         if: >-
           steps.cohort_safety.outputs.can_process_original == 'true' &&
-          (github.event_name == 'push' ||
-           (github.event_name == 'workflow_dispatch' &&
+          ((github.event_name == 'workflow_dispatch' &&
             (github.event.inputs.mode == 'refresh-details' ||
              github.event.inputs.mode == 'import-squads' ||
              github.event.inputs.mode == 'sync')) ||
@@ -276,15 +277,99 @@ jobs:
           REQUEST_DELAY_MAX_SECONDS: "3.0"
         run: python sync/sync_transfermarkt.py seed-history
 
-      - name: Test one player
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'one-player-test'
+      - name: Select a live player for integration test
+        id: live_player
+        if: github.event_name == 'push'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from urllib.request import Request, urlopen
+          base = os.environ["SUPABASE_URL"].rstrip("/")
+          key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+          for player_id in ("401923", "1105505"):
+              url = f"{base}/rest/v1/tm_players?select=tm_id,name,current_market_value_eur&tm_id=eq.{player_id}&limit=1"
+              req = Request(url, headers={"apikey": key, "Authorization": f"Bearer {key}", "Accept": "application/json"})
+              with urlopen(req, timeout=20) as response:
+                  rows = json.loads(response.read().decode("utf-8"))
+              if rows:
+                  row = rows[0]
+                  with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                      output.write(f"player_id={row['tm_id']}\\n")
+                  print(f"Canlı Supabase oyuncu testi: {row.get('name')} (Transfermarkt ID={row['tm_id']})")
+                  break
+          else:
+              raise SystemExit("Supabase tm_players içinde Victor Osimhen (401923) veya Enes Emre Büyük (1105505) bulunamadı.")
+          PY
+
+      - name: Test one player
+        if: >-
+          github.event_name == 'push' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'one-player-test')
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id || steps.live_player.outputs.player_id || '401923' }}
           FELIPE_API_BASE: http://127.0.0.1:8000
           FELIPE_DELAY_MIN_SECONDS: "5.5"
           FELIPE_DELAY_MAX_SECONDS: "7.0"
           HTTP_MAX_RETRIES: "4"
           HTTP_TIMEOUT_SECONDS: "45"
         run: python sync/sync_transfermarkt.py one-player-test
+
+      - name: Refresh one player's missing details
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'refresh-player-missing'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id }}
+          FELIPE_API_BASE: http://127.0.0.1:8000
+          TM_DETAIL_STALE_DAYS: "7"
+          FELIPE_DELAY_MIN_SECONDS: "5.5"
+          FELIPE_DELAY_MAX_SECONDS: "7.0"
+          HTTP_MAX_RETRIES: "4"
+          HTTP_TIMEOUT_SECONDS: "45"
+        run: python sync/sync_transfermarkt.py refresh-player-missing
+
+      - name: Verify tested player data in Supabase
+        if: >-
+          github.event_name == 'push' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'one-player-test')
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id || steps.live_player.outputs.player_id || '401923' }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from urllib.request import Request, urlopen
+          base = os.environ["SUPABASE_URL"].rstrip("/")
+          key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+          player_id = os.environ["TM_TEST_PLAYER_ID"]
+          fields = "tm_id,name,current_market_value_eur,current_market_value_text,stats_payload,market_value_payload,transfers_payload,injuries_payload"
+          url = f"{base}/rest/v1/tm_players?select={fields}&tm_id=eq.{player_id}&limit=1"
+          req = Request(url, headers={"apikey": key, "Authorization": f"Bearer {key}", "Accept": "application/json"})
+          with urlopen(req, timeout=20) as response:
+              rows = json.loads(response.read().decode("utf-8"))
+          if not rows:
+              raise SystemExit(f"Test oyuncusu Supabase'de bulunamadı: {player_id}")
+          row = rows[0]
+          def count(payload, *keys):
+              if not isinstance(payload, dict):
+                  return 0
+              for key_name in keys:
+                  value = payload.get(key_name)
+                  if isinstance(value, list):
+                      return len(value)
+              return 0
+          print(f"Oyuncu: {row.get('name')} | Transfermarkt ID: {player_id}")
+          print(f"Güncel piyasa değeri: {row.get('current_market_value_text') or row.get('current_market_value_eur') or 'Sağlayıcıda değer yok'}")
+          print(f"Sezon kayıtları: {count(row.get('stats_payload'), 'stats', 'data', 'items')}")
+          print(f"Piyasa değeri geçmişi: {count(row.get('market_value_payload'), 'marketValueHistory', 'market_value_history', 'history', 'marketValues', 'valuations')}")
+          print(f"Transfer kayıtları: {count(row.get('transfers_payload'), 'transfers', 'history', 'items', 'data')}")
+          print(f"Sakatlık kayıtları: {count(row.get('injuries_payload'), 'injuries', 'data', 'items')}")
+          print("Boş liste, sağlayıcının bu oyuncu için kayıt sunmadığı anlamına gelebilir; mevcut dolu veriler ayrıca korunur.")
+          PY
+
