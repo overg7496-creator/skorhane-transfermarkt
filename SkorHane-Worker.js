@@ -4091,10 +4091,18 @@ async function tmPlayer(env, id) {
   const position = b.position || {};
   const height = pick(b, "height", "heightM", "heightMeters", "height_cm");
   const latestMarketValue = Array.isArray(out.marketValueHistory) ? (out.marketValueHistory[0] || {}) : {};
+  const rawCurrentMarketValue = pick(b, "marketValue", "marketValueFormatted", "market_value");
+  const currentMarketValue = rawCurrentMarketValue && typeof rawCurrentMarketValue === "object"
+    ? pick(rawCurrentMarketValue, "displayValue", "display_value", "text", "value", "amount")
+    : rawCurrentMarketValue;
+  const rawLatestMarketValue = pick(latestMarketValue, "display_value", "displayValue", "market_value", "marketValue", "value_eur", "value");
+  const latestMarketValueDisplay = rawLatestMarketValue && typeof rawLatestMarketValue === "object"
+    ? pick(rawLatestMarketValue, "displayValue", "display_value", "text", "value", "amount")
+    : rawLatestMarketValue;
   out.bio = {
     ...dateBio(pick(b, "dateOfBirth", "date_of_birth")),
     "Ayak": footTr(pick(b, "foot", "preferredFoot", "preferred_foot")),
-    "Piyasa Değeri": valueTr(pick(b, "marketValue", "marketValueFormatted", "market_value")) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : "") || valueTr(pick(latestMarketValue, "display_value", "displayValue", "market_value", "marketValue", "value_eur", "value")),
+    "Piyasa Değeri": valueTr(currentMarketValue) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : "") || valueTr(latestMarketValueDisplay),
     "Şu Anki Takım": clubName,
     "Boy": height ? (typeof height === "number" && height < 3 ? String(height).replace(".", ",") + " m" : height + "") : "",
     "Uyruk": nat,
