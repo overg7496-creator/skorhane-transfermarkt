@@ -4,7 +4,7 @@ on:
   # Periodic recovery catches players whose retry backoff has elapsed, even
   # when the previous time-limited worker had no immediately-due retries.
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "47 */3 * * *"
   workflow_run:
     workflows:
       - "SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı"
