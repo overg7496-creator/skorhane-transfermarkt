@@ -2,10 +2,6 @@ name: SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı
 
 on:
   # Bu dosya veya kadro aktarım işçisi güncellendiğinde ayrı aktarımı başlat.
-  push:
-    paths:
-      - "sync/sync_squads_and_clubs.py"
-  # Hata sonrası GitHub Actions ekranından yeniden başlatma imkânı kalsın.
   workflow_dispatch:
 
 permissions:
