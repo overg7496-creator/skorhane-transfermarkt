@@ -6,6 +6,8 @@ on:
     paths:
       - ".github/workflows/transfermarkt-sync.yml"
       - "sync/sync_transfermarkt.py"
+      - "SkorHane-Worker.js"
+      - "SkorHane-Worker-kodu-kopyalanabilir.txt"
       - "tests/**"
   schedule:
     - cron: "20 3 * * 1,4"
