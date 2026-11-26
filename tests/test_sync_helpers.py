@@ -47,6 +47,16 @@ class SyncHelperTests(unittest.TestCase):
         self.assertNotIn("transfermarkt-api.fly.dev", worker)
         self.assertNotIn("www.transfermarkt.com", worker)
 
+    def test_worker_repairs_empty_transfermarkt_snapshots_and_reads_raw_sources(self):
+        worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
+        copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
+        self.assertEqual(worker, copy)
+        self.assertIn('const repairCutoff = Date.parse("2026-11-26T12:00:00Z")', worker)
+        self.assertIn("tm_source_records?select=record_type,payload,fetched_at", worker)
+        self.assertIn("tmPayloadArray", worker)
+        self.assertIn("transferClubName", worker)
+        self.assertIn('"pf36:"', worker)
+
     def test_required_player_endpoint_failure_propagates(self):
         from unittest.mock import patch
 
