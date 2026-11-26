@@ -549,10 +549,11 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("p_row->>'goals_conceded'", schema)
         self.assertIn("p_row->>'clean_sheets'", schema)
 
-    def test_manual_imported_cohort_requires_explicit_window(self):
+    def test_historical_detail_preseed_allows_optional_date_window(self):
         workflow = (ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn("required: true", workflow)
+        self.assertIn("required: false", workflow)
+        self.assertIn('TM_DETAIL_PRESEED_ALL_HISTORY: "true"', workflow)
         self.assertNotRegex(workflow, r"(?m)^\s+(?:schedule|workflow_run):")
 
     def test_worker_does_not_invent_current_club_for_unattributed_stats(self):
