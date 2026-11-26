@@ -281,6 +281,49 @@ def snapshot_has_rows(payload: Any, keys: tuple[str, ...]) -> bool:
     return bool(iterable_from(payload, keys))
 
 
+DETAIL_ENDPOINTS = {
+    "profile": ("profile_payload", "player_profile", ()),
+    "market_value": ("market_value_payload", "player_market_values",
+                     ("marketValueHistory", "market_value_history", "history", "marketValues", "valuations")),
+    "transfers": ("transfers_payload", "player_transfers", ("transfers", "history", "items", "data")),
+    "stats": ("stats_payload", "player_stats", ("stats", "data", "items")),
+    "injuries": ("injuries_payload", "player_injuries", ("injuries", "data", "items")),
+}
+
+
+def player_detail_refresh_plan(tm_id: str, player: dict[str, Any]) -> set[str]:
+    """Return only missing or stale Felipe endpoint names for one player."""
+    record_types = ",".join(item[1] for item in DETAIL_ENDPOINTS.values())
+    rows = db_get(
+        "tm_source_records?select=record_type,fetched_at"
+        f"&source=eq.felipeall&external_id=eq.{quote(str(tm_id))}"
+        f"&record_key=eq.&record_type=in.({record_types})&limit=20"
+    )
+    fetched = {str(row.get("record_type")): row.get("fetched_at") for row in rows if isinstance(row, dict)}
+    stale_days = max(1, int(os.getenv("TM_DETAIL_STALE_DAYS", "7")))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=stale_days)
+    due: set[str] = set()
+    for endpoint, (column, record_type, keys) in DETAIL_ENDPOINTS.items():
+        payload = player.get(column)
+        if endpoint == "profile":
+            has_payload = isinstance(payload, dict) and bool(payload)
+        else:
+            has_payload = isinstance(payload, dict) and any(isinstance(payload.get(key), list) for key in keys)
+        stamp = fetched.get(record_type)
+        fresh = False
+        if stamp:
+            try:
+                parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                fresh = parsed >= cutoff
+            except ValueError:
+                fresh = False
+        if not has_payload or not fresh:
+            due.add(endpoint)
+    return due
+
+
 def source_record_snapshot(
     source: str, record_type: str, external_id: str, record_key: str, payload: dict[str, Any]
 ) -> None:
@@ -806,13 +849,13 @@ def dispatch_refresh_details_continuation(
 
 
 def sync_felipeall(
-    only_player: str | None = None, *, backfill_only: bool = False,
+    only_player: str | None = None, *, backfill_only: bool = False, missing_only: bool = False,
     squad_seen_after: str | None = None, squad_seen_before: str | None = None,
 ) -> int:
-    """Refresh player details; backfill_only drains the initial queue safely across batches."""
+    """Refresh details; missing_only updates only this player's missing or stale endpoints."""
     select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
     if only_player:
-        query = f"tm_players?select={select}&tm_id=eq.{quote(only_player)}&limit=1"
+        query = f"tm_players?select=*&tm_id=eq.{quote(only_player)}&limit=1" if missing_only else f"tm_players?select={select}&tm_id=eq.{quote(only_player)}&limit=1"
         players = db_get(query)
         states: dict[str, dict[str, Any]] = {}
     elif backfill_only:
@@ -843,6 +886,13 @@ def sync_felipeall(
                 continue
             if state.get("status") == "retry" and not detail_retry_is_due(state, now):
                 continue
+        if missing_only:
+            due = player_detail_refresh_plan(tm_id, player)
+            if not due:
+                LOG.info("Oyuncunun Transfermarkt detayları güncel; API çağrısı yapılmadı (ID=%s).", tm_id)
+                continue
+            player["_refresh_endpoints"] = sorted(due)
+            LOG.info("Oyuncu eksik/eski uç noktaları: %s (ID=%s)", ",".join(sorted(due)), tm_id)
         work.append(player)
 
     players = work
@@ -872,30 +922,51 @@ def sync_felipeall(
                 idx, len(players), player.get("name") or "İsimsiz", tm_id,
             )
     
+            refresh_endpoints = set(player.get("_refresh_endpoints") or
+                                    ("profile", "market_value", "transfers", "stats", "injuries", "absences", "matches"))
+            existing_profile = player.get("profile_payload") if isinstance(player.get("profile_payload"), dict) else {}
+            existing_market = player.get("market_value_payload") if isinstance(player.get("market_value_payload"), dict) else {}
+            existing_transfers = player.get("transfers_payload") if isinstance(player.get("transfers_payload"), dict) else {}
+            existing_stats = player.get("stats_payload") if isinstance(player.get("stats_payload"), dict) else {}
+            existing_injuries = player.get("injuries_payload") if isinstance(player.get("injuries_payload"), dict) else {}
+            existing_absences = player.get("absences_payload") if isinstance(player.get("absences_payload"), dict) else {}
+            existing_current = player.get("current_season_payload") if isinstance(player.get("current_season_payload"), dict) else {}
+
             progress["endpoint"] = "profile"
-            profile = fetch_player_payload(base, "/profile", f"{tm_id} profil", ("id", "name"))
+            profile = (fetch_player_payload(base, "/profile", f"{tm_id} profil", ("id", "name"))
+                       if "profile" in refresh_endpoints else existing_profile)
             progress["endpoint"] = "market_value"
-            market_payload = fetch_player_payload(base, "/market_value", f"{tm_id} piyasa değeri geçmişi", ("id", "marketValueHistory"))
+            market_payload = (fetch_player_payload(base, "/market_value", f"{tm_id} piyasa değeri geçmişi", ("id", "marketValueHistory"))
+                              if "market_value" in refresh_endpoints else existing_market)
             progress["endpoint"] = "transfers"
-            transfer_payload = fetch_player_payload(base, "/transfers", f"{tm_id} transfer geçmişi", ("id", "transfers"))
+            transfer_payload = (fetch_player_payload(base, "/transfers", f"{tm_id} transfer geçmişi", ("id", "transfers"))
+                                if "transfers" in refresh_endpoints else existing_transfers)
             progress["endpoint"] = "stats"
-            stats_payload = fetch_player_payload(base, "/stats", f"{tm_id} sezon istatistikleri", ("id", "stats"))
+            stats_payload = (fetch_player_payload(base, "/stats", f"{tm_id} sezon istatistikleri", ("id", "stats"))
+                             if "stats" in refresh_endpoints else existing_stats)
             progress["endpoint"] = "injuries"
-            injuries_payload = fetch_player_paged_rows(base, "/injuries", "injuries")
-            progress["endpoint"] = "absences"
-            absences_payload = fetch_player_paged_rows(base, "/absences", "absences")
-    
-            # Transfermarkt'ın maç sayfası da güncel sezonun maç bazlı verilerini sağlar.
-            progress["endpoint"] = "matches"
-            matches = get_player_current_matches(base, tm_id)
-            current_stats = build_current_season_stats(matches)
-            current_payload = {
-                "season_id": str(TM_SEASON),
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-                "matches": matches,
-                "stats": current_stats,
-            }
-    
+            injuries_payload = (fetch_player_paged_rows(base, "/injuries", "injuries")
+                                if "injuries" in refresh_endpoints else existing_injuries)
+            absences_payload = existing_absences
+
+            if not missing_only:
+                progress["endpoint"] = "absences"
+                absences_payload = fetch_player_paged_rows(base, "/absences", "absences")
+                progress["endpoint"] = "matches"
+                matches = get_player_current_matches(base, tm_id)
+                current_stats = build_current_season_stats(matches)
+                current_payload = {
+                    "season_id": str(TM_SEASON),
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "matches": matches,
+                    "stats": current_stats,
+                }
+                refresh_endpoints.update({"absences", "matches"})
+            else:
+                current_payload = existing_current
+                current_stats = current_payload.get("stats", []) if isinstance(current_payload.get("stats"), list) else []
+                matches = current_payload.get("matches", []) if isinstance(current_payload.get("matches"), list) else []
+
             profile_obj = profile if isinstance(profile, dict) else {}
             profile_player = profile_obj.get("player") or profile_obj.get("data") or profile_obj.get("profile") or profile_obj
             if not isinstance(profile_player, dict):
@@ -973,22 +1044,35 @@ def sync_felipeall(
 
             # All seven detail endpoints were validated and fully paginated.
             # Empty injury/absence arrays are authoritative only after this point.
-            replace_player_snapshots(tm_id, {
-                "market_value_payload": market_payload,
-                "transfers_payload": transfer_payload,
-                "stats_payload": stats_payload,
-                "injuries_payload": injuries_payload,
-                "absences_payload": absences_payload,
-                "current_season_payload": current_payload,
-            })
-            source_record_snapshot("felipeall", "player_profile", tm_id, "", profile)
-            source_record_snapshot("felipeall", "player_market_values", tm_id, "", market_payload)
-            source_record_snapshot("felipeall", "player_transfers", tm_id, "", transfer_payload)
-            source_record_snapshot("felipeall", "player_stats", tm_id, "", stats_payload)
-            source_record_snapshot("felipeall", "player_injuries", tm_id, "", injuries_payload)
-            source_record_snapshot("felipeall", "player_absences", tm_id, "", absences_payload)
-            source_record_snapshot("felipeall", "current_season_matches", tm_id, str(TM_SEASON), current_payload)
-    
+            snapshot_updates = {}
+            if "market_value" in refresh_endpoints:
+                snapshot_updates["market_value_payload"] = market_payload
+            if "transfers" in refresh_endpoints:
+                snapshot_updates["transfers_payload"] = transfer_payload
+            if "stats" in refresh_endpoints:
+                snapshot_updates["stats_payload"] = stats_payload
+            if "injuries" in refresh_endpoints:
+                snapshot_updates["injuries_payload"] = injuries_payload
+            if "absences" in refresh_endpoints:
+                snapshot_updates["absences_payload"] = absences_payload
+            if "matches" in refresh_endpoints:
+                snapshot_updates["current_season_payload"] = current_payload
+            replace_player_snapshots(tm_id, snapshot_updates)
+            if "profile" in refresh_endpoints:
+                source_record_snapshot("felipeall", "player_profile", tm_id, "", profile)
+            if "market_value" in refresh_endpoints:
+                source_record_snapshot("felipeall", "player_market_values", tm_id, "", market_payload)
+            if "transfers" in refresh_endpoints:
+                source_record_snapshot("felipeall", "player_transfers", tm_id, "", transfer_payload)
+            if "stats" in refresh_endpoints:
+                source_record_snapshot("felipeall", "player_stats", tm_id, "", stats_payload)
+            if "injuries" in refresh_endpoints:
+                source_record_snapshot("felipeall", "player_injuries", tm_id, "", injuries_payload)
+            if "absences" in refresh_endpoints:
+                source_record_snapshot("felipeall", "player_absences", tm_id, "", absences_payload)
+            if "matches" in refresh_endpoints:
+                source_record_snapshot("felipeall", "current_season_matches", tm_id, str(TM_SEASON), current_payload)
+
             # Resolve club IDs in Transfermarkt season-stat rows using profile and
             # the player's own transfer history, avoiding guesses from other providers.
             club_names: dict[str, str] = {}
@@ -1480,7 +1564,7 @@ def seed_dcaribou_history() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "refresh-imported-details", "refresh-rotation", "seed-history", "one-player-test", "has-pending-details"))
+    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "refresh-imported-details", "refresh-rotation", "seed-history", "one-player-test", "refresh-player-missing", "has-pending-details"))
     parser.add_argument("--player-id", default=os.getenv("TM_TEST_PLAYER_ID", ""))
     args = parser.parse_args()
     require_db()
@@ -1535,12 +1619,17 @@ def main() -> int:
     if args.mode == "refresh-rotation":
         logged_run("felipeall", "refresh-rotation", sync_felipeall)
         return 0
-    if args.mode == "one-player-test":
+    if args.mode in ("one-player-test", "refresh-player-missing"):
         if not re.fullmatch(r"\d+", str(args.player_id or "")):
-            raise RuntimeError("one-player-test için --player-id veya TM_TEST_PLAYER_ID olarak Transfermarkt oyuncu ID'si gerekli.")
+            raise RuntimeError(f"{args.mode} için --player-id veya TM_TEST_PLAYER_ID olarak Transfermarkt oyuncu ID'si gerekli.")
         if not db_get(f"tm_players?select=tm_id&tm_id=eq.{quote(str(args.player_id))}&limit=1"):
-            raise RuntimeError("Test oyuncusu önce kadro senkronizasyonuyla tm_players tablosuna eklenmeli.")
-        logged_run("felipeall", "one-player-test", lambda: sync_felipeall(only_player=str(args.player_id)))
+            raise RuntimeError("Oyuncu önce tm_players tablosuna aktarılmalı.")
+        if args.mode == "refresh-player-missing":
+            logged_run("felipeall", "refresh-player-missing",
+                       lambda: sync_felipeall(only_player=str(args.player_id), missing_only=True))
+        else:
+            logged_run("felipeall", "one-player-test",
+                       lambda: sync_felipeall(only_player=str(args.player_id)))
         return 0
     # Current-only workflow: squad import and detail refresh are independent,
     # idempotent jobs that write through the existing Supabase merge RPCs.
