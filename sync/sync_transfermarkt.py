@@ -570,16 +570,16 @@ def load_player_detail_queue_states() -> dict[str, dict[str, Any]]:
 
 
 def validate_detail_squad_window(seen_after: str, seen_before: str) -> tuple[str, str]:
-    """Validate an explicit UTC timestamp window for a dedicated imported-squad queue."""
+    """Validate an explicit UTC timestamp window for one immutable player cohort."""
     try:
         after_dt = datetime.fromisoformat(seen_after.replace("Z", "+00:00"))
         before_dt = datetime.fromisoformat(seen_before.replace("Z", "+00:00"))
     except (AttributeError, ValueError) as exc:
-        raise RuntimeError("Yeni kadro kuyruğu için geçerli seen_after/seen_before ISO tarihleri gerekli.") from exc
+        raise RuntimeError("Detay kuyruğu için geçerli seen_after/seen_before ISO tarihleri gerekli.") from exc
     if after_dt.tzinfo is None or before_dt.tzinfo is None:
-        raise RuntimeError("Yeni kadro kuyruğu tarihleri saat dilimi içermeli (UTC/Z).")
+        raise RuntimeError("Detay kuyruğu tarihleri saat dilimi içermeli (UTC/Z).")
     if before_dt <= after_dt:
-        raise RuntimeError("Yeni kadro kuyruğunda seen_before, seen_after tarihinden sonra olmalı.")
+        raise RuntimeError("Detay kuyruğunda seen_before, seen_after tarihinden sonra olmalı.")
     return seen_after, seen_before
 
 
@@ -587,15 +587,16 @@ def load_pending_player_detail_candidates(
     *,
     squad_seen_after: str | None = None,
     squad_seen_before: str | None = None,
-    squad_seen_after_imported: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Load pending active players; an optional bounded squad timestamp window isolates one import."""
+    """Load unprocessed players only from the exact configured cohort window."""
     select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
     candidates: list[dict[str, Any]] = []
     offset = 0
     page_size = 1000
-    squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-    if squad_seen_after and squad_seen_before:
+    has_explicit_window = bool(squad_seen_after or squad_seen_before)
+    if has_explicit_window:
+        if not squad_seen_after or not squad_seen_before:
+            raise RuntimeError("Detay kuyruğu için hem başlangıç hem bitiş zamanı gerekli.")
         squad_seen_after, squad_seen_before = validate_detail_squad_window(
             squad_seen_after, squad_seen_before
         )
@@ -604,53 +605,38 @@ def load_pending_player_detail_candidates(
             f"last_squad_seen_at.lt.{squad_seen_before})"
         )
         squad_filter = "&" + quote(window, safe="=.")
-    elif squad_seen_after:
-        raise RuntimeError("Yeni kadro kuyruğu için hem başlangıç hem bitiş zamanı gerekli.")
-    elif squad_seen_before:
-        try:
-            before_dt = datetime.fromisoformat(squad_seen_before.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise RuntimeError("Ana kuyruk için geçerli seen_before ISO tarihi gerekli.") from exc
-        if before_dt.tzinfo is None:
-            raise RuntimeError("Ana kuyruk seen_before tarihi saat dilimi içermeli (UTC/Z).")
-        window = (
-            f"and=(last_squad_seen_at.gte.{squad_cutoff},"
-            f"last_squad_seen_at.lt.{squad_seen_before})"
-        )
-        if squad_seen_after_imported:
-            try:
-                after_imported_dt = datetime.fromisoformat(
-                    squad_seen_after_imported.replace("Z", "+00:00")
-                )
-            except ValueError as exc:
-                raise RuntimeError("Ana kuyruk için geçerli imported cohort bitiş ISO tarihi gerekli.") from exc
-            if after_imported_dt.tzinfo is None or after_imported_dt <= before_dt:
-                raise RuntimeError("Imported cohort bitişi ana kuyruk sınırından sonra ve saat dilimli olmalı.")
-            # Detail workers never own the squad timestamp, but older already-running
-            # workers may have touched it. Route any such pending post-window rows
-            # exclusively to the original queue so they cannot disappear between cohorts.
-            post_window = f"last_squad_seen_at.gte.{squad_seen_after_imported}"
-            combined = f"or=({window},{post_window})"
-            squad_filter = "&" + quote(combined, safe="=.,()")
-        else:
-            squad_filter = "&" + quote(window, safe="=.")
     else:
+        squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
         squad_filter = f"&last_squad_seen_at=gte.{quote(squad_cutoff, safe='')}"
     while True:
+        # Count the full cohort, not only pending rows, so the size stays stable
+        # as successfully completed players are removed from the work list.
         query = (
             f"tm_players?select={select}&is_active=eq.true"
-            f"{squad_filter}"
-            "&last_felipe_synced_at=is.null&order=tm_id.asc"
+            f"{squad_filter}&order=tm_id.asc"
             f"&limit={page_size}&offset={offset}"
         )
         rows = db_get(query)
         if not isinstance(rows, list):
-            raise RuntimeError("Bekleyen oyuncu detay kuyruğu okunamadı.")
+            raise RuntimeError("Oyuncu detay kohortu okunamadı.")
         candidates.extend(row for row in rows if isinstance(row, dict))
         if len(rows) < page_size:
             break
         offset += len(rows)
-    return candidates
+
+    expected_size_text = os.getenv("TM_DETAIL_EXPECTED_COHORT_SIZE", "").strip()
+    if has_explicit_window and expected_size_text:
+        try:
+            expected_size = int(expected_size_text)
+        except ValueError as exc:
+            raise RuntimeError("TM_DETAIL_EXPECTED_COHORT_SIZE tam sayı olmalı.") from exc
+        if expected_size < 1 or len(candidates) != expected_size:
+            raise RuntimeError(
+                f"Detay kuyruğu güvenlik kontrolü durduruldu: sabit kohortta "
+                f"beklenen {expected_size}, veritabanında bulunan {len(candidates)} aktif oyuncu. "
+                "Yanlış gruba taşmamak için hiçbir oyuncu işlenmedi."
+            )
+    return [row for row in candidates if not row.get("last_felipe_synced_at")]
 
 
 def detail_retry_is_due(state: dict[str, Any], now: datetime | None = None) -> bool:
@@ -708,11 +694,9 @@ def has_pending_player_details() -> bool:
     states = load_player_detail_queue_states()
     seen_after = os.getenv("TM_DETAIL_SQUAD_SEEN_AFTER", "").strip() or None
     seen_before = os.getenv("TM_DETAIL_SQUAD_SEEN_BEFORE", "").strip() or None
-    after_imported = os.getenv("TM_DETAIL_AFTER_IMPORTED_END", "").strip() or None
     candidates = load_pending_player_detail_candidates(
         squad_seen_after=seen_after,
         squad_seen_before=seen_before,
-        squad_seen_after_imported=after_imported,
     )
     now = datetime.now(timezone.utc)
     return any(
@@ -734,8 +718,10 @@ def dispatch_refresh_details_continuation(
         return False
     url = f"https://api.github.com/repos/{repository}/actions/workflows/{workflow_file}/dispatches"
     dispatch_inputs = dict(inputs) if inputs is not None else {"mode": "refresh-details"}
+    seen_after = os.getenv("TM_DETAIL_SQUAD_SEEN_AFTER", "").strip()
     seen_before = os.getenv("TM_DETAIL_SQUAD_SEEN_BEFORE", "").strip()
-    if inputs is None and seen_before:
+    if inputs is None and seen_after and seen_before:
+        dispatch_inputs["seen_after"] = seen_after
         dispatch_inputs["seen_before"] = seen_before
     payload = json.dumps({"ref": ref, "inputs": dispatch_inputs}).encode("utf-8")
     request = Request(url, data=payload, headers={
@@ -768,11 +754,11 @@ def sync_felipeall(
         states: dict[str, dict[str, Any]] = {}
     elif backfill_only:
         states = load_player_detail_queue_states()
-        after_imported = os.getenv("TM_DETAIL_AFTER_IMPORTED_END", "").strip() or None
+        squad_seen_after = squad_seen_after or os.getenv("TM_DETAIL_SQUAD_SEEN_AFTER", "").strip() or None
+        squad_seen_before = squad_seen_before or os.getenv("TM_DETAIL_SQUAD_SEEN_BEFORE", "").strip() or None
         players = load_pending_player_detail_candidates(
             squad_seen_after=squad_seen_after,
             squad_seen_before=squad_seen_before,
-            squad_seen_after_imported=after_imported,
         )
     else:
         states = load_player_detail_queue_states()
@@ -1434,11 +1420,13 @@ def main() -> int:
         run_squad_sync()
         return 0
     if args.mode == "refresh-details":
+        seen_after = os.getenv("TM_DETAIL_SQUAD_SEEN_AFTER", "").strip()
         seen_before = os.getenv("TM_DETAIL_SQUAD_SEEN_BEFORE", "").strip()
         logged_run(
             "felipeall", "refresh-details",
             lambda: sync_felipeall(
                 backfill_only=True,
+                squad_seen_after=seen_after or None,
                 squad_seen_before=seen_before or None,
             ),
         )

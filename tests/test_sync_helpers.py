@@ -121,21 +121,23 @@ class SyncHelperTests(unittest.TestCase):
         query = fetch.call_args.args[0]
         self.assertIn("last_squad_seen_at.gte.2026-11-25T20", query)
         self.assertIn("last_squad_seen_at.lt.2026-11-25T21", query)
-        self.assertIn("last_felipe_synced_at=is.null", query)
+        self.assertNotIn("last_felipe_synced_at=is.null", query)
 
     def test_original_backfill_can_stop_before_new_squad_import_window(self):
         from unittest.mock import patch
 
+        after = "2026-11-11T20:26:06Z"
         before = "2026-11-25T20:26:06Z"
         with patch.object(sync, "db_get", return_value=[]) as fetch:
             self.assertEqual(
-                sync.load_pending_player_detail_candidates(squad_seen_before=before),
+                sync.load_pending_player_detail_candidates(
+                    squad_seen_after=after, squad_seen_before=before
+                ),
                 [],
             )
         query = fetch.call_args.args[0]
-        self.assertIn("last_squad_seen_at.gte.", query)
+        self.assertIn("last_squad_seen_at.gte.2026-11-11T20", query)
         self.assertIn("last_squad_seen_at.lt.2026-11-25T20%3A26%3A06Z", query)
-        self.assertIn("last_felipe_synced_at=is.null", query)
 
     def test_main_and_missing_squad_imports_do_not_share_leagues(self):
         main_workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
@@ -148,25 +150,23 @@ class SyncHelperTests(unittest.TestCase):
         missing_leagues = set(missing_match.group(1).split(","))
         self.assertFalse(main_leagues & missing_leagues)
 
-    def test_main_backlog_recovers_pending_rows_moved_past_imported_window(self):
+    def test_main_backlog_never_expands_into_imported_or_future_window(self):
         from unittest.mock import patch
 
+        after = "2026-11-11T20:26:06Z"
         before = "2026-11-25T20:26:06Z"
-        imported_end = "2026-11-25T21:00:04Z"
         with patch.object(sync, "db_get", return_value=[]) as fetch:
             self.assertEqual(
                 sync.load_pending_player_detail_candidates(
-                    squad_seen_before=before,
-                    squad_seen_after_imported=imported_end,
+                    squad_seen_after=after, squad_seen_before=before
                 ),
                 [],
             )
         query = fetch.call_args.args[0]
-        self.assertIn("or=", query)
-        self.assertIn("last_squad_seen_at.gte.", query)
+        self.assertNotIn("or=", query)
+        self.assertIn("last_squad_seen_at.gte.2026-11-11T20", query)
         self.assertIn("last_squad_seen_at.lt.2026-11-25T20", query)
-        self.assertIn("last_squad_seen_at.gte.2026-11-25T21", query)
-        self.assertIn("last_felipe_synced_at=is.null", query)
+        self.assertNotIn("last_squad_seen_at.gte.2026-11-25T21", query)
 
     def test_player_detail_upsert_does_not_claim_squad_membership(self):
         from unittest.mock import patch
@@ -201,6 +201,36 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("last_squad_seen_at.gte.2026-11-25T20", query)
         self.assertIn("last_squad_seen_at.lt.2026-11-25T21", query)
 
+    def test_fixed_detail_cohort_size_mismatch_fails_closed(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(sync, "db_get", return_value=[{"tm_id": "1", "last_felipe_synced_at": None}]),
+            patch.dict(os.environ, {"TM_DETAIL_EXPECTED_COHORT_SIZE": "2402"}),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "beklenen 2402"):
+                sync.load_pending_player_detail_candidates(
+                    squad_seen_after="2026-11-11T20:26:06Z",
+                    squad_seen_before="2026-11-25T20:26:06Z",
+                )
+
+    def test_fixed_detail_cohort_filters_completed_players_after_size_check(self):
+        from unittest.mock import patch
+
+        rows = [
+            {"tm_id": "1", "last_felipe_synced_at": "2026-11-26T08:00:00Z"},
+            {"tm_id": "2", "last_felipe_synced_at": None},
+        ]
+        with (
+            patch.object(sync, "db_get", return_value=rows),
+            patch.dict(os.environ, {"TM_DETAIL_EXPECTED_COHORT_SIZE": "2"}),
+        ):
+            pending = sync.load_pending_player_detail_candidates(
+                squad_seen_after="2026-11-11T20:26:06Z",
+                squad_seen_before="2026-11-25T20:26:06Z",
+            )
+        self.assertEqual([row["tm_id"] for row in pending], ["2"])
+
     def test_imported_detail_queue_rejects_incomplete_or_reversed_window(self):
         with self.assertRaisesRegex(RuntimeError, "hem başlangıç hem bitiş"):
             sync.load_pending_player_detail_candidates(squad_seen_after="2026-11-25T20:26:06Z")
@@ -216,7 +246,7 @@ class SyncHelperTests(unittest.TestCase):
             self.assertEqual(sync.load_pending_player_detail_candidates(), [])
         query = fetch.call_args.args[0]
         self.assertIn("last_squad_seen_at=gte.", query)
-        self.assertIn("last_felipe_synced_at=is.null", query)
+        self.assertNotIn("last_felipe_synced_at=is.null", query)
 
     def test_imported_detail_continuation_preserves_workflow_without_window(self):
         from unittest.mock import patch

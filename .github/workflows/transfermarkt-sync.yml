@@ -29,6 +29,10 @@ on:
         description: "Test edilecek oyuncunun Transfermarkt ID'si"
         required: false
         type: string
+      seen_after:
+        description: "Ana detay kuyruğunun alt kadro tarihi sınırı (UTC ISO 8601)"
+        required: false
+        type: string
       seen_before:
         description: "Ana detay kuyruğunun üst kadro tarihi sınırı (UTC ISO 8601)"
         required: false
@@ -47,11 +51,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      # Original backlog cohort (2,402-player run): only squads last seen
-      # before the newer imported-league window. The imported worker uses the
-      # separate [20:26:06, 21:00:04) UTC window and its own concurrency group.
-      # Continuations preserve this upper timestamp so the two cohorts stay apart.
+      # Fixed original cohort: [2026-11-11 20:26:06, 2026-11-25 20:26:06) UTC.
+      # The imported queue owns [2026-11-25 20:26:06, 21:00:04) UTC.
+      TM_DETAIL_SQUAD_SEEN_AFTER: ${{ github.event.inputs.seen_after || '2026-11-11T20:26:06Z' }}
       TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ github.event.inputs.seen_before || '2026-11-25T20:26:06Z' }}
+      TM_DETAIL_EXPECTED_COHORT_SIZE: "2402"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,39 +65,27 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check squad-import and imported-detail workers
+      - name: Check active squad imports
         id: cohort_safety
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if ! runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100")"; then
-            echo "Imported worker durumu okunamadı; güvenli tarafta kalıp bu çalışmada detay taraması atlandı."
+            echo "GitHub çalışma durumu okunamadı; güvenli tarafta kalıp ana detay taraması ertelendi."
             echo "can_process_original=false" >> "$GITHUB_OUTPUT"
-            echo "TM_DETAIL_AFTER_IMPORTED_END=" >> "$GITHUB_ENV"
             exit 0
           fi
           active_squad_import="$(jq '[.workflow_runs[] | select(
             .path == ".github/workflows/import-missing-leagues.yml" and
             .status != "completed"
           )] | length' <<< "$runs")"
-          active_imported_detail="$(jq '[.workflow_runs[] | select(
-            .path == ".github/workflows/refresh-imported-player-details.yml" and
-            .status != "completed"
-          )] | length' <<< "$runs")"
           if [ "$active_squad_import" -gt 0 ]; then
             echo "can_process_original=false" >> "$GITHUB_OUTPUT"
-            echo "TM_DETAIL_AFTER_IMPORTED_END=" >> "$GITHUB_ENV"
-            echo "Kadro aktarımı sürüyor/bekliyor; oyuncu listeleri değişmesin diye ana detay taraması ertelendi."
+            echo "Kadro aktarımı sürüyor/bekliyor; sabit kohort taraması ertelendi."
           else
             echo "can_process_original=true" >> "$GITHUB_OUTPUT"
-            if [ "$active_imported_detail" -eq 0 ]; then
-              echo "TM_DETAIL_AFTER_IMPORTED_END=2026-11-25T21:00:04Z" >> "$GITHUB_ENV"
-              echo "Yeni kadro detay işçisi aktif değil; eski işçiden taşınmış bekleyen kayıtlar ana kuyruğa açıldı."
-            else
-              echo "TM_DETAIL_AFTER_IMPORTED_END=" >> "$GITHUB_ENV"
-              echo "Yeni kadro detay işçisi aktif/beklemede; post-window kurtarması olası çakışmayı önlemek için ertelendi."
-            fi
+            echo "Ana ve yeni kadro kuyrukları ayrı tarih aralıklarıyla çalışacak."
           fi
 
       - name: Install dependencies
