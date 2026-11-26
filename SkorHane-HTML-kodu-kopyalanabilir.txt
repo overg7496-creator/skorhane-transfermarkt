@@ -4210,7 +4210,7 @@ function playerHTML(it,j,loadingStats,tab,f){
     h+='<div class="player-career-reference-list">';
     if(cur.pitchCareerLoading)h+='<div class="player-career-loading">Transfermarkt kariyer verileri yükleniyor…</div>';
     if(rows.length)h+=rows.map(row=>{const avg=row.ratingMatches?(row.ratingTotal/row.ratingMatches).toFixed(2):'—';return `<article class="player-career-season-card"><div class="player-career-season-head"><span class="player-career-season">${esc(row.season)}</span><span class="player-career-team">${avatarT(careerLogoCandidates(row),row.team)}<b>${esc(trTeam(row.team))}</b></span><span class="player-career-average"><b>${row.minutesKnown?row.minutes.toLocaleString('tr-TR'):'—'}</b><small>Toplam dakika</small></span></div><div class="player-career-season-stats"><div><small>Maç</small><b>${row.matches}</b></div><div><small>Gol</small><b>${row.goals}</b></div><div><small>Asist</small><b>${row.assists}</b></div><div><small>İlk 11</small><b>${row.starts}</b></div></div></article>`}).join('');
-    else if(loadingStats||cur.pitchCareerLoading)h+='<div class="empty">Kariyer sezonları yükleniyor…</div>';
+    else if(loadingStats)h+='<div class="empty">Kariyer sezonları yükleniyor…</div>';
     else h+='<div class="empty">Bu oyuncu için Transfermarkt sezon kayıtları henüz bulunamadı.</div>';
     if(cur.pitchCareerError&&cur.pitchCareerLoaded)h+='<div class="pnote">'+esc(cur.pitchCareerError)+'</div>';
     h+='</div>';
