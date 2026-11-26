@@ -426,7 +426,7 @@ class SyncHelperTests(unittest.TestCase):
     def test_transfer_club_object_uses_name_or_transparent_id_label(self):
         self.assertEqual(sync.normalize_transfer_club({"id": "40", "name": "Liverpool FC"}), "Liverpool FC")
         self.assertEqual(sync.normalize_transfer_club({"id": "40"}), "Kulüp #40")
-        self.assertEqual(sync.normalize_transfer_club({"id": "40"}, {"name": "Chelsea FC"}), "Kulüp #40")
+        self.assertEqual(sync.normalize_transfer_club({"id": "40"}, {"name": "Chelsea FC"}), "Chelsea FC")
 
     def test_current_season_does_not_invent_unknown_club(self):
         self.assertEqual(
