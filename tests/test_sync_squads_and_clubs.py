@@ -94,6 +94,29 @@ class SquadPersistenceTests(unittest.TestCase):
         self.assertEqual(rpc.call_args.args[1]["p_record_type"], "competition_table")
         self.assertEqual(rpc.call_args.args[1]["p_payload"]["tables"][0]["rows"][0]["clubId"], "281")
 
+    def test_saves_official_club_country_and_stadium_metadata(self):
+        profile = {
+            "id": "281",
+            "name": "Manchester City",
+            "image": "https://img.example/city.png",
+            "league": {"name": "Premier League", "countryName": "England", "tier": "1"},
+            "squad": {"size": 25, "averageAge": 26.1, "averageMarketValue": 42000000},
+            "stadium": {
+                "name": "Etihad Stadium", "capacity": 53400,
+                "countryName": "England", "buildYear": 2003,
+                "fieldSurface": "natural grass",
+            },
+            "coach": {"id": "1", "name": "Manager"},
+        }
+        with patch.object(squads, "db_rpc") as rpc:
+            squads.save_club_metadata("GB1", "Premier League", "281", "Manchester City", "2026", profile)
+        payload = rpc.call_args.args[1]["p_payload"]
+        self.assertEqual(payload["country"], "England")
+        self.assertEqual(payload["stadium_name"], "Etihad Stadium")
+        self.assertEqual(payload["stadium_capacity"], 53400)
+        self.assertEqual(payload["stadium_build_year"], 2003)
+        self.assertEqual(payload["squad_size"], 25)
+
     def test_empty_competition_table_does_not_replace_existing_payload(self):
         with patch.object(squads, "db_rpc") as rpc:
             squads.save_competition_table("GB1", "2026", {"tables": [{"rows": []}]})
