@@ -2936,7 +2936,7 @@ function tmSeasonLabel(value) {
   const pair = raw.match(/(?:^|[^0-9])(\d{2,4})\s*\/\s*(\d{2,4})(?:$|[^0-9])/);
   if (pair) {
     const first = Number(pair[1]), second = Number(pair[2]);
-    const start = first >= 1000 ? first : 2000 + first;
+    const start = first >= 1000 ? first : (first >= 50 ? 1900 + first : 2000 + first);
     let end = second >= 1000 ? second : Math.floor(start / 100) * 100 + second;
     if (end < start) end += 100;
     return String(start) + "/" + String(end % 100).padStart(2, "0");
@@ -2964,24 +2964,24 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
     ["stats_payload", ["stats", "data", "items"], "player_stats", true],
     ["transfers_payload", ["transfers", "history", "items", "data"], "player_transfers", true],
     ["market_value_payload", ["marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"], "player_market_values", true],
-    // An empty injury list is a valid, verified answer; the other three sections
-    // must contain rows unless a post-repair provider snapshot confirms they are empty.
-    ["injuries_payload", ["injuries", "data", "items"], "player_injuries", false]
+    ["injuries_payload", ["injuries", "data", "items"], "player_injuries", true]
   ];
   const syncAt = Date.parse(row && row.last_felipe_synced_at || "");
   const stale = !Number.isFinite(syncAt) || Date.now() - syncAt > 7 * 86400000;
   const profileRecord = sourceByType.player_profile;
   const profileFetchedAt = Date.parse(profileRecord && profileRecord.fetched_at || "");
   const profileFresh = Number.isFinite(profileFetchedAt) && profileFetchedAt >= repairCutoff;
-  const profileExists = !!(row && row.profile_payload && typeof row.profile_payload === "object" && Object.keys(row.profile_payload).length) ||
-    (profileFresh && !!(profileRecord.payload && typeof profileRecord.payload === "object" && Object.keys(profileRecord.payload).length));
+  const profileExists = profileFresh &&
+    !!(profileRecord.payload && typeof profileRecord.payload === "object" && Object.keys(profileRecord.payload).length);
   const missing = !profileExists || snapshotChecks.some(([field, keys, recordType, requireRows]) => {
     const localHasData = tmHasArrayPayload(row && row[field], keys, requireRows);
     const sourceRecord = sourceByType[recordType];
     const fetchedAt = Date.parse(sourceRecord && sourceRecord.fetched_at || "");
     const sourceFresh = Number.isFinite(fetchedAt) && fetchedAt >= repairCutoff;
     const sourceHasVerifiedArray = sourceFresh && tmHasArrayPayload(sourceRecord.payload, keys, false);
-    return !localHasData && !sourceHasVerifiedArray;
+    // Repair every section once from a fresh provider response, even when the
+    // old local snapshot already contains rows. A fresh [] is authoritative.
+    return !sourceFresh || (!localHasData && !sourceHasVerifiedArray);
   });
   const required = stale || missing;
   if (!required) return { required: false, queued: false, configured: !!token };
@@ -2993,8 +2993,23 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
   const existing = queueRows[0] || null;
   const fetchedAt = existing && Date.parse(existing.fetched_at || "");
   const queueStatus = String(existing && existing.payload && existing.payload.status || "");
-  if (Number.isFinite(fetchedAt) && Date.now() - fetchedAt < 15 * 60000 && ["queued", "running"].includes(queueStatus)) {
+  const queuePayloadExisting = existing && existing.payload && typeof existing.payload === "object" ? existing.payload : {};
+  const ageMs = Number.isFinite(fetchedAt) ? Date.now() - fetchedAt : Number.POSITIVE_INFINITY;
+  const retryAt = Date.parse(queuePayloadExisting.retry_at || "");
+  if (queueStatus === "blocked") {
+    return { required: true, queued: false, configured: true, state: "blocked",
+      reason: queuePayloadExisting.last_error || "Bu oyuncunun yenilemesi kalıcı hata nedeniyle durduruldu." };
+  }
+  if (queueStatus === "retry" && Number.isFinite(retryAt) && retryAt > Date.now()) {
+    return { required: true, queued: true, configured: true, state: "retry-wait", retryAt: queuePayloadExisting.retry_at };
+  }
+  if ((queueStatus === "queued" && ageMs < 15 * 60000) ||
+      (queueStatus === "running" && ageMs < 45 * 60000)) {
     return { required: true, queued: true, configured: true, state: "already-queued" };
+  }
+  if (queueStatus === "dispatch-failed" && ageMs < 2 * 60000) {
+    return { required: true, queued: false, configured: true, state: "dispatch-failed",
+      reason: queuePayloadExisting.error || "GitHub Actions çalışması başlatılamadı." };
   }
 
   const now = new Date().toISOString();
@@ -4086,7 +4101,7 @@ async function tmPlayer(env, id) {
   // dcaribou's one-time historical appearance aggregates. Do not let the
   // presence of current-season rows hide the older seasons.
   try {
-    const selectStats = "select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,second_yellow_cards,red_cards&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc&limit=1000";
+    const selectStats = "select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,second_yellow_cards,red_cards,goals_conceded,clean_sheets&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc&limit=1000";
     const [dbStats, historyStats] = await Promise.all([
       tmDbRows(env, "tm_player_season_stats?" + selectStats),
       tmDbRows(env, "tm_appearance_season_totals?" + selectStats)
@@ -4095,7 +4110,7 @@ async function tmPlayer(env, id) {
       seasonID: x.season_id, competitionName: x.competition_name, clubName: x.club_name,
       appearances: x.appearances, starts: x.starts, goals: x.goals, assists: x.assists,
       minutes: x.minutes, yellowCards: x.yellow_cards, secondYellowCards: x.second_yellow_cards,
-      redCards: x.red_cards
+      redCards: x.red_cards, goalsConceded: x.goals_conceded, cleanSheets: x.clean_sheets
     }));
     const currentRows = normalizeRows(dbStats);
     const statKey = x => [x.seasonID || "", x.competitionName || "", x.clubName || ""].join("|");
@@ -4142,7 +4157,7 @@ async function tmPlayer(env, id) {
   } catch (_) {}
   if (!marketRows.length) marketRows = listPayload(row.market_value_payload || {}, ["market_value_history", "marketValueHistory", "history", "marketValues", "valuations", "items", "data"]);
   out.marketValueHistory = marketRows;
-  out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]).map(item => ({ ...item, injury: item.injury || item.reason || item.type || item.description || item.injuryType || "Sakatlık", from_date: item.from_date || item.fromDate || item.from || item.startDate || item.start || "", until_date: item.until_date || item.untilDate || item.until || item.endDate || item.end || "", season: item.season || item.seasonName || item.season_id || "", days: item.days ?? item.daysMissed ?? item.durationDays, games_missed: item.games_missed ?? item.gamesMissed ?? item.missedMatches }));
+  out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]).map(item => ({ ...item, injury: item.injury || item.reason || item.type || item.description || item.injuryType || "", from_date: item.from_date || item.fromDate || item.from || item.startDate || item.start || "", until_date: item.until_date || item.untilDate || item.until || item.endDate || item.end || "", season: item.season || item.seasonName || item.season_id || "", days: item.days ?? item.daysMissed ?? item.durationDays, games_missed: item.games_missed ?? item.gamesMissed ?? item.missedMatches }));
   out.absences = listPayload(row.absences_payload || {}, ["absences", "data", "items"]);
   out.photo = row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "";
   const nationality = pick(b, "citizenship", "nationality", "nationalities");
@@ -7905,7 +7920,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf36:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf37:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
