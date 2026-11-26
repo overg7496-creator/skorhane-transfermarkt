@@ -212,3 +212,32 @@ where p.last_felipe_synced_at is null
 
 revoke all on public.tm_detail_preseed_candidates from anon, authenticated;
 grant select on public.tm_detail_preseed_candidates to service_role;
+
+-- Stable read models for season selectors and team-profile statistics.
+create or replace view public.tm_league_seasons
+with (security_invoker = true)
+as
+select
+  r.external_id as competition_id,
+  coalesce(nullif(r.payload->>'competition_name',''), r.external_id) as competition_name,
+  r.record_key as season_id,
+  coalesce(nullif(r.payload->>'status',''), 'unknown') as sync_status,
+  case when coalesce(r.payload->>'total_clubs','') ~ '^[0-9]+$'
+       then (r.payload->>'total_clubs')::integer else 0 end as total_clubs,
+  case when jsonb_typeof(r.payload->'completed_club_ids') = 'array'
+       then jsonb_array_length(r.payload->'completed_club_ids') else 0 end as completed_clubs,
+  r.payload->>'sync_date' as sync_date,
+  r.fetched_at
+from public.tm_source_records r
+where r.source = 'felipeall'
+  and r.record_type = 'squad_sync_state';
+
+create or replace view public.tm_team_season_stats
+with (security_invoker = true)
+as
+select * from public.tm_team_season_summary;
+
+revoke all on public.tm_league_seasons from anon, authenticated;
+revoke all on public.tm_team_season_stats from anon, authenticated;
+grant select on public.tm_league_seasons to service_role;
+grant select on public.tm_team_season_stats to service_role;
