@@ -571,9 +571,11 @@ if __name__ == "__main__":
         with (
             patch.object(sync, "db_get", side_effect=[
                 [{"tm_id": "401923", "name": "Victor Osimhen"}],
+                [{"last_felipe_synced_at": "2999-01-01T00:00:00+00:00"}],
                 [{"tm_id": "1113451", "name": "Kojo Peprah Oppong"}],
+                [{"last_felipe_synced_at": "2999-01-01T00:00:00+00:00"}],
             ]),
-            patch.object(sync, "sync_felipeall", side_effect=[1, 1]) as run,
+            patch.object(sync, "sync_felipeall", return_value=1) as run,
         ):
             self.assertEqual(sync.sync_preseed_players("401923,1113451"), 2)
         self.assertEqual(run.call_args_list[0].kwargs, {"only_player": "401923", "missing_only": True})
