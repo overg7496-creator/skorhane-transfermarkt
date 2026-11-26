@@ -2973,8 +2973,7 @@ function tmHasArrayPayload(payload, keys, requireRows = false) {
   const rows = tmPayloadArray(payload, keys);
   return Array.isArray(rows) && (!requireRows || rows.length > 0);
 }
-async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
-  const token = String(env && env.GITHUB_ACTIONS_TOKEN || "").trim();
+function tmPlayerRefreshPlan(row, sourceRecords = []) {
   const repairCutoff = Date.parse("2026-11-26T12:00:00Z");
   const sourceByType = Object.fromEntries((Array.isArray(sourceRecords) ? sourceRecords : [])
     .filter(item => item && item.record_type)
@@ -2998,11 +2997,16 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
     const fetchedAt = Date.parse(sourceRecord && sourceRecord.fetched_at || "");
     const sourceFresh = Number.isFinite(fetchedAt) && fetchedAt >= repairCutoff;
     const sourceHasVerifiedArray = sourceFresh && tmHasArrayPayload(sourceRecord.payload, keys, false);
-    // Repair every section once from a fresh provider response, even when the
-    // old local snapshot already contains rows. A fresh [] is authoritative.
     return !sourceFresh || (!localHasData && !sourceHasVerifiedArray);
   });
-  const required = stale || missing;
+  return { required: stale || missing, stale, missing };
+}
+
+async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
+  const token = String(env && env.GITHUB_ACTIONS_TOKEN || "").trim();
+  const plan = tmPlayerRefreshPlan(row, sourceRecords);
+  const stale = plan.stale;
+  const required = plan.required;
   if (!required) return { required: false, queued: false, configured: !!token };
   if (!token) return { required: true, queued: false, configured: false, reason: "GITHUB_ACTIONS_TOKEN tanımlı değil" };
 
@@ -4109,17 +4113,18 @@ async function tmPlayerSummary(env, id, fallback = {}) {
   return { photo: row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "", bio, name: row.name || b.name || fallback.name || "", tmId: playerId };
 }
 
-async function tmPlayer(env, id) {
+async function tmPlayer(env, id, executionCtx = null) {
   const out = { photo: "", bio: {}, seasons: [], transfers: [], marketValueHistory: [], injuries: [], absences: [] };
   const playerId = String(id || "").replace(/\D/g, "");
   if (!playerId) return { ...out, err: "geçersiz Transfermarkt oyuncu kimliği" };
   const playerFields = "tm_id,name,team_name,position,photo_url,profile_payload,stats_payload,current_season_payload,transfers_payload,market_value_payload,injuries_payload,absences_payload,current_market_value_eur,current_market_value_text,last_felipe_synced_at";
-  const rows = await tmDbRows(env, "tm_players?select=" + playerFields + "&tm_id=eq." + encodeURIComponent(playerId) + "&limit=1");
+  const [rows, sourceRecords] = await Promise.all([
+    tmDbRows(env, "tm_players?select=" + playerFields + "&tm_id=eq." + encodeURIComponent(playerId) + "&limit=1"),
+    tmDbRows(env, "tm_source_records?select=record_type,payload,fetched_at&source=eq.felipeall&external_id=eq." +
+      encodeURIComponent(playerId) + "&record_key=eq.&limit=10").catch(() => [])
+  ]);
   const dbRow = rows[0];
   if (!dbRow) return { ...out, err: "Transfermarkt oyuncusu henüz veritabanına senkronize edilmemiş" };
-  const sourceRecords = await tmDbRows(env,
-    "tm_source_records?select=record_type,payload,fetched_at&source=eq.felipeall&external_id=eq." +
-    encodeURIComponent(playerId) + "&record_key=eq.&limit=10").catch(() => []);
   const sourceByType = Object.fromEntries(sourceRecords.filter(item => item && item.record_type)
     .map(item => [String(item.record_type), item.payload || {}]));
   const chooseSnapshot = (field, recordType, keys) => {
@@ -4140,11 +4145,26 @@ async function tmPlayer(env, id) {
     market_value_payload: chooseSnapshot("market_value_payload", "player_market_values", ["marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"]),
     injuries_payload: chooseSnapshot("injuries_payload", "player_injuries", ["injuries", "data", "items"])
   };
-  // Start queue evaluation immediately, while the independent history reads below run.
-  const refreshPromise = queueTmPlayerRefresh(env, playerId, row, sourceRecords).catch(error => ({
-    required: true, queued: false, configured: !!(env && env.GITHUB_ACTIONS_TOKEN),
-    reason: String(error && error.message || error)
-  }));
+  // Respond with the current Supabase snapshot first; dispatch missing details under waitUntil.
+  const refreshPlan = tmPlayerRefreshPlan(row, sourceRecords);
+  let refreshState = {
+    required: !!refreshPlan.required,
+    queued: !!(refreshPlan.required && env && env.GITHUB_ACTIONS_TOKEN),
+    configured: !!(env && env.GITHUB_ACTIONS_TOKEN),
+    state: refreshPlan.required ? ((env && env.GITHUB_ACTIONS_TOKEN) ? "queued" : "required") : "current",
+    reason: refreshPlan.required && !(env && env.GITHUB_ACTIONS_TOKEN) ? "GITHUB_ACTIONS_TOKEN tanımlı değil" : ""
+  };
+  if (refreshPlan.required) {
+    const refreshPromise = queueTmPlayerRefresh(env, playerId, row, sourceRecords).catch(error => ({
+      required: true, queued: false, configured: !!(env && env.GITHUB_ACTIONS_TOKEN),
+      state: "dispatch-failed", reason: String(error && error.message || error)
+    }));
+    if (executionCtx && typeof executionCtx.waitUntil === "function") {
+      executionCtx.waitUntil(refreshPromise);
+    } else {
+      refreshState = await refreshPromise;
+    }
+  }
   const profileRaw = row.profile_payload || {};
   const b = profileRaw.player || profileRaw.data || profileRaw.profile || profileRaw;
   const statsRaw = row.stats_payload || {};
@@ -4179,7 +4199,7 @@ async function tmPlayer(env, id) {
     const normalized = [...currentRows, ...historyOnly];
     if (normalized.length) statsRows = normalized;
   } catch (_) {}
-  const refreshState = await refreshPromise;
+  // refreshState is already known; the background queue continues after the response.
   out.refreshRequired = !!refreshState.required;
   out.refreshQueued = !!refreshState.queued;
   out.refreshConfigured = !!refreshState.configured;
@@ -4506,7 +4526,7 @@ function overlayApiFootballCareerFields(rows, apiRows) {
   }
   return list;
 }
-async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId, teamHint = "", posHint = "", espnId = "", initialPhoto = "", pitchId = "", pitchCode = "", pitchYear = "") {
+async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId, teamHint = "", posHint = "", espnId = "", initialPhoto = "", pitchId = "", pitchCode = "", pitchYear = "", executionCtx = null) {
   const st = {};
   const out = { name, photo: "", photos: initialPhoto && /^https?:\/\//i.test(initialPhoto) ? [initialPhoto] : [], bio: {}, seasons: [], sources: st };
   const coach = role === "coach";
@@ -4571,7 +4591,7 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
           st.transfermarkt = "Transfermarkt oyuncusu bulunamadı";
           return;
         }
-        const result = await tmPlayer(env, id);
+        const result = await tmPlayer(env, id, executionCtx);
         out.tm = result;
         out.tmId = id;
         st.transfermarkt = result.err ? "hata: " + result.err : (result.refreshQueued ? "ok - eksik veriler yenileme kuyruğuna alındı" : "ok");
@@ -7912,7 +7932,7 @@ async function nosyIddaaOddsForMatch(env,home,away,date,status){
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, executionCtx) {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
     const url = new URL(request.url), p = url.pathname, q = url.searchParams;
     const todayTR = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
@@ -8000,11 +8020,11 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf41:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
-          const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
+        res = await cached("pf42:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+          const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear, executionCtx);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
-          return { body: r, ttl: r.tmRefreshRequired ? 20 : part === "info" ? 60 : hasCareer ? 21600 : providerErrors ? 90 : 1800 };
+          return { body: r, ttl: r.tmRefreshRequired ? 3 : part === "info" ? 60 : hasCareer ? 900 : providerErrors ? 30 : 120 };
         });
       } else if (p === "/team") {
         let code = q.get("code") || "";
