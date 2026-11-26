@@ -74,6 +74,44 @@ class SquadNormalizationTests(unittest.TestCase):
         self.assertIsNone(squads.normalize_squad_player({"id": "12345"}, **args))
 
 
+class SquadPersistenceTests(unittest.TestCase):
+    def test_historical_squad_does_not_overwrite_current_player_profile(self):
+        player = {
+            "name": "Test Player",
+            "team_name": "Old Club",
+            "position": "Forward",
+            "photo_url": "https://img.example/player.jpg",
+            "is_active": True,
+            "current_market_value_eur": 900000,
+            "profile_payload": {
+                "squad_import": {
+                    "competition_id": "ES1",
+                    "competition_name": "LaLiga",
+                    "season_id": "2022",
+                    "club_id": "77",
+                    "club_name": "Old Club",
+                    "shirt_number": 9,
+                }
+            },
+        }
+        with patch.object(squads, "db_rpc") as rpc:
+            squads.save_player("12345", player, None, historical_only=True)
+
+        self.assertEqual(rpc.call_args_list[0].args[0], "tm_upsert_player")
+        self.assertEqual(
+            rpc.call_args_list[0].args[1]["p_player"],
+            {
+                "name": "Test Player",
+                "position": "Forward",
+                "photo_url": "https://img.example/player.jpg",
+            },
+        )
+        self.assertEqual(rpc.call_args_list[1].args[0], "tm_upsert_team_season_squad")
+        roster_row = rpc.call_args_list[1].args[1]["p_row"]
+        self.assertEqual(roster_row["season_id"], "2022")
+        self.assertEqual(roster_row["club_name"], "Old Club")
+
+
 class SquadSyncTests(unittest.TestCase):
 
     def test_current_default_league_list_excludes_nonexistent_2026_group_four(self):
