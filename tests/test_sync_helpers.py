@@ -55,7 +55,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("tm_source_records?select=record_type,payload,fetched_at", worker)
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
-        self.assertIn('"pf37:"', worker)
+        self.assertIn('"pf38:"', worker)
         self.assertIn('refreshState = await queueTmPlayerRefresh', worker)
         self.assertIn('refreshRetryAt = refreshState.retryAt', worker)
         self.assertIn('tmRefreshState:', worker)
@@ -486,7 +486,7 @@ class SyncHelperTests(unittest.TestCase):
         worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
         copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, copy)
-        self.assertIn('"pf37:"', worker)
+        self.assertIn('"pf38:"', worker)
 
     def test_database_saves_goalkeeper_season_fields(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
@@ -499,6 +499,16 @@ class SyncHelperTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("required: true", workflow)
-        self.assertNotRegex(workflow, r"(?m)^\\s+(?:schedule|workflow_run):")
+        self.assertNotRegex(workflow, r"(?m)^\s+(?:schedule|workflow_run):")
+
+    def test_worker_does_not_invent_current_club_for_unattributed_stats(self):
+        worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
+        self.assertIn("if (!clubLabel) continue;", worker)
+        self.assertNotIn('clubLabel = "Takım bilgisi yok"', worker)
+
+    def test_worker_uses_valid_columns_for_historical_season_view(self):
+        worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
+        self.assertIn("tm_appearance_season_totals?\" + selectHistoryStats", worker)
+        self.assertIn("goals_conceded,clean_sheets&tm_id=eq.", worker)
 if __name__ == "__main__":
     unittest.main()
