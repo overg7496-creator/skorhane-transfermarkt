@@ -226,6 +226,26 @@ def normalize_date(value: Any) -> str | None:
     return None
 
 
+def normalize_tm_season(value: Any) -> str | None:
+    """Normalize Transfermarkt API seasons such as 22/23 to 2022/23."""
+    if value is None:
+        return None
+    raw = str(value).strip().replace("–", "/").replace("-", "/")
+    match = re.search(r"(?<!\d)(\d{2,4})\s*/\s*(\d{2,4})(?!\d)", raw)
+    if match:
+        first, second = int(match.group(1)), int(match.group(2))
+        start_year = first if first >= 1000 else 2000 + first
+        end_year = second if second >= 1000 else (start_year // 100) * 100 + second
+        if end_year < start_year:
+            end_year += 100
+        return f"{start_year}/{end_year % 100:02d}"
+    year_match = re.search(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)", raw)
+    if year_match:
+        start_year = int(year_match.group(1))
+        return f"{start_year}/{(start_year + 1) % 100:02d}"
+    return raw or None
+
+
 def source_record(source: str, record_type: str, external_id: str, record_key: str, payload: dict[str, Any]) -> None:
     if not payload:
         return
@@ -238,19 +258,46 @@ def source_record(source: str, record_type: str, external_id: str, record_key: s
     })
 
 
+SNAPSHOT_ROW_KEYS = {
+    "stats_payload": ("stats", "data", "items"),
+    "current_season_payload": ("matches", "stats", "data", "items"),
+    "transfers_payload": ("transfers", "history", "items", "data"),
+    "market_value_payload": ("marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"),
+    "injuries_payload": ("injuries", "data", "items"),
+    "absences_payload": ("absences", "data", "items"),
+    "national_career_payload": ("national", "career", "stats", "data", "items"),
+}
+SOURCE_RECORD_ROW_KEYS = {
+    "player_market_values": SNAPSHOT_ROW_KEYS["market_value_payload"],
+    "player_transfers": SNAPSHOT_ROW_KEYS["transfers_payload"],
+    "player_stats": SNAPSHOT_ROW_KEYS["stats_payload"],
+    "player_injuries": SNAPSHOT_ROW_KEYS["injuries_payload"],
+    "player_absences": SNAPSHOT_ROW_KEYS["absences_payload"],
+    "current_season_matches": SNAPSHOT_ROW_KEYS["current_season_payload"],
+}
+
+
+def snapshot_has_rows(payload: Any, keys: tuple[str, ...]) -> bool:
+    return bool(iterable_from(payload, keys))
+
+
 def source_record_snapshot(
     source: str, record_type: str, external_id: str, record_key: str, payload: dict[str, Any]
 ) -> None:
-    """Replace a fully fetched source snapshot, including authoritative empty lists."""
+    """Store provider responses without replacing a populated snapshot with an empty one."""
     if not isinstance(payload, dict):
         raise RuntimeError(f"{record_type} anlık görüntüsü JSON nesnesi değil.")
     external_id, record_key = str(external_id or ""), str(record_key or "")
     query = (
-        "tm_source_records?select=id"
+        "tm_source_records?select=id,payload"
         f"&source=eq.{quote(source)}&record_type=eq.{quote(record_type)}"
         f"&external_id=eq.{quote(external_id)}&record_key=eq.{quote(record_key)}&limit=1"
     )
     rows = db_get(query)
+    row_keys = SOURCE_RECORD_ROW_KEYS.get(record_type)
+    if rows and row_keys and snapshot_has_rows(rows[0].get("payload"), row_keys) and not snapshot_has_rows(payload, row_keys):
+        LOG.warning("%s boş yanıtı mevcut dolu kaynak anlık görüntüsünü ezmedi (ID=%s).", record_type, external_id)
+        return
     snapshot = {"payload": payload, "fetched_at": datetime.now(timezone.utc).isoformat()}
     if rows:
         row_id = rows[0].get("id")
@@ -264,23 +311,32 @@ def source_record_snapshot(
         })
 
 
-PLAYER_SNAPSHOT_FIELDS = {
-    "stats_payload", "current_season_payload", "transfers_payload",
-    "market_value_payload", "injuries_payload", "absences_payload", "national_career_payload",
-}
+PLAYER_SNAPSHOT_FIELDS = set(SNAPSHOT_ROW_KEYS)
 
 
 def replace_player_snapshots(tm_id: str, snapshots: dict[str, Any]) -> None:
-    """Replace endpoint columns only after all pages of those endpoints succeeded."""
+    """Refresh snapshots only after successful fetches; an empty response never erases useful rows."""
     unknown = set(snapshots) - PLAYER_SNAPSHOT_FIELDS
     if unknown:
         raise ValueError(f"İzin verilmeyen oyuncu anlık görüntüsü alanları: {', '.join(sorted(unknown))}")
     if any(not isinstance(value, dict) for value in snapshots.values()):
         raise ValueError("Oyuncu anlık görüntüleri JSON nesnesi olmalı.")
-    if snapshots:
+    if not snapshots:
+        return
+    fields = ",".join(sorted(snapshots))
+    rows = db_get(f"tm_players?select={fields}&tm_id=eq.{quote(str(tm_id))}&limit=1")
+    existing = rows[0] if rows else {}
+    safe_updates: dict[str, Any] = {}
+    for field, payload in snapshots.items():
+        keys = SNAPSHOT_ROW_KEYS[field]
+        if snapshot_has_rows(payload, keys) or not snapshot_has_rows(existing.get(field), keys):
+            safe_updates[field] = payload
+        else:
+            LOG.warning("%s boş yanıtı mevcut dolu oyuncu kaydını ezmedi (ID=%s).", field, tm_id)
+    if safe_updates:
         db_patch(
             f"tm_players?tm_id=eq.{quote(str(tm_id))}",
-            {**snapshots, "updated_at": datetime.now(timezone.utc).isoformat()},
+            {**safe_updates, "updated_at": datetime.now(timezone.utc).isoformat()},
         )
 
 
@@ -289,7 +345,9 @@ def safe_text(*values: Any) -> str | None:
         if value is None:
             continue
         if isinstance(value, dict):
-            value = value.get("name") or value.get("displayName") or value.get("value")
+            value = (value.get("name") or value.get("displayName") or value.get("display_name")
+                     or value.get("displayValue") or value.get("display_value") or value.get("value")
+                     or value.get("text"))
         if isinstance(value, (int, float)):
             return str(value)
         if isinstance(value, str) and value.strip():
@@ -843,13 +901,16 @@ def sync_felipeall(
             if not isinstance(profile_player, dict):
                 profile_player = {}
     
-            club_obj = profile_player.get("club") or {}
+            club_obj = profile_player.get("currentClub") or profile_player.get("club") or {}
             if isinstance(club_obj, str):
-                club_name = club_obj
-                club_id = ""
+                club_id = club_obj if club_obj.isdigit() else ""
+                club_name = (player.get("team_name") or f"Kulüp #{club_id}") if club_id else club_obj
             elif isinstance(club_obj, dict):
-                club_name = safe_text(club_obj.get("name"), club_obj.get("display_name"), player.get("team_name"))
+                club_name = safe_text(club_obj.get("name"), club_obj.get("displayName"),
+                                      club_obj.get("display_name"), player.get("team_name"))
                 club_id = safe_text(club_obj.get("id")) or ""
+                if not club_name and club_id:
+                    club_name = f"Kulüp #{club_id}"
             else:
                 club_name, club_id = player.get("team_name"), ""
     
@@ -987,10 +1048,23 @@ def sync_felipeall(
             raw_stat_rows = iterable_from(stats_payload, ("stats",))
             normalized_stats: list[dict[str, Any]] = []
             for row in raw_stat_rows:
-                season = safe_text(row.get("season_id"), row.get("seasonId"), row.get("seasonID"), row.get("season"))
-                competition = safe_text(row.get("competition_name"), row.get("competitionName"), row.get("competition"))
-                club_id_for_stat = safe_text(row.get("club_id"), row.get("clubId"), row.get("clubID")) or ""
-                stat_club = safe_text(row.get("club_name"), row.get("clubName"), club_names.get(club_id_for_stat))
+                season = normalize_tm_season(safe_text(
+                    row.get("season_id"), row.get("seasonId"), row.get("seasonID"), row.get("season")
+                ))
+                competition = safe_text(row.get("competition_name"), row.get("competitionName"),
+                                        row.get("competition"), row.get("competitionId"))
+                raw_club = row.get("club")
+                if isinstance(raw_club, dict):
+                    raw_club_id = safe_text(raw_club.get("id"), raw_club.get("clubId")) or ""
+                    raw_club_name = safe_text(raw_club.get("name"), raw_club.get("displayName"))
+                else:
+                    raw_club_id = str(raw_club).strip() if raw_club is not None and str(raw_club).strip().isdigit() else ""
+                    raw_club_name = str(raw_club).strip() if raw_club is not None and not raw_club_id else None
+                club_id_for_stat = safe_text(row.get("club_id"), row.get("clubId"), row.get("clubID"), raw_club_id) or ""
+                stat_club = safe_text(row.get("club_name"), row.get("clubName"), raw_club_name,
+                                      club_names.get(club_id_for_stat))
+                if not stat_club and club_id_for_stat:
+                    stat_club = f"Kulüp #{club_id_for_stat}"
                 if not season or not stat_club:
                     continue
                 mapped = {
@@ -1030,7 +1104,8 @@ def sync_felipeall(
             seen_stats: set[tuple[str, str, str]] = set()
             for row in stat_batches:
                 season = safe_text(row.get("seasonID"), row.get("seasonId"), row.get("season"), row.get("seasonName")) or ""
-                competition = safe_text(row.get("competitionName"), row.get("competition"), row.get("competitionID")) or ""
+                competition = safe_text(row.get("competitionName"), row.get("competition"),
+                                        row.get("competitionID"), row.get("competitionId")) or ""
                 club = safe_text(row.get("clubName"), row.get("teamName"), row.get("club"), row.get("team")) or ""
                 if not season or not club:
                     continue
