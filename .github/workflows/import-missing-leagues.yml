@@ -1,23 +1,51 @@
-name: SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı
+name: SkorHane — Lig, Kadro ve Geçmiş Sezon Ön-Doldurma
 
 on:
-  # Yalnızca Actions ekranından manuel olarak başlatılır.
   workflow_dispatch:
+    inputs:
+      tm_leagues:
+        description: "Transfermarkt lig kodları; ilk sırada ES1 ve GB1 bulunur. Ek lig kodlarını virgülle ekleyebilirsin."
+        required: true
+        type: string
+        default: "ES1,GB1,TR1,TR2,TR3A,TR3B,TR4A,TR4B,TR4C,L1,IT1,FR1"
+      tm_seasons:
+        description: "Sezon başlangıç yılları; güncel sezon önce, geçmiş sezonlar sonra."
+        required: true
+        type: string
+        default: "2026,2025,2024,2023,2022"
+      continue_count:
+        description: "Otomatik devam sayacı. Elle başlatırken 0 bırak."
+        required: false
+        type: string
+        default: "0"
 
 permissions:
   contents: read
   actions: write
 
-# Ana oyuncu detay aktarımından bağımsız grup: biri diğerini iptal etmez.
 concurrency:
-  group: skorhane-missing-league-squads
+  group: skorhane-transfermarkt-squad-preseed
   cancel-in-progress: false
 
 jobs:
   import-missing-leagues:
-    name: Felipe API ile eksik lig takımlarını ve kadrolarını aktar
+    name: Transfermarkt lig/kadro/sezon batch aktarımı
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      FELIPE_API_BASE: http://127.0.0.1:8000
+      TM_LEAGUES: ${{ github.event.inputs.tm_leagues || 'ES1,GB1,TR1,TR2,TR3A,TR3B,TR4A,TR4B,TR4C,L1,IT1,FR1' }}
+      TM_SEASONS: ${{ github.event.inputs.tm_seasons || '2026,2025,2024,2023,2022' }}
+      TM_SEASON: "2026"
+      TM_CONTINUE_COUNT: ${{ github.event.inputs.continue_count || '0' }}
+      REQUEST_DELAY_MIN_SECONDS: "4.0"
+      REQUEST_DELAY_MAX_SECONDS: "6.0"
+      HTTP_MAX_RETRIES: "4"
+      HTTP_TIMEOUT_SECONDS: "45"
+      SQUAD_SYNC_MAX_RUNTIME_SECONDS: "20400"
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,23 +55,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate workers and tests
+      - name: Validate sync code and tests
         run: |
+          set -euo pipefail
           python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py
           python -m unittest discover -s tests -v
 
-      - name: Start local Felipe Transfermarkt API (v5.0.0)
+      - name: Start local Felipe Transfermarkt API v5.0.0
         env:
           RATE_LIMITING_ENABLE: "false"
           TFMKT_MAX_CONCURRENCY: "1"
           TFMKT_TIMEOUT_SECONDS: "30"
           CACHE_TTL_SECONDS: "600"
         run: |
-          python -m pip install --upgrade uv
-          git clone --depth 1 --branch v5.0.0 https://github.com/felipeall/transfermarkt-api.git "$RUNNER_TEMP/transfermarkt-api"
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-warn-script-location uv
+          git clone --quiet --depth 1 --branch v5.0.0 https://github.com/felipeall/transfermarkt-api.git "$RUNNER_TEMP/transfermarkt-api"
           cd "$RUNNER_TEMP/transfermarkt-api"
           uv sync --extra server --no-dev
           nohup uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/transfermarkt-api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/transfermarkt-api.pid"
           ready=0
           for attempt in $(seq 1 45); do
             if curl --fail --silent http://127.0.0.1:8000/health > /dev/null; then
@@ -57,20 +88,14 @@ jobs:
             echo "Felipe API 90 saniye içinde başlamadı."
             exit 1
           fi
-          echo "Yerel Felipe API hazır; upstream eşzamanlılığı 1."
+          echo "Felipe API hazır; upstream istekleri seri ve gecikmeli yürütülecek."
 
-      - name: Import missing league teams and squads
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FELIPE_API_BASE: http://127.0.0.1:8000
-          TM_LEAGUES: TR3A,TR3B,TR4A,TR4B,TR4C
-          TM_SEASON: "2026"
-          # Ana detay aktarımıyla eşzamanlı çalışırken istekleri seyrek tut.
-          REQUEST_DELAY_MIN_SECONDS: "7.0"
-          REQUEST_DELAY_MAX_SECONDS: "9.0"
-          HTTP_MAX_RETRIES: "3"
-          HTTP_TIMEOUT_SECONDS: "45"
-          SQUAD_SYNC_MAX_RUNTIME_SECONDS: "20400"
-          GITHUB_TOKEN: ${{ github.token }}
+      - name: Import leagues, team snapshots and historical squads
         run: python sync/sync_squads_and_clubs.py
+
+      - name: Stop local API
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/transfermarkt-api.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/transfermarkt-api.pid")" 2>/dev/null || true
+          fi
