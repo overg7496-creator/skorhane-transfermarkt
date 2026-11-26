@@ -4164,14 +4164,6 @@ async function tmPlayer(env, id) {
     ]);
     transferRows = transferResult;
     marketRows = marketResult;
-  }
-  const refreshState = await refreshPromise;
-  out.refreshRequired = !!refreshState.required;
-  out.refreshQueued = !!refreshState.queued;
-  out.refreshConfigured = !!refreshState.configured;
-  out.refreshReason = refreshState.reason || "";
-  out.refreshState = refreshState.state || (refreshState.required ? (refreshState.queued ? "queued" : "required") : "current");
-  out.refreshRetryAt = refreshState.retryAt || "";
     const normalizeRows = rows => rows.map(x => ({
       seasonID: x.season_id, competitionName: x.competition_name, clubName: x.club_name,
       appearances: x.appearances, starts: x.starts, goals: x.goals, assists: x.assists,
@@ -4187,6 +4179,13 @@ async function tmPlayer(env, id) {
     const normalized = [...currentRows, ...historyOnly];
     if (normalized.length) statsRows = normalized;
   } catch (_) {}
+  const refreshState = await refreshPromise;
+  out.refreshRequired = !!refreshState.required;
+  out.refreshQueued = !!refreshState.queued;
+  out.refreshConfigured = !!refreshState.configured;
+  out.refreshReason = refreshState.reason || "";
+  out.refreshState = refreshState.state || (refreshState.required ? (refreshState.queued ? "queued" : "required") : "current");
+  out.refreshRetryAt = refreshState.retryAt || "";
   const currentSeason = row.current_season_payload || {};
   if ((!Array.isArray(statsRows) || !statsRows.length) && Array.isArray(currentSeason.stats)) statsRows = currentSeason.stats;
   const listPayload = (raw, keys) => Array.isArray(raw) ? raw : (raw && typeof raw === "object" ? keys.map(k => raw[k]).find(Array.isArray) || [] : []);
