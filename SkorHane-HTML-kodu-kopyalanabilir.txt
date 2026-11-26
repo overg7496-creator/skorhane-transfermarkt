@@ -3875,7 +3875,7 @@ async function loadPitchPlayerCareer(my){
     : 'Transfermarkt sezon kaydı bulunamadı';
   renderPlayer();
 }
-const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v6.'+pitchClientTeamKey(name||'');
+const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v7.'+pitchClientTeamKey(name||'');
 function readPlayerStatsCache(name){try{const raw=localStorage.getItem(playerStatsCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<7*86400e3&&x.data&&Array.isArray(x.data.seasons)?x.data:null}catch(_){return null}}
 function savePlayerStatsCache(name,data){try{if(data&&Array.isArray(data.seasons))localStorage.setItem(playerStatsCacheKey(name),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
 function playerPitchLeagueCandidates(my){
@@ -3955,42 +3955,54 @@ async function loadPitchPlayerProfilePhoto(my){
   finally{if(cur===my)my.pitchProfilePhotoLoading=false;}
 }
 function scheduleTmRefreshProbe(my,qs,attempt=0){
-  if(!my||cur!==my||my.tmRefreshTimer||attempt>=6)return;
+  const maxAttempts=36;
+  if(!my||cur!==my||my.tmRefreshTimer||attempt>=maxAttempts)return;
   my.tmRefreshTimer=setTimeout(async()=>{
     my.tmRefreshTimer=null;
     if(cur!==my)return;
-    my.tmRefreshStatus='checking';renderPlayer();
+    my.tmRefreshStatus='checking';
     try{
-      const fresh=await api('/player?part=stats'+qs);
+      // Reload both halves of the player screen together: profile/summary and all Transfermarkt history tabs.
+      const [freshInfo,freshStats]=await Promise.all([
+        api('/player?part=info'+qs),
+        api('/player?part=stats'+qs)
+      ]);
       if(cur!==my)return;
-      my.stats=fresh;my.statsLoaded=true;my.serr='';
+      my.info=freshInfo;my.infoLoaded=true;my.err='';
+      my.stats=freshStats;my.statsLoaded=true;my.serr='';
       if(Array.isArray(my.pitchCareerRows))mergePitchCareerIntoStats(my.stats,my.pitchCareerRows);
-      savePlayerStatsCache(my.it.name,fresh);
-      const state=String(fresh.tmRefreshState||'');
-      if(!fresh.tmRefreshRequired){
+      savePlayerStatsCache(my.it.name,freshStats);
+      const pending=!!(freshInfo.tmRefreshRequired||freshStats.tmRefreshRequired);
+      const queued=!!(freshInfo.tmRefreshQueued||freshStats.tmRefreshQueued);
+      const state=String(freshStats.tmRefreshState||freshInfo.tmRefreshState||'');
+      if(!pending){
         my.tmRefreshStatus='completed';my.tmRefreshFailure='';my.tmRefreshRetryAt='';
-      }else if(fresh.tmRefreshQueued&&['queued','running','already-queued','concurrent-queue'].includes(state)&&attempt<5){
-        my.tmRefreshStatus='queued';my.tmRefreshFailure='';renderPlayer();
-        scheduleTmRefreshProbe(my,qs,attempt+1);return;
-      }else if(fresh.tmRefreshQueued&&['queued','running','already-queued','concurrent-queue'].includes(state)){
-        my.tmRefreshStatus='waiting';my.tmRefreshFailure='';
-      }else if(state==='retry-wait'){
-        my.tmRefreshStatus='retry-wait';my.tmRefreshRetryAt=fresh.tmRefreshRetryAt||'';
-      }else{
-        my.tmRefreshStatus='failed';my.tmRefreshFailure=fresh.tmRefreshReason||'Transfermarkt yenilemesi tamamlanamadı.';
+        renderPlayer();
+        loadPitchPlayerProfilePhoto(my);
+        if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info);
+        return;
       }
+      if(queued&&attempt<maxAttempts-1){
+        my.tmRefreshStatus='queued';
+        renderPlayer();
+        scheduleTmRefreshProbe(my,qs,attempt+1);
+        return;
+      }
+      my.tmRefreshStatus=state==='retry-wait'?'retry-wait':(queued?'waiting':'failed');
+      my.tmRefreshRetryAt=freshStats.tmRefreshRetryAt||freshInfo.tmRefreshRetryAt||'';
+      my.tmRefreshFailure=freshStats.tmRefreshReason||freshInfo.tmRefreshReason||'';
       renderPlayer();
-      if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info);
     }catch(error){
       if(cur!==my)return;
-      if(attempt<5){
-        my.tmRefreshStatus='queued';my.tmRefreshFailure='';renderPlayer();
+      if(attempt<maxAttempts-1){
+        my.tmRefreshStatus='queued';
         scheduleTmRefreshProbe(my,qs,attempt+1);
       }else{
-        my.tmRefreshStatus='failed';my.tmRefreshFailure=error&&error.message||String(error);renderPlayer();
+        my.tmRefreshStatus='failed';
+        my.tmRefreshFailure=error&&error.message||String(error);
       }
     }
-  },30000);
+  },attempt===0?6000:12000);
 }
 function openPlayer(it){
   if(!it||!it.name){return}
@@ -4239,26 +4251,12 @@ function renderPlayer(){
   const i=cur.info,t=cur.stats;
   const photos=[cur.pitchPhoto,(i&&i.pitchPhoto),...((i&&i.profilePhotos)||[]),...((i&&i.player&&i.player.photos)||[]),...((t&&t.player&&t.player.photos)||[]),...(Array.isArray(cur.it.photos)?cur.it.photos:[]),cur.it.logo,cur.it.photo,cur.it.image,(i&&i.player&&i.player.logo),(t&&t.player&&t.player.logo)].filter((x,i,a)=>typeof x==='string'&&/^https:\/\//i.test(x)&&a.indexOf(x)===i);
   const j={player:{name:(i&&i.player&&i.player.name)||cur.it.name,logo:photos[0]||'',photos},about:(i&&i.about)||'',aboutLang:i&&i.aboutLang,bio:Object.assign({},i&&i.bio,t&&t.bio),seasons:(t&&t.seasons)||[],national:(t&&t.national)||[],coach:(t&&t.coach)||[],transfers:(t&&t.transfers)||(i&&i.transfers)||[],injuries:(t&&t.injuries)||(i&&i.injuries)||[],marketValueHistory:(t&&Array.isArray(t.marketValueHistory)&&t.marketValueHistory.length?t.marketValueHistory:(i&&i.marketValueHistory)||[]),historyProviderAvailable:!!(t&&t.sources&&t.sources.transfermarkt&&!/hata|bulunamadı/i.test(String(t.sources.transfermarkt))),tmRefreshRequired:!!(t&&t.tmRefreshRequired),tmRefreshQueued:!!(t&&t.tmRefreshQueued),tmRefreshConfigured:t&&t.tmRefreshConfigured,tmRefreshReason:(t&&t.tmRefreshReason)||'',tmRefreshState:(t&&t.tmRefreshState)||'',tmRefreshRetryAt:(t&&t.tmRefreshRetryAt)||'',totals:(t&&t.totals)||null,careerOrder:(t&&t.careerOrder)||{},sources:Object.assign({},i&&i.sources,t&&t.sources)};
-  const loading=!cur.statsLoaded&&!cur.serr;
+  const refreshState=String((t&&t.tmRefreshState)||(i&&i.tmRefreshState)||'');
+  const refreshPending=!!((t&&t.tmRefreshRequired)||(i&&i.tmRefreshRequired))&&(
+    !!((t&&t.tmRefreshQueued)||(i&&i.tmRefreshQueued))||['queued','running','already-queued','concurrent-queue','retry-wait'].includes(refreshState)
+  );
+  const loading=(!cur.statsLoaded&&!cur.serr)||refreshPending||['checking','queued','waiting'].includes(cur.tmRefreshStatus);
   let h=playerHTML(cur.it,j,loading,cur.tab,cur.f);
-  let refreshNotice='';
-  if(cur.tmRefreshStatus==='completed')refreshNotice='<div class="empty"><small>Transfermarkt verileri güncellendi. Profildeki piyasa değeri, sezon istatistikleri, transfer ve sakatlık kayıtları yeniden yüklendi.</small></div>';
-  else if(cur.tmRefreshStatus==='checking')refreshNotice='<div class="empty"><small>Transfermarkt yenilemesi kontrol ediliyor; güncel kayıtlar alınıyor…</small></div>';
-  else if(cur.tmRefreshStatus==='queued')refreshNotice='<div class="empty"><small>Eksik Transfermarkt kayıtları arka planda yenileniyor. Bu ekran tamamlandığında kendini güncelleyecek.</small></div>';
-  else if(cur.tmRefreshStatus==='waiting')refreshNotice='<div class="empty"><small>Transfermarkt yenilemesi hâlâ sürüyor. İşlem uzadı; sonucu görmek için profili kısa süre sonra yeniden aç.</small></div>';
-  else if(cur.tmRefreshStatus==='retry-wait'){
-    const retryText=cur.tmRefreshRetryAt&&Number.isFinite(Date.parse(cur.tmRefreshRetryAt))?' Yeniden deneme: '+new Date(cur.tmRefreshRetryAt).toLocaleString('tr-TR')+'.':'';
-    refreshNotice='<div class="empty"><small>Transfermarkt geçici bir hata verdi. Güvenli yeniden deneme kuyruğunda bekliyor.'+esc(retryText)+'</small></div>';
-  }else if(cur.tmRefreshStatus==='failed')refreshNotice='<div class="empty"><small>Transfermarkt yenilemesi tamamlanamadı: '+esc(cur.tmRefreshFailure||j.tmRefreshReason||'Bilinmeyen hata')+'</small></div>';
-  else if(j.tmRefreshState==='blocked')refreshNotice='<div class="empty"><small>Bu oyuncunun Transfermarkt verisi sağlayıcı tarafından bulunamadı veya kalıcı hata verdi: '+esc(j.tmRefreshReason||'')+'</small></div>';
-  else if(j.tmRefreshState==='dispatch-failed')refreshNotice='<div class="empty"><small>GitHub Actions yenilemesi başlatılamadı: '+esc(j.tmRefreshReason||'')+'</small></div>';
-  else if(j.tmRefreshState==='retry-wait'){
-    const retryText=j.tmRefreshRetryAt&&Number.isFinite(Date.parse(j.tmRefreshRetryAt))?' Yeniden deneme: '+new Date(j.tmRefreshRetryAt).toLocaleString('tr-TR')+'.':'';
-    refreshNotice='<div class="empty"><small>Transfermarkt geçici hata sonrası yeniden deneme zamanını bekliyor.'+esc(retryText)+'</small></div>';
-  }else if(j.tmRefreshQueued)refreshNotice='<div class="empty"><small>Eksik Transfermarkt kayıtları yenileme kuyruğuna alındı. Profil arka planda güncellenecek.</small></div>';
-  else if(j.tmRefreshRequired&&!j.tmRefreshConfigured)refreshNotice='<div class="empty"><small>Otomatik Transfermarkt yenilemesi yapılandırılmamış. Cloudflare Worker ayarlarına GITHUB_ACTIONS_TOKEN secret anahtarı eklenmeli.</small></div>';
-  else if(j.tmRefreshRequired&&j.tmRefreshReason)refreshNotice='<div class="empty"><small>Transfermarkt otomatik yenilemesi başlatılamadı: '+esc(j.tmRefreshReason)+'</small></div>';
-  if(refreshNotice)h=refreshNotice+h;
   if(cur.serr&&!t)h+='<div class="empty"><small>İstatistikler şu anda görüntülenemiyor.</small></div>';
   if(cur.err&&!i)h+='<div class="empty"><small>Bu bölüm şu anda görüntülenemiyor.</small></div>';
   $('#shBody').innerHTML=h;
