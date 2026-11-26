@@ -252,10 +252,42 @@ class SyncHelperTests(unittest.TestCase):
         self.assertEqual([row["tm_id"] for row in pending], ["2", "3"])
         self.assertTrue(any("toplam=3" in line and "kalan=2" in line for line in captured.output))
 
-    def test_main_workflow_cancels_old_run_and_has_no_fixed_2402_queue_count(self):
+    def test_main_workflow_keeps_player_refreshes_independent(self):
         workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
-        self.assertIn("cancel-in-progress: true", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("github.event.inputs.player_id || github.event.schedule || github.event_name", workflow)
         self.assertNotIn('TM_DETAIL_EXPECTED_COHORT_SIZE: "2402"', workflow)
+
+    def test_empty_legacy_player_snapshots_are_requeued_after_repair_cutoff(self):
+        from unittest.mock import patch
+
+        player = {
+            "profile_payload": {"id": "123", "name": "Oyuncu"},
+            "stats_payload": {"stats": []},
+            "transfers_payload": {"transfers": []},
+            "market_value_payload": {"marketValueHistory": []},
+            "injuries_payload": {"injuries": []},
+        }
+        with patch.object(sync, "db_get", return_value=[]):
+            due = sync.player_detail_refresh_plan("123", player)
+        self.assertEqual(due, {"profile", "market_value", "transfers", "stats", "injuries"})
+
+    def test_post_repair_empty_provider_lists_are_accepted_when_fresh(self):
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+
+        player = {
+            "profile_payload": {"id": "123", "name": "Oyuncu"},
+            "stats_payload": {"stats": []},
+            "transfers_payload": {"transfers": []},
+            "market_value_payload": {"marketValueHistory": []},
+            "injuries_payload": {"injuries": []},
+        }
+        now = datetime.now(timezone.utc).isoformat()
+        records = [{"record_type": item[1], "fetched_at": now} for item in sync.DETAIL_ENDPOINTS.values()]
+        with patch.object(sync, "db_get", return_value=records):
+            due = sync.player_detail_refresh_plan("123", player)
+        self.assertEqual(due, set())
 
     def test_imported_detail_queue_rejects_incomplete_or_reversed_window(self):
         with self.assertRaisesRegex(RuntimeError, "hem başlangıç hem bitiş"):
