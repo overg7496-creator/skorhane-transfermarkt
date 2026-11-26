@@ -1,11 +1,6 @@
-
-name: SkorHane Transfermarkt Sync
+name: SkorHane Transfermarkt Tek Oyuncu Yenileme
 
 on:
-  schedule:
-    - cron: "20 3 * * 1,4"
-    - cron: "20 9 * * *"
-    - cron: "17 */3 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -13,46 +8,33 @@ on:
         required: true
         type: choice
         options:
-          - import-squads
-          - refresh-details
-          - refresh-rotation
-          - one-player-test
           - refresh-player-missing
-          - sync
-          - seed-history
-        default: sync
+          - one-player-test
+        default: refresh-player-missing
       player_id:
-        description: "Test edilecek oyuncunun Transfermarkt ID'si"
-        required: false
-        type: string
-      seen_after:
-        description: "Ana detay kuyruğunun alt kadro tarihi sınırı (UTC ISO 8601)"
-        required: false
-        type: string
-      seen_before:
-        description: "Ana detay kuyruğunun üst kadro tarihi sınırı (UTC ISO 8601)"
-        required: false
+        description: "Transfermarkt oyuncu ID'si (ör. Victor Osimhen: 401923)"
+        required: true
         type: string
 
 permissions:
   contents: read
-  actions: write
 
 concurrency:
-  # Keep independent on-demand player refreshes from cancelling one another.
-  # A single player remains serialized; separate player IDs can run independently.
-  group: skorhane-transfermarkt-${{ github.event.inputs.player_id || github.event.schedule || github.event_name }}
+  # Same player is serialized; different player IDs remain independent.
+  group: skorhane-transfermarkt-player-${{ github.event.inputs.player_id }}
   cancel-in-progress: false
 
 jobs:
-  sync:
+  refresh-player:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 45
     env:
-      # Fixed original cohort: [2026-11-12 08:00:00, 2026-11-25 20:26:06) UTC.
-      # The imported queue owns [2026-11-25 20:26:06, 21:00:04) UTC.
-      TM_DETAIL_SQUAD_SEEN_AFTER: ${{ github.event.inputs.seen_after || '2026-11-12T08:00:00Z' }}
-      TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ github.event.inputs.seen_before || '2026-11-25T20:26:06Z' }}
+      TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id }}
+      FELIPE_API_BASE: http://127.0.0.1:8000
+      HTTP_MAX_RETRIES: "4"
+      HTTP_TIMEOUT_SECONDS: "45"
+      FELIPE_DELAY_MIN_SECONDS: "5.5"
+      FELIPE_DELAY_MAX_SECONDS: "7.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,75 +44,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check active squad imports
-        id: cohort_safety
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if ! runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100")"; then
-            echo "GitHub çalışma durumu okunamadı; güvenli tarafta kalıp ana detay taraması ertelendi."
-            echo "can_process_original=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          active_squad_import="$(jq '[.workflow_runs[] | select(
-            .path == ".github/workflows/import-missing-leagues.yml" and
-            .status != "completed"
-          )] | length' <<< "$runs")"
-          if [ "$active_squad_import" -gt 0 ]; then
-            echo "can_process_original=false" >> "$GITHUB_OUTPUT"
-            echo "Kadro aktarımı sürüyor/bekliyor; sabit kohort taraması ertelendi."
-          else
-            echo "can_process_original=true" >> "$GITHUB_OUTPUT"
-            echo "Ana ve yeni kadro kuyrukları ayrı tarih aralıklarıyla çalışacak."
-          fi
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ "${{ github.event.inputs.mode }}" = "seed-history" ]; then
-            python -m pip install "git+https://github.com/dcaribou/transfermarkt-scraper.git"
-          fi
-
       - name: Validate Python, tests and Worker syntax
         run: |
-          python -m py_compile sync/sync_transfermarkt.py
+          set -euo pipefail
+          python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py
           python -m unittest discover -s tests -v
           node --input-type=module --check < SkorHane-Worker.js
 
-      - name: Check resumable player detail queue
-        id: detail_queue
-        if: github.event_name == 'schedule' && github.event.schedule == '17 */3 * * *'
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python sync/sync_transfermarkt.py has-pending-details
-
-      - name: Start dedicated Transfermarkt API (v5.0.0)
-        if: >-
-          (github.event_name == 'schedule' &&
-           github.event.schedule == '20 3 * * 1,4' &&
-           vars.ENABLE_TRANSFERMARKT_CRON == 'true') ||
-          (github.event_name == 'schedule' &&
-           github.event.schedule == '20 9 * * *') ||
-          (github.event_name == 'schedule' &&
-           github.event.schedule == '17 */3 * * *' &&
-           steps.detail_queue.outputs.has_pending == 'true') ||
-          (github.event_name == 'workflow_dispatch' &&
-           (github.event.inputs.mode == 'sync' ||
-            github.event.inputs.mode == 'refresh-details' ||
-            github.event.inputs.mode == 'refresh-rotation' ||
-            github.event.inputs.mode == 'import-squads' ||
-            github.event.inputs.mode == 'one-player-test' ||
-            github.event.inputs.mode == 'refresh-player-missing'))
+      - name: Start dedicated Felipe Transfermarkt API v5.0.0
         env:
           RATE_LIMITING_ENABLE: "false"
           TFMKT_MAX_CONCURRENCY: "1"
           TFMKT_TIMEOUT_SECONDS: "30"
           CACHE_TTL_SECONDS: "600"
         run: |
-          python -m pip install --upgrade uv
-          git clone --depth 1 --branch v5.0.0 https://github.com/felipeall/transfermarkt-api.git "$RUNNER_TEMP/transfermarkt-api"
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-warn-script-location uv
+          git clone --quiet --depth 1 --branch v5.0.0 https://github.com/felipeall/transfermarkt-api.git "$RUNNER_TEMP/transfermarkt-api"
           cd "$RUNNER_TEMP/transfermarkt-api"
           uv sync --extra server --no-dev
           nohup uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/transfermarkt-api.log" 2>&1 &
@@ -145,158 +75,81 @@ jobs:
           done
           if [ "$ready" -ne 1 ]; then
             cat "$RUNNER_TEMP/transfermarkt-api.log"
-            echo "Kendi Transfermarkt API sunucumuz 90 saniye içinde başlamadı."
+            echo "Felipe API 90 saniye içinde başlamadı."
             exit 1
           fi
-          echo "Özel Transfermarkt API hazır (v5.0.0, eşzamanlı upstream isteği=1)."
+          echo "Yerel Felipe API hazır; upstream eşzamanlılığı 1."
 
-      - name: Run current sync
-        if: (github.event_name == 'schedule' && github.event.schedule == '20 3 * * 1,4' && vars.ENABLE_TRANSFERMARKT_CRON == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'sync')
+      - name: Refresh only missing or stale fields for this player
+        if: github.event.inputs.mode == 'refresh-player-missing'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FELIPE_API_BASE: http://127.0.0.1:8000
-          TM_LEAGUES: TR1,TR2,TR3,TR4,GB1,ES1,L1,IT1,FR1
-          TM_SEASON: "2026"
-          REQUEST_DELAY_MIN_SECONDS: "1.5"
-          REQUEST_DELAY_MAX_SECONDS: "3.0"
-          FELIPE_DELAY_MIN_SECONDS: "5.5"
-          FELIPE_DELAY_MAX_SECONDS: "7.0"
-          TM_MAX_PLAYERS_PER_RUN: "80"
-          TM_MAX_MATCH_PAGES: "5"
-          HTTP_MAX_RETRIES: "4"
-          HTTP_TIMEOUT_SECONDS: "45"
-        run: python sync/sync_transfermarkt.py sync
-
-      - name: Import current squads
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'import-squads'
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          TM_LEAGUES: TR1,TR2,TR3,TR4,GB1,ES1,L1,IT1,FR1
-          TM_SEASON: "2026"
-          REQUEST_DELAY_MIN_SECONDS: "1.5"
-          REQUEST_DELAY_MAX_SECONDS: "3.0"
-        run: python sync/sync_transfermarkt.py import-squads
-
-      - name: Refresh player detail data
-        if: >-
-          steps.cohort_safety.outputs.can_process_original == 'true' &&
-          ((github.event_name == 'workflow_dispatch' &&
-            (github.event.inputs.mode == 'refresh-details' ||
-             github.event.inputs.mode == 'import-squads' ||
-             github.event.inputs.mode == 'sync')) ||
-           (github.event_name == 'schedule' &&
-            github.event.schedule == '17 */3 * * *' &&
-            steps.detail_queue.outputs.has_pending == 'true') ||
-           (github.event_name == 'schedule' &&
-            github.event.schedule == '20 3 * * 1,4' &&
-            vars.ENABLE_TRANSFERMARKT_CRON == 'true'))
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FELIPE_API_BASE: http://127.0.0.1:8000
-          TM_MAX_PLAYERS_PER_RUN: "80"
-          TM_DETAIL_MAX_RUNTIME_SECONDS: "16200"
-          FELIPE_DELAY_MIN_SECONDS: "5.5"
-          FELIPE_DELAY_MAX_SECONDS: "7.0"
-          TM_MAX_MATCH_PAGES: "5"
-          HTTP_MAX_RETRIES: "4"
-          HTTP_TIMEOUT_SECONDS: "45"
-        run: python sync/sync_transfermarkt.py refresh-details
-
-      - name: Rotate through active players
-        if: (github.event_name == 'schedule' && github.event.schedule == '20 9 * * *') || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'refresh-rotation')
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FELIPE_API_BASE: http://127.0.0.1:8000
-          TM_MAX_PLAYERS_PER_RUN: "80"
-          FELIPE_DELAY_MIN_SECONDS: "5.5"
-          FELIPE_DELAY_MAX_SECONDS: "7.0"
-          TM_MAX_MATCH_PAGES: "5"
-          HTTP_MAX_RETRIES: "4"
-          HTTP_TIMEOUT_SECONDS: "45"
-        run: python sync/sync_transfermarkt.py refresh-rotation
-
-      - name: Run historical seed
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'seed-history'
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          DCARIBOU_COMPETITIONS: TR1,GB1,ES1,L1,IT1,FR1
-          DCARIBOU_SEASONS: "2022,2023,2024,2025"
-          DCARIBOU_APPEARANCE_BATCH_SIZE: "25"
-          TM_SEASON: "2026"
-          REQUEST_DELAY_MIN_SECONDS: "1.5"
-          REQUEST_DELAY_MAX_SECONDS: "3.0"
-        run: python sync/sync_transfermarkt.py seed-history
-
-      - name: Test one player
-        if: >-
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'one-player-test')
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id || '401923' }}
-          FELIPE_API_BASE: http://127.0.0.1:8000
-          FELIPE_DELAY_MIN_SECONDS: "5.5"
-          FELIPE_DELAY_MAX_SECONDS: "7.0"
-          HTTP_MAX_RETRIES: "4"
-          HTTP_TIMEOUT_SECONDS: "45"
-        run: python sync/sync_transfermarkt.py one-player-test
-
-      - name: Refresh one player's missing details
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'refresh-player-missing'
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id }}
-          FELIPE_API_BASE: http://127.0.0.1:8000
-          TM_DETAIL_STALE_DAYS: "7"
-          FELIPE_DELAY_MIN_SECONDS: "5.5"
-          FELIPE_DELAY_MAX_SECONDS: "7.0"
-          HTTP_MAX_RETRIES: "4"
-          HTTP_TIMEOUT_SECONDS: "45"
         run: python sync/sync_transfermarkt.py refresh-player-missing
 
-      - name: Verify tested player data in Supabase
-        if: >-
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'one-player-test')
+      - name: Full one-player integration test
+        if: github.event.inputs.mode == 'one-player-test'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id || '401923' }}
+        run: python sync/sync_transfermarkt.py one-player-test
+
+      - name: Verify persisted player details in Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           python - <<'PY'
-          import json, os
+          import json
+          import os
+          from urllib.parse import quote
           from urllib.request import Request, urlopen
-          base = os.environ["SUPABASE_URL"].rstrip("/")
-          key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-          player_id = os.environ["TM_TEST_PLAYER_ID"]
-          fields = "tm_id,name,current_market_value_eur,current_market_value_text,stats_payload,market_value_payload,transfers_payload,injuries_payload"
-          url = f"{base}/rest/v1/tm_players?select={fields}&tm_id=eq.{player_id}&limit=1"
-          req = Request(url, headers={"apikey": key, "Authorization": f"Bearer {key}", "Accept": "application/json"})
-          with urlopen(req, timeout=20) as response:
-              rows = json.loads(response.read().decode("utf-8"))
-          if not rows:
-              raise SystemExit(f"Test oyuncusu Supabase'de bulunamadı: {player_id}")
-          row = rows[0]
-          def count(payload, *keys):
+
+          base = os.environ['SUPABASE_URL'].rstrip('/')
+          key = os.environ['SUPABASE_SERVICE_ROLE_KEY']
+          player_id = os.environ['TM_TEST_PLAYER_ID']
+          headers = {'apikey': key, 'Authorization': f'Bearer {key}', 'Accept': 'application/json'}
+
+          def get_rows(path):
+              request = Request(f'{base}/rest/v1/{path}', headers=headers)
+              with urlopen(request, timeout=30) as response:
+                  result = json.loads(response.read().decode('utf-8'))
+              if not isinstance(result, list):
+                  raise RuntimeError(f'Supabase beklenmeyen yanıt verdi: {path}')
+              return result
+
+          pid = quote(player_id, safe='')
+          players = get_rows(f'tm_players?select=tm_id,name,current_market_value_eur,current_market_value_text,profile_payload,stats_payload,market_value_payload,transfers_payload,injuries_payload,last_felipe_synced_at&tm_id=eq.{pid}&limit=1')
+          if not players:
+              raise SystemExit(f'Oyuncu Supabase tm_players tablosunda bulunamadı: {player_id}')
+          player = players[0]
+
+          def count_payload(payload, *keys):
               if not isinstance(payload, dict):
                   return 0
-              for key_name in keys:
-                  value = payload.get(key_name)
+              for name in keys:
+                  value = payload.get(name)
                   if isinstance(value, list):
                       return len(value)
               return 0
-          print(f"Oyuncu: {row.get('name')} | Transfermarkt ID: {player_id}")
-          print(f"Güncel piyasa değeri: {row.get('current_market_value_text') or row.get('current_market_value_eur') or 'Sağlayıcıda değer yok'}")
-          print(f"Sezon kayıtları: {count(row.get('stats_payload'), 'stats', 'data', 'items')}")
-          print(f"Piyasa değeri geçmişi: {count(row.get('market_value_payload'), 'marketValueHistory', 'market_value_history', 'history', 'marketValues', 'valuations')}")
-          print(f"Transfer kayıtları: {count(row.get('transfers_payload'), 'transfers', 'history', 'items', 'data')}")
-          print(f"Sakatlık kayıtları: {count(row.get('injuries_payload'), 'injuries', 'data', 'items')}")
-          print("Boş liste, sağlayıcının bu oyuncu için kayıt sunmadığı anlamına gelebilir; mevcut dolu veriler ayrıca korunur.")
+
+          stats = get_rows(f'tm_player_season_stats?select=season_id,competition_name,club_name,goals_conceded,clean_sheets&tm_id=eq.{pid}&limit=1000')
+          transfers = get_rows(f'tm_transfers?select=transfer_date,from_club,to_club,fee_text,fee_eur&tm_id=eq.{pid}&limit=1000')
+          values = get_rows(f'tm_market_values?select=valuation_date,value_eur,display_value,club_name&tm_id=eq.{pid}&limit=1000')
+          print(f"Oyuncu: {player.get('name')} | Transfermarkt ID: {player_id}")
+          print(f"Son senkronizasyon: {player.get('last_felipe_synced_at') or 'henüz yok'}")
+          print(f"Güncel piyasa değeri: {player.get('current_market_value_text') or player.get('current_market_value_eur') or 'Kaynak değer sunmadı'}")
+          print(f"Sezon istatistik satırı: {len(stats)} | Ham stats: {count_payload(player.get('stats_payload'), 'stats', 'data', 'items')}")
+          print(f"Piyasa değeri geçmişi: DB={len(values)} | Ham={count_payload(player.get('market_value_payload'), 'marketValueHistory', 'market_value_history', 'history', 'marketValues', 'valuations')}")
+          print(f"Transfer geçmişi: DB={len(transfers)} | Ham={count_payload(player.get('transfers_payload'), 'transfers', 'history', 'items', 'data')}")
+          print(f"Sakatlık geçmişi: Ham={count_payload(player.get('injuries_payload'), 'injuries', 'data', 'items')}")
+          print('Not: Sıfır satır, sağlayıcının bu oyuncu için kayıt sunmadığı doğrulanmış boş sonuç olabilir; sahte veri eklenmez.')
           PY
+
+      - name: Stop local API
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/transfermarkt-api.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/transfermarkt-api.pid")" 2>/dev/null || true
+          fi
 
