@@ -355,18 +355,26 @@ def save_competition_table(competition_id: str, season_id: str, payload: dict[st
     """Persist a validated non-empty table; do not replace old data with empty responses."""
     candidates = []
     if isinstance(payload, dict):
-        for key in ("table", "standings", "rows", "data"):
-            value = payload.get(key)
-            if isinstance(value, list) and value:
-                candidates = value
-                break
-            if isinstance(value, dict):
-                for nested in ("table", "standings", "rows"):
-                    if isinstance(value.get(nested), list) and value[nested]:
-                        candidates = value[nested]
-                        break
-            if candidates:
-                break
+        tables = payload.get("tables")
+        if isinstance(tables, list):
+            candidates = [
+                row
+                for table in tables if isinstance(table, dict)
+                for row in (table.get("rows") or []) if isinstance(row, dict)
+            ]
+        if not candidates:
+            for key in ("table", "standings", "rows", "data"):
+                value = payload.get(key)
+                if isinstance(value, list) and value:
+                    candidates = value
+                    break
+                if isinstance(value, dict):
+                    for nested in ("table", "standings", "rows"):
+                        if isinstance(value.get(nested), list) and value[nested]:
+                            candidates = value[nested]
+                            break
+                if candidates:
+                    break
     if not candidates:
         LOG.warning("%s/%s puan tablosu boş/beklenmeyen biçimde; eski kayıt korunuyor.", competition_id, season_id)
         return
