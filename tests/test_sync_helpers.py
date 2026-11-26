@@ -55,7 +55,10 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("tm_source_records?select=record_type,payload,fetched_at", worker)
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
-        self.assertIn('"pf36:"', worker)
+        self.assertIn('"pf37:"', worker)
+        self.assertIn('refreshState = await queueTmPlayerRefresh', worker)
+        self.assertIn('refreshRetryAt = refreshState.retryAt', worker)
+        self.assertIn('tmRefreshState:', worker)
 
     def test_required_player_endpoint_failure_propagates(self):
         from unittest.mock import patch
@@ -149,16 +152,15 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("last_squad_seen_at.gte.2026-11-12T08", query)
         self.assertIn("last_squad_seen_at.lt.2026-11-25T20%3A26%3A06Z", query)
 
-    def test_main_and_missing_squad_imports_do_not_share_leagues(self):
+    def test_single_player_workflow_does_not_run_squad_imports(self):
         main_workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
         missing_workflow = (ROOT / ".github" / "workflows" / "import-missing-leagues.yml").read_text(encoding="utf-8")
-        main_match = re.search(r"(?m)^\s*TM_LEAGUES:\s*([A-Z0-9,]+)", main_workflow)
-        missing_match = re.search(r"(?m)^\s*TM_LEAGUES:\s*([A-Z0-9,]+)", missing_workflow)
-        self.assertIsNotNone(main_match)
-        self.assertIsNotNone(missing_match)
-        main_leagues = set(main_match.group(1).split(","))
-        missing_leagues = set(missing_match.group(1).split(","))
-        self.assertFalse(main_leagues & missing_leagues)
+        self.assertIn("workflow_dispatch:", main_workflow)
+        self.assertIn("refresh-player-missing", main_workflow)
+        self.assertIn("one-player-test", main_workflow)
+        self.assertNotIn("TM_LEAGUES:", main_workflow)
+        self.assertIn("TM_LEAGUES:", missing_workflow)
+        self.assertNotRegex(main_workflow, r"(?m)^\s+(?:schedule|push):")
 
     def test_main_backlog_never_expands_into_imported_or_future_window(self):
         from unittest.mock import patch
@@ -262,11 +264,14 @@ class SyncHelperTests(unittest.TestCase):
         self.assertEqual([row["tm_id"] for row in pending], ["2", "3"])
         self.assertTrue(any("toplam=3" in line and "kalan=2" in line for line in captured.output))
 
-    def test_main_workflow_keeps_player_refreshes_independent(self):
+    def test_main_workflow_is_manual_and_serializes_by_player_id(self):
         workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("skorhane-transfermarkt-player-", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
-        self.assertIn("github.event.inputs.player_id || github.event.schedule || github.event_name", workflow)
-        self.assertNotIn('TM_DETAIL_EXPECTED_COHORT_SIZE: "2402"', workflow)
+        self.assertNotRegex(workflow, r"(?m)^\s+(?:schedule|push):")
+        self.assertIn("required: true", workflow[workflow.index("player_id:"):workflow.index("permissions:")])
+        self.assertNotIn("TM_DETAIL_EXPECTED_COHORT_SIZE", workflow)
 
     def test_empty_legacy_player_snapshots_are_requeued_after_repair_cutoff(self):
         from unittest.mock import patch
@@ -375,7 +380,10 @@ class SyncHelperTests(unittest.TestCase):
         from unittest.mock import patch
 
         snapshot = {"injuries_payload": {"injuries": []}, "absences_payload": {"absences": []}}
-        with patch.object(sync, "db_patch") as patch_db:
+        with (
+            patch.object(sync, "db_get", return_value=[]),
+            patch.object(sync, "db_patch") as patch_db,
+        ):
             sync.replace_player_snapshots("123", snapshot)
         self.assertEqual(patch_db.call_args.args[1]["injuries_payload"]["injuries"], [])
         self.assertEqual(patch_db.call_args.args[1]["absences_payload"]["absences"], [])
@@ -404,5 +412,93 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("ConcurrencySettings(min_concurrency=1, max_concurrency=1, desired_concurrency=1, max_tasks_per_minute=18)", script)
 
 
+    def test_parse_money_eur_handles_european_and_grouped_numbers(self):
+        self.assertEqual(sync.parse_money_eur("€2.500.000"), 2_500_000)
+        self.assertEqual(sync.parse_money_eur("€3,5m"), 3_500_000)
+        self.assertEqual(sync.parse_money_eur("€3.50m"), 3_500_000)
+        self.assertEqual(sync.parse_money_eur("€250k"), 250_000)
+
+    def test_transfermarkt_season_pivot_handles_older_seasons(self):
+        self.assertEqual(sync.normalize_tm_season("22/23"), "2022/23")
+        self.assertEqual(sync.normalize_tm_season("50/51"), "1950/51")
+        self.assertEqual(sync.normalize_tm_season("2010/11"), "2010/11")
+
+    def test_transfer_club_object_uses_name_or_transparent_id_label(self):
+        self.assertEqual(sync.normalize_transfer_club({"id": "40", "name": "Liverpool FC"}), "Liverpool FC")
+        self.assertEqual(sync.normalize_transfer_club({"id": "40"}), "Kulüp #40")
+        self.assertEqual(sync.normalize_transfer_club({"id": "40"}, {"name": "Chelsea FC"}), "Kulüp #40")
+
+    def test_current_season_does_not_invent_unknown_club(self):
+        self.assertEqual(
+            sync.build_current_season_stats([{"competitionName": "Lig", "minutesPlayed": 90, "goals": 1}]),
+            [],
+        )
+
+    def test_worker_queue_helper_updates_status_without_secrets(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(sync, "db_get", return_value=[{"id": 99, "payload": {"status": "queued"}}]),
+            patch.object(sync, "db_patch") as patch_db,
+        ):
+            sync.update_worker_refresh_queue("123", "completed", completed_at="2026-11-26T13:00:00+00:00")
+        self.assertEqual(patch_db.call_args.args[0], "tm_source_records?id=eq.99")
+        payload = patch_db.call_args.args[1]["payload"]
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["player_id"], "123")
+
+    def test_source_empty_snapshot_preserves_existing_rows_but_marks_fresh_check(self):
+        from unittest.mock import patch
+
+        existing = {"id": 77, "payload": {"id": "123", "injuries": [{"injury": "Old"}]}}
+        with (
+            patch.object(sync, "db_get", return_value=[existing]),
+            patch.object(sync, "db_patch") as patch_db,
+        ):
+            sync.source_record_snapshot(
+                "felipeall", "player_injuries", "123", "",
+                {"id": "123", "pageNumber": 1, "lastPageNumber": 1, "injuries": []},
+            )
+        payload = patch_db.call_args.args[1]["payload"]
+        self.assertEqual(payload["injuries"], [{"injury": "Old"}])
+        self.assertTrue(payload["_skorhane_sync"]["provider_returned_empty"])
+        self.assertIn("last_checked_at", payload["_skorhane_sync"])
+
+    def test_player_snapshot_never_erases_existing_rows_on_empty_provider_result(self):
+        from unittest.mock import patch
+
+        old = {"stats_payload": {"stats": [{"seasonId": "22/23", "goals": 2}]}}
+        with (
+            patch.object(sync, "db_get", return_value=[old]),
+            patch.object(sync, "db_patch") as patch_db,
+        ):
+            sync.replace_player_snapshots("123", {"stats_payload": {"stats": []}})
+        patch_db.assert_not_called()
+
+    def test_transfermarkt_ui_shows_refresh_lifecycle_and_auto_reloads(self):
+        html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
+        self.assertIn("function scheduleTmRefreshProbe", html)
+        self.assertIn("my.tmRefreshStatus='completed'", html)
+        self.assertIn("tmRefreshRetryAt", html)
+        self.assertIn("setTimeout(async()=>", html)
+
+    def test_worker_and_copyable_worker_match_and_cache_is_bumped(self):
+        worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
+        copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
+        self.assertEqual(worker, copy)
+        self.assertIn('"pf37:"', worker)
+
+    def test_database_saves_goalkeeper_season_fields(self):
+        schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
+        self.assertIn("goals_conceded integer", schema)
+        self.assertIn("clean_sheets integer", schema)
+        self.assertIn("p_row->>'goals_conceded'", schema)
+        self.assertIn("p_row->>'clean_sheets'", schema)
+
+    def test_manual_imported_cohort_requires_explicit_window(self):
+        workflow = (ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("required: true", workflow)
+        self.assertNotRegex(workflow, r"(?m)^\\s+(?:schedule|workflow_run):")
 if __name__ == "__main__":
     unittest.main()
