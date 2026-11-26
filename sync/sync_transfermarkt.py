@@ -2,8 +2,10 @@
 """SkorHane Transfermarkt sync runner.
 
 Modes:
-  sync         Current squads + felipeall player detail refresh (scheduled).
-  seed-history One-time dcaribou historical seed for selected first-tier competitions.
+  refresh-player-missing  Refresh only missing/stale fields for one Transfermarkt player.
+  one-player-test         Full integration refresh for one player.
+  sync / import-squads / refresh-details / refresh-rotation remain explicit admin CLI modes.
+  seed-history            One-time dcaribou historical seed for selected competitions.
 
 All provider requests are sequential. No web/mobile request invokes this file.
 """
@@ -1403,7 +1405,10 @@ def sync_felipeall(
                 inputs=continuation_inputs,
             )
         else:
-            dispatch_refresh_details_continuation()
+            LOG.warning(
+                "Kalan detay oyuncuları kuyrukta bırakıldı; otomatik devam için "
+                "TM_DETAIL_CONTINUATION_WORKFLOW açıkça tanımlanmalı."
+            )
     return successful
 
 def patch_dcaribou_rate_limit() -> None:
