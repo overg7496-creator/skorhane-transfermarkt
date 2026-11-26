@@ -321,10 +321,12 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("last_squad_seen_at=gte.", query)
         self.assertNotIn("last_felipe_synced_at=is.null", query)
 
-    def test_imported_detail_continuation_preserves_workflow_without_window(self):
+    def test_imported_detail_continuation_preserves_explicit_window(self):
         from unittest.mock import patch
 
         player = {"tm_id": "1", "name": "Oyuncu"}
+        after = "2026-11-25T20:26:06Z"
+        before = "2026-11-25T21:00:04Z"
         with (
             patch.object(sync, "db_get", side_effect=[[], [player]]),
             patch.object(sync, "dispatch_refresh_details_continuation") as dispatch,
@@ -334,22 +336,24 @@ class SyncHelperTests(unittest.TestCase):
                 {
                     "TM_DETAIL_MAX_RUNTIME_SECONDS": "0",
                     "TM_DETAIL_CONTINUATION_WORKFLOW": "refresh-imported-player-details.yml",
-                    "TM_DETAIL_SQUAD_SEEN_AFTER": "",
-                    "TM_DETAIL_SQUAD_SEEN_BEFORE": "",
+                    "TM_DETAIL_SQUAD_SEEN_AFTER": after,
+                    "TM_DETAIL_SQUAD_SEEN_BEFORE": before,
                 },
             ),
         ):
             sync.sync_felipeall(backfill_only=True)
         dispatch.assert_called_once_with(
             workflow_file="refresh-imported-player-details.yml",
-            inputs={},
+            inputs={"seen_after": after, "seen_before": before},
         )
 
     def test_backfill_queue_is_resumable_and_uses_time_guard(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
         self.assertIn('pending = [row for row in candidates if not row.get("last_felipe_synced_at")]', script)
         self.assertIn('"player_detail_queue"', script)
-        self.assertIn("dispatch_refresh_details_continuation()", script)
+        self.assertIn("dispatch_refresh_details_continuation(", script)
+        self.assertIn("TM_DETAIL_CONTINUATION_WORKFLOW", script)
+        self.assertIn("otomatik devam için", script)
         self.assertIn("TM_DETAIL_MAX_RUNTIME_SECONDS", script)
 
     def test_player_sync_never_uses_shared_public_api_by_default(self):
