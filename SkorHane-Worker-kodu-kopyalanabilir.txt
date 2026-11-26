@@ -4093,6 +4093,8 @@ async function tmPlayer(env, id) {
   out.refreshQueued = !!refreshState.queued;
   out.refreshConfigured = !!refreshState.configured;
   out.refreshReason = refreshState.reason || "";
+  out.refreshState = refreshState.state || (refreshState.required ? (refreshState.queued ? "queued" : "required") : "current");
+  out.refreshRetryAt = refreshState.retryAt || "";
   const profileRaw = row.profile_payload || {};
   const b = profileRaw.player || profileRaw.data || profileRaw.profile || profileRaw;
   const statsRaw = row.stats_payload || {};
@@ -4102,9 +4104,10 @@ async function tmPlayer(env, id) {
   // presence of current-season rows hide the older seasons.
   try {
     const selectStats = "select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,second_yellow_cards,red_cards,goals_conceded,clean_sheets&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc&limit=1000";
+    const selectHistoryStats = "select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,red_cards&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc&limit=1000";
     const [dbStats, historyStats] = await Promise.all([
       tmDbRows(env, "tm_player_season_stats?" + selectStats),
-      tmDbRows(env, "tm_appearance_season_totals?" + selectStats)
+      tmDbRows(env, "tm_appearance_season_totals?" + selectHistoryStats)
     ]);
     const normalizeRows = rows => rows.map(x => ({
       seasonID: x.season_id, competitionName: x.competition_name, clubName: x.club_name,
@@ -4201,20 +4204,26 @@ async function tmPlayer(env, id) {
       // season row visible instead of silently filtering every numeric club ID.
       if (/^\d+$/.test(clubLabel)) clubLabel = "Kulüp #" + clubLabel;
       if (!clubLabel && clubId !== "") clubLabel = "Kulüp #" + String(clubId).trim();
-      if (!clubLabel && row.team_name) clubLabel = String(row.team_name).trim();
-      if (!clubLabel) clubLabel = "Takım bilgisi yok";
+      // Do not attribute an unattributed historical row to the player's current club.
+      if (!clubLabel) continue;
       if (/^(?:[a-z]{2,5}\.)[a-z0-9._-]+$/i.test(clubLabel) || /\b(?:super lig|bundesliga|premier league|serie a|la liga|ligue 1|champions league|europa league)\b/i.test(clubLabel)) continue;
       const k = se + "|" + clubLabel;
-      const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Toplam Dakika": null, "Sarı Kart": null, "Kırmızı Kart": null, cats: emptyCats() };
+      const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Toplam Dakika": null, "Sarı Kart": null, "Kırmızı Kart": null, "Yenilen Gol": null, "Gol Yemeden": null, cats: emptyCats() };
       const m = num(pick(x, "appearances", "apps", "matches")), g = num(pick(x, "goals")), rawAssists = pick(x, "assists"), a = num(rawAssists);
       const rawStarts = pick(x, "starts", "gamesStarted", "appearancesAsStarter", "is_starting"), starts = rawStarts === "" ? null : num(rawStarts);
       const rawYellow = pick(x, "yellowCards", "yellow_cards", "yellow", "bookingsYellow"), yellow = rawYellow === "" ? null : num(rawYellow);
       const rawRed = pick(x, "redCards", "red_cards", "red", "bookingsRed"), red = rawRed === "" ? null : num(rawRed);
+      const rawGoalsConceded = pick(x, "goalsConceded", "goals_conceded");
+      const rawCleanSheets = pick(x, "cleanSheets", "clean_sheets");
+      const goalsConceded = rawGoalsConceded === "" ? null : num(rawGoalsConceded);
+      const cleanSheets = rawCleanSheets === "" ? null : num(rawCleanSheets);
       r["Maç"] += m; r["Gol"] += g;
       if (rawAssists !== "") r["Asist"] = (r["Asist"] || 0) + a;
       if (starts != null) r["İlk 11"] = (r["İlk 11"] || 0) + starts;
       if (yellow != null) r["Sarı Kart"] = (r["Sarı Kart"] || 0) + yellow;
       if (red != null) r["Kırmızı Kart"] = (r["Kırmızı Kart"] || 0) + red;
+      if (goalsConceded != null) r["Yenilen Gol"] = (r["Yenilen Gol"] || 0) + goalsConceded;
+      if (cleanSheets != null) r["Gol Yemeden"] = (r["Gol Yemeden"] || 0) + cleanSheets;
       const rawMinutes = pick(x, "minutes", "minutes_played", "minutesPlayed");
       if (rawMinutes !== "") r["Toplam Dakika"] = (r["Toplam Dakika"] || 0) + num(rawMinutes);
       addCat(r.cats, catOf(pick(x, "competitionName", "competition_name", "competition", "competitionId", "competitionID", "competition_id")), m, g, rawAssists === "" ? null : a, starts, yellow, red);
@@ -4593,7 +4602,7 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     return {date,from,to,kind:endLoan?'Kiralıktan dönüş':loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
   }).filter(x=>x.from||x.to||x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const transfers=tmTransfers;
-  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], tmRefreshRequired: !!(out.tm && out.tm.refreshRequired), tmRefreshQueued: !!(out.tm && out.tm.refreshQueued), tmRefreshConfigured: out.tm ? !!out.tm.refreshConfigured : null, tmRefreshReason: out.tm && out.tm.refreshReason || "", sources: st, stats: null };
+  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], tmRefreshRequired: !!(out.tm && out.tm.refreshRequired), tmRefreshQueued: !!(out.tm && out.tm.refreshQueued), tmRefreshConfigured: out.tm ? !!out.tm.refreshConfigured : null, tmRefreshReason: out.tm && out.tm.refreshReason || "", tmRefreshState: out.tm && out.tm.refreshState || "", tmRefreshRetryAt: out.tm && out.tm.refreshRetryAt || "", sources: st, stats: null };
 }
 
 // ---------- PitchAPI: seçilen oyuncunun erişilebilir geçmiş sezonlarını maç maç birleştir ----------
@@ -7920,11 +7929,11 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf37:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf38:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
-          return { body: r, ttl: r.tmRefreshQueued ? 25 : part === "info" ? 21600 : hasCareer ? 21600 : providerErrors ? 90 : 1800 };
+          return { body: r, ttl: r.tmRefreshRequired ? 20 : part === "info" ? 21600 : hasCareer ? 21600 : providerErrors ? 90 : 1800 };
         });
       } else if (p === "/team") {
         let code = q.get("code") || "";
