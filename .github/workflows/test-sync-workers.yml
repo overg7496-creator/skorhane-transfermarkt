@@ -21,5 +21,8 @@ jobs:
 
       - name: Validate Python workers
         run: |
+          set -euo pipefail
           python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py
           python -m unittest discover -s tests -v
+          node --check SkorHane-Worker.js
+          cmp -s SkorHane-Worker.js SkorHane-Worker-kodu-kopyalanabilir.txt
