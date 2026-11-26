@@ -33,8 +33,9 @@ jobs:
       FELIPE_API_BASE: http://127.0.0.1:8000
       HTTP_MAX_RETRIES: "4"
       HTTP_TIMEOUT_SECONDS: "45"
-      FELIPE_DELAY_MIN_SECONDS: "5.5"
-      FELIPE_DELAY_MAX_SECONDS: "7.0"
+      # Small spacing between local API calls; upstream concurrency remains 1.
+      FELIPE_DELAY_MIN_SECONDS: "0.8"
+      FELIPE_DELAY_MAX_SECONDS: "1.2"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,6 +51,14 @@ jobs:
           python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py
           python -m unittest discover -s tests -v
           node --input-type=module --check < SkorHane-Worker.js
+
+      - name: Cache Felipe API uv dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-felipe-transfermarkt-api-v5.0.0-uv
+          restore-keys: |
+            ${{ runner.os }}-felipe-transfermarkt-api-v5.0.0-
 
       - name: Start dedicated Felipe Transfermarkt API v5.0.0
         env:
