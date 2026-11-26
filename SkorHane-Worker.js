@@ -4078,6 +4078,176 @@ async function understat(name) {
   const rows = (d.groups && d.groups.season) || [];
   return rows.map((x) => ({ year: Number(x.season), team: String(x.team || ""), m: Number(x.games), g: Number(x.goals), a: Number(x.assists) })).filter((x) => x.year);
 }
+const TM_COMPETITION_IDS = Object.freeze({
+  "eng.1":"GB1", "esp.1":"ES1", "ger.1":"L1", "ita.1":"IT1", "fra.1":"FR1",
+  "tur.1":"TR1", "tur.2":"TR2", "TR1":"TR1", "TR2":"TR2", "TR3A":"TR3A",
+  "TR3B":"TR3B", "TR4A":"TR4A", "TR4B":"TR4B", "TR4C":"TR4C",
+  "GB1":"GB1", "ES1":"ES1", "L1":"L1", "IT1":"IT1", "FR1":"FR1"
+});
+function tmCompetitionIdForCode(code) {
+  const raw = String(code || "").trim();
+  return TM_COMPETITION_IDS[raw] || TM_COMPETITION_IDS[raw.toLowerCase()] || (/^(?:TR[1-4][A-D]?|GB1|ES1|L1|IT1|FR1)$/.test(raw) ? raw : "");
+}
+function tmSeasonRows(sourceRows) {
+  return [...new Set((sourceRows || []).map(row => String(row && row.record_key || ""))
+    .filter(value => /^(?:19|20)\d{2}$/.test(value)))].map(Number).sort((a,b) => b-a);
+}
+function tmExtractTableRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  for (const key of ["table", "standings", "rows", "data"]) {
+    const value = payload[key];
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === "object") {
+      for (const nested of ["table", "standings", "rows"]) {
+        if (Array.isArray(value[nested])) return value[nested];
+      }
+    }
+  }
+  return [];
+}
+function tmLeaderRows(rows, metric) {
+  return (rows || []).map(row => ({
+    rank: Number(row.leader_rank) || 0, playerId: String(row.tm_id || ""),
+    player: String(row.player_name || ""), logo: String(row.photo_url || ""),
+    team: String(row.club_name || ""), value: Number(row[metric]) || 0,
+    appearances: Number(row.appearances) || 0, assists: Number(row.assists) || 0,
+    goals: Number(row.goals) || 0, minutes: Number(row.minutes) || 0,
+    source: "Supabase/Transfermarkt"
+  })).filter(row => row.playerId && row.player && row.value > 0);
+}
+async function tmLeagueData(env, code, year) {
+  const competitionId = tmCompetitionIdForCode(code);
+  if (!competitionId) return { found:false, code, season:year, seasons:[], goals:[], assists:[], standings:[] };
+  const season = String(year);
+  const statesQuery = "tm_source_records?select=record_key,payload&source=eq.felipeall&record_type=eq.squad_sync_state&external_id=eq." +
+    encodeURIComponent(competitionId) + "&limit=40";
+  const goalsQuery = "tm_league_goal_leaders?select=leader_rank,tm_id,player_name,photo_url,club_name,goals,assists,appearances,minutes" +
+    "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
+    "&order=leader_rank.asc&limit=50";
+  const assistsQuery = "tm_league_assist_leaders?select=leader_rank,tm_id,player_name,photo_url,club_name,goals,assists,appearances,minutes" +
+    "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
+    "&order=leader_rank.asc&limit=50";
+  const tableQuery = "tm_source_records?select=payload&source=eq.felipeall&record_type=eq.competition_table" +
+    "&external_id=eq." + encodeURIComponent(competitionId) + "&record_key=eq." + encodeURIComponent(season) + "&limit=1";
+  const [statesR, goalsR, assistsR, tableR] = await Promise.allSettled([
+    tmDbRows(env, statesQuery), tmDbRows(env, goalsQuery), tmDbRows(env, assistsQuery), tmDbRows(env, tableQuery)
+  ]);
+  const states = statesR.status === "fulfilled" ? statesR.value : [];
+  const goals = goalsR.status === "fulfilled" ? tmLeaderRows(goalsR.value, "goals") : [];
+  const assists = assistsR.status === "fulfilled" ? tmLeaderRows(assistsR.value, "assists") : [];
+  const tableRecord = tableR.status === "fulfilled" ? tableR.value[0] : null;
+  return {
+    found: !!(goals.length || assists.length || states.length || tableRecord),
+    code: competitionId, requestedCode:code, season:Number(season),
+    seasons:tmSeasonRows(states), goals, assists,
+    standings:tmExtractTableRows(tableRecord && tableRecord.payload),
+    syncState: states.find(row => String(row.record_key) === season)?.payload || null,
+    errors: {
+      goals: goalsR.status === "rejected" ? String(goalsR.reason && goalsR.reason.message || goalsR.reason) : "",
+      assists: assistsR.status === "rejected" ? String(assistsR.reason && assistsR.reason.message || assistsR.reason) : ""
+    }
+  };
+}
+async function tmTeamData(env, code, year, teamName) {
+  const competitionId = tmCompetitionIdForCode(code);
+  if (!competitionId || !String(teamName || "").trim()) return { found:false, roster:[], players:[], seasons:[] };
+  const season = String(year), nameKey = teamSearchKey(teamName);
+  const metaQuery = "tm_source_records?select=external_id,payload,record_key&source=eq.felipeall&record_type=eq.club_metadata" +
+    "&record_key=eq." + encodeURIComponent(competitionId + ":" + season) + "&limit=300";
+  const statesQuery = "tm_source_records?select=record_key&source=eq.felipeall&record_type=eq.squad_sync_state" +
+    "&external_id=eq." + encodeURIComponent(competitionId) + "&limit=40";
+  const [metaR, statesR] = await Promise.allSettled([tmDbRows(env, metaQuery), tmDbRows(env, statesQuery)]);
+  const metaRows = metaR.status === "fulfilled" ? metaR.value : [];
+  const exact = metaRows.filter(row => teamSearchKey(row.payload && row.payload.club_name || "") === nameKey);
+  const near = exact.length ? exact : metaRows.filter(row => {
+    const candidate = teamSearchKey(row.payload && row.payload.club_name || "");
+    return candidate && nameKey && (candidate.includes(nameKey) || nameKey.includes(candidate));
+  });
+  if (near.length !== 1) return {
+    found:false, competitionId, season:Number(season),
+    seasons:tmSeasonRows(statesR.status === "fulfilled" ? statesR.value : []), roster:[], players:[],
+    error:near.length > 1 ? "Takım adı birden fazla Transfermarkt kulübüyle eşleşti." : "Bu takımın seçilen lig/sezon Transfermarkt kadro kaydı bulunamadı."
+  };
+  const meta = near[0], clubId = String(meta.external_id || ""), club = meta.payload || {};
+  const filter = "&competition_id=eq." + encodeURIComponent(competitionId) +
+    "&season_id=eq." + encodeURIComponent(season) + "&club_id=eq." + encodeURIComponent(clubId);
+  const [rosterR, statsR, summaryR, tableR] = await Promise.allSettled([
+    tmDbRows(env, "tm_team_season_squads?select=tm_id,player_name,position,photo_url,shirt_number,age,nationality,market_value_eur,payload" +
+      filter + "&order=shirt_number.asc.nullslast&limit=200"),
+    tmDbRows(env, "tm_team_season_player_stats?select=tm_id,player_name,position,photo_url,shirt_number,age,appearances,starts,goals,assists,minutes,yellow_cards,red_cards,goals_conceded,clean_sheets" +
+      filter + "&order=goals.desc&limit=200"),
+    tmDbRows(env, "tm_team_season_summary?select=player_count,average_age,squad_market_value_eur,player_appearances,player_starts,goals,assists,minutes,yellow_cards,red_cards,goals_conceded,clean_sheets" +
+      filter + "&limit=1"),
+    tmDbRows(env, "tm_source_records?select=payload&source=eq.felipeall&record_type=eq.competition_table" +
+      "&external_id=eq." + encodeURIComponent(competitionId) + "&record_key=eq." + encodeURIComponent(season) + "&limit=1")
+  ]);
+  const rosterRows = rosterR.status === "fulfilled" ? rosterR.value : [];
+  const statRows = statsR.status === "fulfilled" ? statsR.value : [];
+  const summary = summaryR.status === "fulfilled" ? summaryR.value[0] || {} : {};
+  const tableRecord = tableR.status === "fulfilled" ? tableR.value[0] : null;
+  const tableRows = tmExtractTableRows(tableRecord && tableRecord.payload);
+  const teamRow = tableRows.find(row => {
+    const t = row && (row.team || row.club || row);
+    return teamSearchKey(t && (t.name || t.club_name || t.team_name) || "") === teamSearchKey(club.club_name || teamName);
+  }) || {};
+  const teamStats = {
+    matches:Number(teamRow.matches_played ?? teamRow.played ?? teamRow.matches ?? teamRow.matchesPlayed) || 0,
+    wins:Number(teamRow.wins ?? teamRow.won) || 0,
+    draws:Number(teamRow.draws ?? teamRow.ties) || 0,
+    losses:Number(teamRow.losses ?? teamRow.lost) || 0,
+    goalsFor:Number(teamRow.goals_for ?? teamRow.goalsFor ?? teamRow.goals) || 0,
+    goalsAgainst:Number(teamRow.goals_against ?? teamRow.goalsAgainst ?? teamRow.goalsConceded) || 0,
+    points:Number(teamRow.points) || 0,
+    playerCount:Number(summary.player_count) || rosterRows.length,
+    averageAge:Number(summary.average_age) || 0,
+    squadMarketValueEur:Number(summary.squad_market_value_eur) || 0,
+    playerAppearances:Number(summary.player_appearances) || 0,
+    goals:Number(summary.goals) || 0, assists:Number(summary.assists) || 0,
+    minutes:Number(summary.minutes) || 0, yellowCards:Number(summary.yellow_cards) || 0,
+    redCards:Number(summary.red_cards) || 0, goalsConceded:Number(summary.goals_conceded) || 0,
+    cleanSheets:Number(summary.clean_sheets) || 0
+  };
+  const roster = rosterRows.map(row => ({
+    id:row.tm_id, name:row.player_name, pos:row.position || "", photo:row.photo_url || "",
+    number:row.shirt_number, age:row.age,
+    nat:Array.isArray(row.nationality) ? row.nationality.join(", ") : row.nationality || "",
+    nationality:Array.isArray(row.nationality) ? row.nationality.join(", ") : row.nationality || "",
+    marketValueEur:row.market_value_eur
+  }));
+  const players = {};
+  for (const row of statRows) {
+    const id = String(row.tm_id || "");
+    if (!id) continue;
+    players[id] = {
+      id, name:row.player_name, photo:row.photo_url || "", position:row.position || "",
+      apps:Number(row.appearances) || 0, starts:Number(row.starts) || 0,
+      goals:Number(row.goals) || 0, assists:Number(row.assists) || 0,
+      minutes:Number(row.minutes) || 0, yellowCards:Number(row.yellow_cards) || 0,
+      redCards:Number(row.red_cards) || 0, goalsConceded:Number(row.goals_conceded) || 0,
+      cleanSheets:Number(row.clean_sheets) || 0
+    };
+  }
+  return {
+    found:true, code:competitionId, season:Number(season), clubId,
+    seasons:tmSeasonRows(statesR.status === "fulfilled" ? statesR.value : []),
+    team:{
+      id:clubId, name:club.club_name || teamName, logo:club.logo_url || "",
+      country:club.country || "", founded:club.founded || null, coach:club.coach_name || "",
+      stadium:club.stadium_name || "", stadiumCapacity:club.stadium_capacity || null,
+      squadSize:teamStats.playerCount, averageAge:teamStats.averageAge,
+      marketValue:teamStats.squadMarketValueEur, matches:teamStats.matches,
+      wins:teamStats.wins, draws:teamStats.draws, losses:teamStats.losses,
+      goalsFor:teamStats.goalsFor, goalsAgainst:teamStats.goalsAgainst, points:teamStats.points
+    },
+    roster, players, teamStats, standings:tableRows,
+    sourceErrors:{
+      roster:rosterR.status === "rejected" ? String(rosterR.reason && rosterR.reason.message || rosterR.reason) : "",
+      stats:statsR.status === "rejected" ? String(statsR.reason && statsR.reason.message || statsR.reason) : ""
+    }
+  };
+}
+
 async function tmPlayerSummary(env, id, fallback = {}) {
   const playerId = String(id || "").replace(/\D/g, "");
   if (!playerId) return { photo: "", bio: {}, err: "geçersiz Transfermarkt oyuncu kimliği" };
@@ -8526,6 +8696,18 @@ export default {
         const offset = Number.isInteger(rawOffset) && rawOffset >= 0 ? rawOffset : -1;
         if (!META[code] || !Number.isInteger(year) || year < 1900 || year > seasonStartYear() + 1 || offset < 0) return json({ error: "Geçersiz lig, sezon veya parça numarası." }, 400);
         res = await cached("pitch-leaders:v4:" + code + ":" + year + ":" + offset, async () => ({ body: await pitchLeaderBatch(env, code, year, offset), ttl: 900 }));
+      } else if (p === "/tm-league-data") {
+        const code = q.get("code") || "", year = Number(q.get("season")) || seasonStartYear();
+        if (!/^[a-z0-9._-]+$/i.test(code) || !Number.isInteger(year) || year < 1900 || year > seasonStartYear() + 1) return json({ error: "Geçersiz Transfermarkt ligi veya sezon" }, 400);
+        res = await cached("tm-league-data:v1:" + code + ":" + year, async () => ({
+          body: await tmLeagueData(env, code, year), ttl: 180
+        }));
+      } else if (p === "/tm-team-data") {
+        const code = q.get("code") || "", name = (q.get("name") || "").slice(0, 100), year = Number(q.get("season")) || seasonStartYear();
+        if (!/^[a-z0-9._-]+$/i.test(code) || !name || !Number.isInteger(year) || year < 1900 || year > seasonStartYear() + 1) return json({ error: "Geçersiz Transfermarkt takımı veya sezon" }, 400);
+        res = await cached("tm-team-data:v1:" + code + ":" + year + ":" + teamSearchKey(name), async () => ({
+          body: await tmTeamData(env, code, year, name), ttl: 180
+        }));
       } else if (p === "/league") {
         const code = q.get("code") || "", year = Number(q.get("season")) || seasonStartYear();
         const dynamicLeague = code.match(/^af-(\d+)$/i);
