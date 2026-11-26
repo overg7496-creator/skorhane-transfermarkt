@@ -421,16 +421,22 @@ def safe_text(*values: Any) -> str | None:
     return None
 
 
-def normalize_transfer_club(value: Any) -> str | None:
-    """Read the Felipe club object; use an ID label only when its name is absent."""
-    if isinstance(value, dict):
-        name = safe_text(value.get("name"), value.get("displayName"), value.get("display_name"),
-                         value.get("shortName"), value.get("clubName"))
-        if name:
-            return name
-        club_id = safe_text(value.get("id"), value.get("clubId"), value.get("club_id"))
-        return f"Kulüp #{club_id}" if club_id else None
-    return safe_text(value)
+def normalize_transfer_club(*values: Any) -> str | None:
+    """Read Felipe club objects; use an ID label only when a club name is absent."""
+    for value in values:
+        if isinstance(value, dict):
+            name = safe_text(value.get("name"), value.get("displayName"), value.get("display_name"),
+                             value.get("shortName"), value.get("clubName"))
+            if name:
+                return name
+            club_id = safe_text(value.get("id"), value.get("clubId"), value.get("club_id"))
+            if club_id:
+                return f"Kulüp #{club_id}"
+        else:
+            name = safe_text(value)
+            if name:
+                return name
+    return None
 
 
 def player_id_from_row(row: dict[str, Any]) -> str | None:
