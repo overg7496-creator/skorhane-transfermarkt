@@ -1372,6 +1372,10 @@ def sync_felipeall(
                     f"&external_id=eq.{quote(tm_id)}&record_key=eq.details"
                 )
                 states.pop(tm_id, None)
+            if backfill_only:
+                # Keep the in-memory completion marker so the time-limit continuation
+                # does not re-dispatch players already processed in this same run.
+                states[tm_id] = {"status": "completed"}
         except Exception as exc:
             message = safe_error_for_log(exc)
             status_match = re.search(r"HTTP\s+(\d{3})", message, re.IGNORECASE)
