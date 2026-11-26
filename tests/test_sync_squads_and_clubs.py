@@ -75,6 +75,30 @@ class SquadNormalizationTests(unittest.TestCase):
 
 
 class SquadPersistenceTests(unittest.TestCase):
+    def test_saves_grouped_transfermarkt_competition_table(self):
+        payload = {
+            "id": "GB1",
+            "seasonId": "2026",
+            "tables": [{
+                "name": "Premier League",
+                "rows": [{
+                    "clubId": "281", "clubName": "Manchester City", "matches": 5,
+                    "wins": 5, "draws": 0, "losses": 0, "goalsFor": 13,
+                    "goalsAgainst": 5, "points": 15,
+                }],
+            }],
+        }
+        with patch.object(squads, "db_rpc") as rpc:
+            squads.save_competition_table("GB1", "2026", payload)
+        rpc.assert_called_once()
+        self.assertEqual(rpc.call_args.args[1]["p_record_type"], "competition_table")
+        self.assertEqual(rpc.call_args.args[1]["p_payload"]["tables"][0]["rows"][0]["clubId"], "281")
+
+    def test_empty_competition_table_does_not_replace_existing_payload(self):
+        with patch.object(squads, "db_rpc") as rpc:
+            squads.save_competition_table("GB1", "2026", {"tables": [{"rows": []}]})
+        rpc.assert_not_called()
+
     def test_historical_squad_does_not_overwrite_current_player_profile(self):
         player = {
             "name": "Test Player",
