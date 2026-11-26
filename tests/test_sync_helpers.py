@@ -353,6 +353,19 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("last_squad_seen_at=gte.", query)
         self.assertNotIn("last_felipe_synced_at=is.null", query)
 
+    def test_history_detail_preseed_includes_inactive_players_from_season_squads(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(sync, "db_get", return_value=[]) as fetch,
+            patch.dict(os.environ, {"TM_DETAIL_PRESEED_ALL_HISTORY": "true"}),
+        ):
+            self.assertEqual(sync.load_pending_player_detail_candidates(), [])
+        query = fetch.call_args.args[0]
+        self.assertIn("tm_detail_preseed_candidates", query)
+        self.assertNotIn("is_active=eq.true", query)
+        self.assertNotIn("last_squad_seen_at=gte.", query)
+
     def test_imported_detail_continuation_preserves_explicit_window(self):
         from unittest.mock import patch
 
