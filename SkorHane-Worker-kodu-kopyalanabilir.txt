@@ -3956,7 +3956,7 @@ async function tmPlayer(env, id) {
   } catch (_) {}
   if (!marketRows.length) marketRows = listPayload(row.market_value_payload || {}, ["market_value_history", "marketValueHistory", "history", "marketValues", "valuations", "items", "data"]);
   out.marketValueHistory = marketRows;
-  out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]).map(item => ({ ...item, from: item.from || item.fromDate || "", until: item.until || item.untilDate || "" }));
+  out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]).map(item => ({ ...item, injury: item.injury || item.reason || item.type || item.description || item.injuryType || "Sakatlık", from_date: item.from_date || item.fromDate || item.from || item.startDate || item.start || "", until_date: item.until_date || item.untilDate || item.until || item.endDate || item.end || "", season: item.season || item.seasonName || item.season_id || "", days: item.days ?? item.daysMissed ?? item.durationDays, games_missed: item.games_missed ?? item.gamesMissed ?? item.missedMatches }));
   out.absences = listPayload(row.absences_payload || {}, ["absences", "data", "items"]);
   out.photo = row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "";
   const nationality = pick(b, "citizenship", "nationality", "nationalities");
@@ -3969,7 +3969,7 @@ async function tmPlayer(env, id) {
   out.bio = {
     ...dateBio(pick(b, "dateOfBirth", "date_of_birth")),
     "Ayak": footTr(pick(b, "foot", "preferredFoot", "preferred_foot")),
-    "Piyasa Değeri": valueTr(pick(b, "marketValue", "marketValueFormatted", "market_value")) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : "") || valueTr(pick(latestMarketValue, "display_value", "displayValue", "market_value", "value_eur", "value")),
+    "Piyasa Değeri": valueTr(pick(b, "marketValue", "marketValueFormatted", "market_value")) || valueTr(row.current_market_value_text) || (row.current_market_value_eur != null ? valueTr(Number(row.current_market_value_eur)) : "") || valueTr(pick(latestMarketValue, "display_value", "displayValue", "market_value", "marketValue", "value_eur", "value")),
     "Şu Anki Takım": clubName,
     "Boy": height ? (typeof height === "number" && height < 3 ? String(height).replace(".", ",") + " m" : height + "") : "",
     "Uyruk": nat,
@@ -3986,10 +3986,18 @@ async function tmPlayer(env, id) {
       let se = sm[0].replace(/\s+/g, "").replace(/[–-]/g, "/");
       if (/^\d{4}$/.test(se)) se = se + "/" + String(Number(se) + 1).slice(2);
       else se = se.replace(/\/(\d{4})$/, (_, y) => "/" + y.slice(2));
-      const clubRaw = pick(x, "clubName", "club_name", "teamName", "team_name", "club", "team", "clubID", "club_id");
-      const clubName = clubRaw && typeof clubRaw === "object" ? pick(clubRaw, "name", "displayName", "shortName") : clubRaw;
-      const clubLabel = clubName == null ? "" : String(clubName).trim();
-      if (!clubLabel || /^(?:[a-z]{2,5}\.)[a-z0-9._-]+$/i.test(clubLabel) || /^(?:undefined|null|\[object object\]|\d+)$/i.test(clubLabel) || /\b(?:super lig|bundesliga|premier league|serie a|la liga|ligue 1|champions league|europa league)\b/i.test(clubLabel)) continue;
+      const clubRaw = pick(x, "clubName", "club_name", "teamName", "team_name", "club", "team");
+      const clubObject = clubRaw && typeof clubRaw === "object" ? clubRaw : null;
+      const clubName = clubObject ? pick(clubObject, "name", "displayName", "shortName") : clubRaw;
+      const clubId = pick(x, "clubId", "clubID", "club_id") || (clubObject ? pick(clubObject, "id", "clubId", "clubID") : "");
+      let clubLabel = clubName == null ? "" : String(clubName).trim();
+      // Felipe /stats may identify the historical club only by clubId. Keep that
+      // season row visible instead of silently filtering every numeric club ID.
+      if (/^\d+$/.test(clubLabel)) clubLabel = "Kulüp #" + clubLabel;
+      if (!clubLabel && clubId !== "") clubLabel = "Kulüp #" + String(clubId).trim();
+      if (!clubLabel && row.team_name) clubLabel = String(row.team_name).trim();
+      if (!clubLabel) clubLabel = "Takım bilgisi yok";
+      if (/^(?:[a-z]{2,5}\.)[a-z0-9._-]+$/i.test(clubLabel) || /\b(?:super lig|bundesliga|premier league|serie a|la liga|ligue 1|champions league|europa league)\b/i.test(clubLabel)) continue;
       const k = se + "|" + clubLabel;
       const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Toplam Dakika": null, "Sarı Kart": null, "Kırmızı Kart": null, cats: emptyCats() };
       const m = num(pick(x, "appearances", "apps", "matches")), g = num(pick(x, "goals")), rawAssists = pick(x, "assists"), a = num(rawAssists);
@@ -4003,7 +4011,7 @@ async function tmPlayer(env, id) {
       if (red != null) r["Kırmızı Kart"] = (r["Kırmızı Kart"] || 0) + red;
       const rawMinutes = pick(x, "minutes", "minutes_played", "minutesPlayed");
       if (rawMinutes !== "") r["Toplam Dakika"] = (r["Toplam Dakika"] || 0) + num(rawMinutes);
-      addCat(r.cats, catOf(pick(x, "competitionName", "competition_name", "competition", "competitionID", "competition_id")), m, g, rawAssists === "" ? null : a, starts, yellow, red);
+      addCat(r.cats, catOf(pick(x, "competitionName", "competition_name", "competition", "competitionId", "competitionID", "competition_id")), m, g, rawAssists === "" ? null : a, starts, yellow, red);
       mp.set(k, r);
     }
     out.seasons = [...mp.values()];
@@ -4364,15 +4372,18 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
   const tmRaw=out.tm&&out.tm.transfers;
   const tmRows=Array.isArray(tmRaw)?tmRaw:Array.isArray(tmRaw&&tmRaw.transfers)?tmRaw.transfers:Array.isArray(tmRaw&&tmRaw.history)?tmRaw.history:Array.isArray(tmRaw&&tmRaw.data)?tmRaw.data:[];
   const tmTransfers=tmRows.map(move=>{
-    const teamName=value=>typeof value==='string'?value:value&& (value.name||value.clubName||value.teamName||value.display_name)||'';
-    const from=teamName(move.from||move.fromClub||move.fromTeam||move.oldClub||move.previousClub||move.fromClubName||move.club_from);
-    const to=teamName(move.to||move.toClub||move.toTeam||move.newClub||move.currentClub||move.toClubName||move.club_to);
+    const teamName=value=>typeof value==='string'?value:value&& (value.name||value.displayName||value.clubName||value.teamName||value.display_name||(value.id!=null?"Kulüp #"+value.id:""))||'';
+    // Current Felipe transfer objects use clubFrom / clubTo rather than from / to.
+    const from=teamName(move.clubFrom||move.from||move.fromClub||move.fromTeam||move.oldClub||move.previousClub||move.fromClubName||move.club_from);
+    const to=teamName(move.clubTo||move.to||move.toClub||move.toTeam||move.newClub||move.currentClub||move.toClubName||move.club_to);
     const rawDate=move.date||move.transferDate||move.dateOfTransfer||move.timestamp||'';
     const date=typeof rawDate==='number'?new Date(rawDate<1e12?rawDate*1000:rawDate).toISOString().slice(0,10):String(rawDate).slice(0,10);
     const rawType=String(move.kind||move.type||move.transferType||move.transfer_type||'').trim();
-    const rawFee=move.fee||move.feeText||move.fee_text||'';
+    const rawFeeValue=move.fee??move.feeText??move.fee_text??'';
+    const rawFee=rawFeeValue&&typeof rawFeeValue==='object'?(rawFeeValue.displayValue||rawFeeValue.display_value||rawFeeValue.text||rawFeeValue.value||''):rawFeeValue;
     const loan=/loan|kiral/i.test(rawType),free=/free|bedelsiz/i.test(rawType),endLoan=/endOfLoan|end of loan|kiralıktan dönüş/i.test(rawType);
-    const fee=rawFee!==''?String(rawFee):(/€|£|\$|\b\d/.test(rawType)&&!loan?rawType:'');
+    const numericFee=rawFee!==''&&rawFee!=null&&Number.isFinite(Number(rawFee))?Number(rawFee):null;
+    const fee=numericFee!==null?(numericFee===0?'Bedelsiz':new Intl.NumberFormat('tr-TR',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(numericFee)):(rawFee!==''?String(rawFee):(/€|£|\$|\b\d/.test(rawType)&&!loan?rawType:''));
     return {date,from,to,kind:endLoan?'Kiralıktan dönüş':loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
   }).filter(x=>x.from||x.to||x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const transfers=tmTransfers;
@@ -7703,7 +7714,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf33:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf34:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
