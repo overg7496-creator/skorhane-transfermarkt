@@ -55,7 +55,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("tm_source_records?select=record_type,payload,fetched_at", worker)
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
-        self.assertIn('"pf38:"', worker)
+        self.assertIn('"pf39:"', worker)
         self.assertIn('refreshState = await queueTmPlayerRefresh', worker)
         self.assertIn('refreshRetryAt = refreshState.retryAt', worker)
         self.assertIn('tmRefreshState:', worker)
@@ -490,7 +490,7 @@ class SyncHelperTests(unittest.TestCase):
         worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
         copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, copy)
-        self.assertIn('"pf38:"', worker)
+        self.assertIn('"pf39:"', worker)
 
     def test_database_saves_goalkeeper_season_fields(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
