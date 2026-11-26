@@ -2945,22 +2945,44 @@ function tmSeasonLabel(value) {
   return year ? String(Number(year[1])) + "/" + String((Number(year[1]) + 1) % 100).padStart(2, "0") : "";
 }
 
-function tmHasArrayPayload(payload, keys) {
-  return !!payload && typeof payload === "object" && keys.some(key => Array.isArray(payload[key]));
+function tmPayloadArray(payload, keys) {
+  if (!payload || typeof payload !== "object") return null;
+  for (const key of keys) if (Array.isArray(payload[key])) return payload[key];
+  return null;
 }
-
-async function queueTmPlayerRefresh(env, playerId, row) {
+function tmHasArrayPayload(payload, keys, requireRows = false) {
+  const rows = tmPayloadArray(payload, keys);
+  return Array.isArray(rows) && (!requireRows || rows.length > 0);
+}
+async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
   const token = String(env && env.GITHUB_ACTIONS_TOKEN || "").trim();
+  const repairCutoff = Date.parse("2026-11-26T12:00:00Z");
+  const sourceByType = Object.fromEntries((Array.isArray(sourceRecords) ? sourceRecords : [])
+    .filter(item => item && item.record_type)
+    .map(item => [String(item.record_type), item]));
   const snapshotChecks = [
-    ["stats_payload", ["stats", "data", "items"]],
-    ["transfers_payload", ["transfers", "history", "items", "data"]],
-    ["market_value_payload", ["marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"]],
-    ["injuries_payload", ["injuries", "data", "items"]]
+    ["stats_payload", ["stats", "data", "items"], "player_stats", true],
+    ["transfers_payload", ["transfers", "history", "items", "data"], "player_transfers", true],
+    ["market_value_payload", ["marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"], "player_market_values", true],
+    // An empty injury list is a valid, verified answer; the other three sections
+    // must contain rows unless a post-repair provider snapshot confirms they are empty.
+    ["injuries_payload", ["injuries", "data", "items"], "player_injuries", false]
   ];
   const syncAt = Date.parse(row && row.last_felipe_synced_at || "");
   const stale = !Number.isFinite(syncAt) || Date.now() - syncAt > 7 * 86400000;
-  const missing = !row.profile_payload || typeof row.profile_payload !== "object" ||
-    snapshotChecks.some(([field, keys]) => !tmHasArrayPayload(row[field], keys));
+  const profileRecord = sourceByType.player_profile;
+  const profileFetchedAt = Date.parse(profileRecord && profileRecord.fetched_at || "");
+  const profileFresh = Number.isFinite(profileFetchedAt) && profileFetchedAt >= repairCutoff;
+  const profileExists = !!(row && row.profile_payload && typeof row.profile_payload === "object" && Object.keys(row.profile_payload).length) ||
+    (profileFresh && !!(profileRecord.payload && typeof profileRecord.payload === "object" && Object.keys(profileRecord.payload).length));
+  const missing = !profileExists || snapshotChecks.some(([field, keys, recordType, requireRows]) => {
+    const localHasData = tmHasArrayPayload(row && row[field], keys, requireRows);
+    const sourceRecord = sourceByType[recordType];
+    const fetchedAt = Date.parse(sourceRecord && sourceRecord.fetched_at || "");
+    const sourceFresh = Number.isFinite(fetchedAt) && fetchedAt >= repairCutoff;
+    const sourceHasVerifiedArray = sourceFresh && tmHasArrayPayload(sourceRecord.payload, keys, false);
+    return !localHasData && !sourceHasVerifiedArray;
+  });
   const required = stale || missing;
   if (!required) return { required: false, queued: false, configured: !!token };
   if (!token) return { required: true, queued: false, configured: false, reason: "GITHUB_ACTIONS_TOKEN tanımlı değil" };
@@ -4023,9 +4045,32 @@ async function tmPlayer(env, id) {
   const playerId = String(id || "").replace(/\D/g, "");
   if (!playerId) return { ...out, err: "geçersiz Transfermarkt oyuncu kimliği" };
   const rows = await tmDbRows(env, "tm_players?select=*&tm_id=eq." + encodeURIComponent(playerId) + "&limit=1");
-  const row = rows[0];
-  if (!row) return { ...out, err: "Transfermarkt oyuncusu henüz veritabanına senkronize edilmemiş" };
-  const refreshState = await queueTmPlayerRefresh(env, playerId, row).catch(error => ({
+  const dbRow = rows[0];
+  if (!dbRow) return { ...out, err: "Transfermarkt oyuncusu henüz veritabanına senkronize edilmemiş" };
+  const sourceRecords = await tmDbRows(env,
+    "tm_source_records?select=record_type,payload,fetched_at&source=eq.felipeall&external_id=eq." +
+    encodeURIComponent(playerId) + "&record_key=eq.&limit=10").catch(() => []);
+  const sourceByType = Object.fromEntries(sourceRecords.filter(item => item && item.record_type)
+    .map(item => [String(item.record_type), item.payload || {}]));
+  const chooseSnapshot = (field, recordType, keys) => {
+    const local = dbRow[field];
+    const source = sourceByType[recordType];
+    const localRows = tmPayloadArray(local, keys);
+    const sourceRows = tmPayloadArray(source, keys);
+    if ((!localRows || localRows.length === 0) && sourceRows && sourceRows.length > 0) return source;
+    return local || source || {};
+  };
+  const localProfile = dbRow.profile_payload;
+  const sourceProfile = sourceByType.player_profile;
+  const row = {
+    ...dbRow,
+    profile_payload: localProfile && typeof localProfile === "object" && Object.keys(localProfile).length ? localProfile : (sourceProfile || localProfile || {}),
+    stats_payload: chooseSnapshot("stats_payload", "player_stats", ["stats", "data", "items"]),
+    transfers_payload: chooseSnapshot("transfers_payload", "player_transfers", ["transfers", "history", "items", "data"]),
+    market_value_payload: chooseSnapshot("market_value_payload", "player_market_values", ["marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"]),
+    injuries_payload: chooseSnapshot("injuries_payload", "player_injuries", ["injuries", "data", "items"])
+  };
+  const refreshState = await queueTmPlayerRefresh(env, playerId, row, sourceRecords).catch(error => ({
     required: true, queued: false, configured: !!(env && env.GITHUB_ACTIONS_TOKEN),
     reason: String(error && error.message || error)
   }));
