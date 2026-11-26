@@ -244,11 +244,13 @@ class SyncHelperTests(unittest.TestCase):
             patch.object(sync, "db_get", return_value=rows),
             patch.dict(os.environ, {"TM_DETAIL_EXPECTED_COHORT_SIZE": ""}),
         ):
-            pending = sync.load_pending_player_detail_candidates(
-                squad_seen_after="2026-11-12T08:00:00Z",
-                squad_seen_before="2026-11-25T20:26:06Z",
-            )
+            with self.assertLogs(sync.LOG, level="INFO") as captured:
+                pending = sync.load_pending_player_detail_candidates(
+                    squad_seen_after="2026-11-12T08:00:00Z",
+                    squad_seen_before="2026-11-25T20:26:06Z",
+                )
         self.assertEqual([row["tm_id"] for row in pending], ["2", "3"])
+        self.assertTrue(any("toplam=3" in line and "kalan=2" in line for line in captured.output))
 
     def test_main_workflow_cancels_old_run_and_has_no_fixed_2402_queue_count(self):
         workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
