@@ -51,9 +51,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      # Fixed original cohort: [2026-11-11 20:26:06, 2026-11-25 20:26:06) UTC.
+      # Fixed original cohort: [2026-11-12 08:00:00, 2026-11-25 20:26:06) UTC.
       # The imported queue owns [2026-11-25 20:26:06, 21:00:04) UTC.
-      TM_DETAIL_SQUAD_SEEN_AFTER: ${{ github.event.inputs.seen_after || '2026-11-11T20:26:06Z' }}
+      TM_DETAIL_SQUAD_SEEN_AFTER: ${{ github.event.inputs.seen_after || '2026-11-12T08:00:00Z' }}
       TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ github.event.inputs.seen_before || '2026-11-25T20:26:06Z' }}
       TM_DETAIL_EXPECTED_COHORT_SIZE: "2402"
     steps:

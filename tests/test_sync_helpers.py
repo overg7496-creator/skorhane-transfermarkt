@@ -126,7 +126,7 @@ class SyncHelperTests(unittest.TestCase):
     def test_original_backfill_can_stop_before_new_squad_import_window(self):
         from unittest.mock import patch
 
-        after = "2026-11-11T20:26:06Z"
+        after = "2026-11-12T08:00:00Z"
         before = "2026-11-25T20:26:06Z"
         with patch.object(sync, "db_get", return_value=[]) as fetch:
             self.assertEqual(
@@ -136,7 +136,7 @@ class SyncHelperTests(unittest.TestCase):
                 [],
             )
         query = fetch.call_args.args[0]
-        self.assertIn("last_squad_seen_at.gte.2026-11-11T20", query)
+        self.assertIn("last_squad_seen_at.gte.2026-11-12T08", query)
         self.assertIn("last_squad_seen_at.lt.2026-11-25T20%3A26%3A06Z", query)
 
     def test_main_and_missing_squad_imports_do_not_share_leagues(self):
@@ -153,7 +153,7 @@ class SyncHelperTests(unittest.TestCase):
     def test_main_backlog_never_expands_into_imported_or_future_window(self):
         from unittest.mock import patch
 
-        after = "2026-11-11T20:26:06Z"
+        after = "2026-11-12T08:00:00Z"
         before = "2026-11-25T20:26:06Z"
         with patch.object(sync, "db_get", return_value=[]) as fetch:
             self.assertEqual(
@@ -164,7 +164,7 @@ class SyncHelperTests(unittest.TestCase):
             )
         query = fetch.call_args.args[0]
         self.assertNotIn("or=", query)
-        self.assertIn("last_squad_seen_at.gte.2026-11-11T20", query)
+        self.assertIn("last_squad_seen_at.gte.2026-11-12T08", query)
         self.assertIn("last_squad_seen_at.lt.2026-11-25T20", query)
         self.assertNotIn("last_squad_seen_at.gte.2026-11-25T21", query)
 
@@ -210,7 +210,7 @@ class SyncHelperTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "beklenen 2402"):
                 sync.load_pending_player_detail_candidates(
-                    squad_seen_after="2026-11-11T20:26:06Z",
+                    squad_seen_after="2026-11-12T08:00:00Z",
                     squad_seen_before="2026-11-25T20:26:06Z",
                 )
 
@@ -226,7 +226,7 @@ class SyncHelperTests(unittest.TestCase):
             patch.dict(os.environ, {"TM_DETAIL_EXPECTED_COHORT_SIZE": "2"}),
         ):
             pending = sync.load_pending_player_detail_candidates(
-                squad_seen_after="2026-11-11T20:26:06Z",
+                squad_seen_after="2026-11-12T08:00:00Z",
                 squad_seen_before="2026-11-25T20:26:06Z",
             )
         self.assertEqual([row["tm_id"] for row in pending], ["2"])
