@@ -308,11 +308,23 @@ def save_league_state(competition_id: str, season_id: str, payload: dict[str, An
     })
 
 
-def save_player(tm_id: str, player: dict[str, Any], transfer: dict[str, Any] | None) -> None:
+def save_player(
+    tm_id: str, player: dict[str, Any], transfer: dict[str, Any] | None,
+    *, historical_only: bool = False,
+) -> None:
+    # Older-season membership must never replace the current club/profile row.
+    # For a player not yet in tm_players, create only a neutral identity stub;
+    # the season-specific club association is stored below in its own table.
+    stored_player = player
+    if historical_only:
+        stored_player = {
+            key: player[key] for key in ("name", "position", "photo_url")
+            if player.get(key) not in (None, "")
+        }
     db_rpc("tm_upsert_player", {
         "p_tm_id": tm_id,
         "p_source": "felipeall",
-        "p_player": player,
+        "p_player": stored_player,
     })
     if transfer:
         db_rpc("tm_upsert_transfer", {"p_row": transfer})
@@ -474,6 +486,7 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
     total_players = 0
     failed_clubs: list[str] = []
     stopped_for_time = False
+    latest_season = max(TM_SEASONS, key=int)
     LOG.info("Kadro aktarımı başlıyor: ligler=%s | sezonlar=%s",
              ",".join(TM_LEAGUES), ",".join(TM_SEASONS))
 
@@ -570,7 +583,10 @@ def sync_squads_and_clubs(*, force: bool = False) -> int:
                         LOG.warning("%s kadrosunda ID/adı eksik oyuncu atlandı.", club_name)
                         continue
                     tm_id, player_payload, transfer_payload = normalized
-                    save_player(tm_id, player_payload, transfer_payload)
+                    save_player(
+                        tm_id, player_payload, transfer_payload,
+                        historical_only=(requested_season != latest_season),
+                    )
                     saved_here += 1
 
                 if saved_here == 0:
