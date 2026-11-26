@@ -3875,7 +3875,7 @@ async function loadPitchPlayerCareer(my){
     : 'Transfermarkt sezon kaydı bulunamadı';
   renderPlayer();
 }
-const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v5.'+pitchClientTeamKey(name||'');
+const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v6.'+pitchClientTeamKey(name||'');
 function readPlayerStatsCache(name){try{const raw=localStorage.getItem(playerStatsCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<7*86400e3&&x.data&&Array.isArray(x.data.seasons)?x.data:null}catch(_){return null}}
 function savePlayerStatsCache(name,data){try{if(data&&Array.isArray(data.seasons))localStorage.setItem(playerStatsCacheKey(name),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
 function playerPitchLeagueCandidates(my){
