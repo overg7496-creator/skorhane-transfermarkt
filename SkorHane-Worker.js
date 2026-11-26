@@ -2906,7 +2906,11 @@ async function tmDbRows(env, query) {
     headers: { apikey: key, Authorization: "Bearer " + key, Accept: "application/json" },
     signal: AbortSignal.timeout(8000)
   });
-  if (!response.ok) throw new Error("PostgreSQL REST HTTP " + response.status);
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 500);
+    const table = String(query || "").split("?")[0].replace(/[^a-zA-Z0-9_./-]/g, "").slice(0, 120);
+    throw new Error("PostgreSQL REST HTTP " + response.status + " (" + table + "): " + (detail || "response body empty"));
+  }
   const rows = await response.json();
   return Array.isArray(rows) ? rows : [];
 }
