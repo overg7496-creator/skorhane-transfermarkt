@@ -4093,6 +4093,8 @@ async function tmPlayer(env, id) {
   out.refreshQueued = !!refreshState.queued;
   out.refreshConfigured = !!refreshState.configured;
   out.refreshReason = refreshState.reason || "";
+  out.refreshState = refreshState.state || (refreshState.required ? (refreshState.queued ? "queued" : "required") : "current");
+  out.refreshRetryAt = refreshState.retryAt || "";
   const profileRaw = row.profile_payload || {};
   const b = profileRaw.player || profileRaw.data || profileRaw.profile || profileRaw;
   const statsRaw = row.stats_payload || {};
@@ -4593,7 +4595,7 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     return {date,from,to,kind:endLoan?'Kiralıktan dönüş':loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
   }).filter(x=>x.from||x.to||x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const transfers=tmTransfers;
-  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], tmRefreshRequired: !!(out.tm && out.tm.refreshRequired), tmRefreshQueued: !!(out.tm && out.tm.refreshQueued), tmRefreshConfigured: out.tm ? !!out.tm.refreshConfigured : null, tmRefreshReason: out.tm && out.tm.refreshReason || "", sources: st, stats: null };
+  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], tmRefreshRequired: !!(out.tm && out.tm.refreshRequired), tmRefreshQueued: !!(out.tm && out.tm.refreshQueued), tmRefreshConfigured: out.tm ? !!out.tm.refreshConfigured : null, tmRefreshReason: out.tm && out.tm.refreshReason || "", tmRefreshState: out.tm && out.tm.refreshState || "", tmRefreshRetryAt: out.tm && out.tm.refreshRetryAt || "", sources: st, stats: null };
 }
 
 // ---------- PitchAPI: seçilen oyuncunun erişilebilir geçmiş sezonlarını maç maç birleştir ----------
@@ -7924,7 +7926,7 @@ export default {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
-          return { body: r, ttl: r.tmRefreshQueued ? 25 : part === "info" ? 21600 : hasCareer ? 21600 : providerErrors ? 90 : 1800 };
+          return { body: r, ttl: r.tmRefreshRequired ? 20 : part === "info" ? 21600 : hasCareer ? 21600 : providerErrors ? 90 : 1800 };
         });
       } else if (p === "/team") {
         let code = q.get("code") || "";
