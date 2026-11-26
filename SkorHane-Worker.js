@@ -4204,20 +4204,26 @@ async function tmPlayer(env, id) {
       // season row visible instead of silently filtering every numeric club ID.
       if (/^\d+$/.test(clubLabel)) clubLabel = "Kulüp #" + clubLabel;
       if (!clubLabel && clubId !== "") clubLabel = "Kulüp #" + String(clubId).trim();
-      if (!clubLabel && row.team_name) clubLabel = String(row.team_name).trim();
-      if (!clubLabel) clubLabel = "Takım bilgisi yok";
+      // Do not attribute an unattributed historical row to the player's current club.
+      if (!clubLabel) continue;
       if (/^(?:[a-z]{2,5}\.)[a-z0-9._-]+$/i.test(clubLabel) || /\b(?:super lig|bundesliga|premier league|serie a|la liga|ligue 1|champions league|europa league)\b/i.test(clubLabel)) continue;
       const k = se + "|" + clubLabel;
-      const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Toplam Dakika": null, "Sarı Kart": null, "Kırmızı Kart": null, cats: emptyCats() };
+      const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Toplam Dakika": null, "Sarı Kart": null, "Kırmızı Kart": null, "Yenilen Gol": null, "Gol Yemeden": null, cats: emptyCats() };
       const m = num(pick(x, "appearances", "apps", "matches")), g = num(pick(x, "goals")), rawAssists = pick(x, "assists"), a = num(rawAssists);
       const rawStarts = pick(x, "starts", "gamesStarted", "appearancesAsStarter", "is_starting"), starts = rawStarts === "" ? null : num(rawStarts);
       const rawYellow = pick(x, "yellowCards", "yellow_cards", "yellow", "bookingsYellow"), yellow = rawYellow === "" ? null : num(rawYellow);
       const rawRed = pick(x, "redCards", "red_cards", "red", "bookingsRed"), red = rawRed === "" ? null : num(rawRed);
+      const rawGoalsConceded = pick(x, "goalsConceded", "goals_conceded");
+      const rawCleanSheets = pick(x, "cleanSheets", "clean_sheets");
+      const goalsConceded = rawGoalsConceded === "" ? null : num(rawGoalsConceded);
+      const cleanSheets = rawCleanSheets === "" ? null : num(rawCleanSheets);
       r["Maç"] += m; r["Gol"] += g;
       if (rawAssists !== "") r["Asist"] = (r["Asist"] || 0) + a;
       if (starts != null) r["İlk 11"] = (r["İlk 11"] || 0) + starts;
       if (yellow != null) r["Sarı Kart"] = (r["Sarı Kart"] || 0) + yellow;
       if (red != null) r["Kırmızı Kart"] = (r["Kırmızı Kart"] || 0) + red;
+      if (goalsConceded != null) r["Yenilen Gol"] = (r["Yenilen Gol"] || 0) + goalsConceded;
+      if (cleanSheets != null) r["Gol Yemeden"] = (r["Gol Yemeden"] || 0) + cleanSheets;
       const rawMinutes = pick(x, "minutes", "minutes_played", "minutesPlayed");
       if (rawMinutes !== "") r["Toplam Dakika"] = (r["Toplam Dakika"] || 0) + num(rawMinutes);
       addCat(r.cats, catOf(pick(x, "competitionName", "competition_name", "competition", "competitionId", "competitionID", "competition_id")), m, g, rawAssists === "" ? null : a, starts, yellow, red);
