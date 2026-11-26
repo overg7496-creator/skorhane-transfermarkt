@@ -8004,7 +8004,7 @@ export default {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
-          return { body: r, ttl: r.tmRefreshRequired ? 20 : part === "info" ? 21600 : hasCareer ? 21600 : providerErrors ? 90 : 1800 };
+          return { body: r, ttl: r.tmRefreshRequired ? 20 : part === "info" ? 60 : hasCareer ? 21600 : providerErrors ? 90 : 1800 };
         });
       } else if (p === "/team") {
         let code = q.get("code") || "";
