@@ -793,8 +793,12 @@ def load_pending_player_detail_candidates(
     candidates: list[dict[str, Any]] = []
     offset = 0
     page_size = 1000
-    has_explicit_window = bool(squad_seen_after or squad_seen_before)
-    if has_explicit_window:
+    history_backfill = os.getenv("TM_DETAIL_PRESEED_ALL_HISTORY", "").strip().lower() in {"1", "true", "yes"}
+    has_explicit_window = bool(squad_seen_after or squad_seen_before) and not history_backfill
+    if history_backfill:
+        squad_filter = ""
+        LOG.info("Geçmiş kadro detay ön-doldurması: tüm sezon kadro tablolarındaki eksik oyuncular taranacak.")
+    elif has_explicit_window:
         if not squad_seen_after or not squad_seen_before:
             raise RuntimeError("Detay kuyruğu için hem başlangıç hem bitiş zamanı gerekli.")
         squad_seen_after, squad_seen_before = validate_detail_squad_window(
@@ -811,11 +815,17 @@ def load_pending_player_detail_candidates(
     while True:
         # Count the full cohort, not only pending rows, so the size stays stable
         # as successfully completed players are removed from the work list.
-        query = (
-            f"tm_players?select={select}&is_active=eq.true"
-            f"{squad_filter}&order=tm_id.asc"
-            f"&limit={page_size}&offset={offset}"
-        )
+        if history_backfill:
+            query = (
+                f"tm_detail_preseed_candidates?select={select}"
+                f"&order=tm_id.asc&limit={page_size}&offset={offset}"
+            )
+        else:
+            query = (
+                f"tm_players?select={select}&is_active=eq.true"
+                f"{squad_filter}&order=tm_id.asc"
+                f"&limit={page_size}&offset={offset}"
+            )
         rows = db_get(query)
         if not isinstance(rows, list):
             raise RuntimeError("Oyuncu detay kohortu okunamadı.")
@@ -838,7 +848,7 @@ def load_pending_player_detail_candidates(
             )
     pending = [row for row in candidates if not row.get("last_felipe_synced_at")]
     LOG.info(
-        "Sabit kadro aralığı detay kuyruğu: toplam=%s, daha önce tamamlanan=%s, kalan=%s",
+        "Detay ön-doldurma kuyruğu: toplam=%s, daha önce tamamlanan=%s, kalan=%s",
         len(candidates), len(candidates) - len(pending), len(pending),
     )
     return pending
