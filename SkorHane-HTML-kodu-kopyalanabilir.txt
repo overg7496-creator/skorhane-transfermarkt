@@ -3088,8 +3088,22 @@ function renderSt(){
   $('#shTitle').textContent=(nm||'Puan Durumu')+' – Puan Durumu';
 }
 function loadLeagueData(my){
-  const season=Number(my.season)||currentTeamSeason();
-  api('/league?code='+encodeURIComponent(my.code)+'&season='+encodeURIComponent(season)).then(j=>{if(cur===my){my.data=j;my.seasons=j.seasons||my.seasons||[];renderLeague()}}).catch(e=>{if(cur===my){my.err=e.message||String(e);renderLeague()}});
+  const season=Number(my.season)||currentTeamSeason(),qs='code='+encodeURIComponent(my.code)+'&season='+encodeURIComponent(season);
+  // Supabase liderleri önce çizilir; fikstür/diğer lig verileri arka planda tamamlanır.
+  api('/tm-league-data?'+qs).then(db=>{
+    if(cur!==my||Number(my.season)!==season||!db||!db.found)return;
+    my.tmLeagueData=db;my.seasons=db.seasons&&db.seasons.length?db.seasons:my.seasons||[];
+    my.pitchLoaded=true;my.pitchLoading=false;my.pitchError='';
+    my.data={...(my.data||{}),code:my.code,name:my.name,season:season,seasons:my.seasons,
+      goals:db.goals||[],assists:db.assists||[],fixtures:(my.data&&my.data.fixtures)||[],
+      tables:(my.data&&my.data.tables)||[],errors:{...((my.data&&my.data.errors)||{}),goals:db.goals&&db.goals.length?'':'Supabase sezon istatistiği henüz yok.',assists:db.assists&&db.assists.length?'':'Supabase sezon istatistiği henüz yok.'}};
+    renderLeague();
+  }).catch(()=>{});
+  api('/league?'+qs).then(j=>{if(cur===my&&Number(my.season)===season){
+    const db=my.tmLeagueData;
+    my.data=db?{...j,goals:db.goals&&db.goals.length?db.goals:j.goals,assists:db.assists&&db.assists.length?db.assists:j.assists,seasons:db.seasons&&db.seasons.length?db.seasons:j.seasons}:j;
+    my.seasons=(db&&db.seasons&&db.seasons.length?db.seasons:j.seasons)||my.seasons||[];renderLeague()
+  }}).catch(e=>{if(cur===my&&!my.data){my.err=e.message||String(e);renderLeague()}});
   loadPitchFixtures(my);
 }
 async function loadPitchFixtures(my){
@@ -3115,6 +3129,7 @@ function mergePitchLeaderRows(map,rows){
 function pitchLeaderRows(map){return [...map.values()].map(r=>({playerId:r.playerId,player:r.player,logo:r.logo,team:[...r.teams].join(' / '),value:r.value,source:'PitchAPI'})).sort((a,b)=>b.value-a.value||String(a.player).localeCompare(String(b.player),'tr')).slice(0,50).map((r,i)=>({...r,rank:i+1}))}
 async function loadPitchLeaders(my){
   if(!my||!my.data||my.pitchLoading||my.pitchLoaded)return;
+  if(my.tmLeagueData&&my.tmLeagueData.found){my.data.goals=my.tmLeagueData.goals||[];my.data.assists=my.tmLeagueData.assists||[];my.pitchLoaded=true;return;}
   my.pitchLoading=true;my.pitchError='';my.pitchProgress='Sezon maçları hazırlanıyor…';
   my.pitchGoals=new Map();my.pitchAssists=new Map();
   renderLeague();
@@ -3161,6 +3176,7 @@ function pitchMetricRowsFromMap(map,metric){
 }
 async function loadPitchStatLeaders(my,metric){
   if(!my||!my.data||!metric)return;
+  if(my.tmLeagueData&&my.tmLeagueData.found&&(metric==='goals'||metric==='assists')){my.pitchMetricRowsByKey=my.pitchMetricRowsByKey||{};my.pitchMetricRowsByKey[metric]=metric==='goals'?(my.tmLeagueData.goals||[]):(my.tmLeagueData.assists||[]);my.pitchMetricLoadedByKey=my.pitchMetricLoadedByKey||{};my.pitchMetricLoadedByKey[metric]=true;return;}
   my.pitchMetricLoadedByKey=my.pitchMetricLoadedByKey||{};my.pitchMetricLoadingByKey=my.pitchMetricLoadingByKey||{};my.pitchMetricRowsByKey=my.pitchMetricRowsByKey||{};my.pitchMetricErrorsByKey=my.pitchMetricErrorsByKey||{};
   if(my.pitchMetricLoadedByKey[metric]||my.pitchMetricLoadingByKey[metric])return;
   const season=Number(my.season)||currentTeamSeason(),requestToken=(my.pitchMetricTokens&&my.pitchMetricTokens[metric]||0)+1;
@@ -3338,7 +3354,7 @@ function renderLeague(){
         if(!cur.pitchFixturesLoaded&&!cur.pitchFixturesLoading)loadPitchFixtures(cur);
       }else{
         const metrics=[['rating','Oyuncu puanları','Puan'],['goals','Gol krallığı','Gol'],['assists','Asist krallığı','Asist'],['yellow','Sarı kartlar','Sarı kart'],['red','Kırmızı kartlar','Kırmızı kart'],['keypasses','En çok kilit pas verenler','Kilit pas'],['appearances','En çok maçta oynayanlar','Maç'],['minutes','En çok süre alanlar','Dakika']];
-        const renderMetric=(metric,title)=>{const all=metric==='goals'?(cur.pitchLoaded?(cur.data&&cur.data.goals||pitchLeaderRows(cur.pitchGoals||new Map())):[]):(cur.pitchMetricRowsByKey&&cur.pitchMetricRowsByKey[metric]||[]),expanded=!!(cur.leagueExpanded&&cur.leagueExpanded['p_'+metric]),rows=all.slice(0,expanded?10:3),loading=metric==='goals'?!!cur.pitchLoading:(cur.pitchMetricLoadingByKey&&cur.pitchMetricLoadingByKey[metric]),error=metric==='goals'?cur.pitchError:(cur.pitchMetricErrorsByKey&&cur.pitchMetricErrorsByKey[metric]);return `<section class="league-stat-section reference-league-card"><button type="button" class="league-stat-heading" data-league-expand="p_${metric}"><b>${title}</b><span>${expanded?'−':'›'}</span></button><div class="league-feature-list">${rows.length?rows.map((r,i)=>leaguePlayerCard(r,i,metric,cur.season,cur.code)).join(''):loading?'<div class="empty">PitchAPI oyuncu verileri yükleniyor…</div>':`<div class="empty">${esc(error||'Bu kategori için veri bulunamadı.')}</div>`}</div>${expanded?'<small class="league-rank-foot">İlk 10 oyuncu</small>':''}</section>`};
+        const renderMetric=(metric,title)=>{const all=(metric==='goals'||metric==='assists')&&cur.tmLeagueData&&cur.tmLeagueData.found?(metric==='goals'?(cur.tmLeagueData.goals||[]):(cur.tmLeagueData.assists||[])):metric==='goals'?(cur.pitchLoaded?(cur.data&&cur.data.goals||pitchLeaderRows(cur.pitchGoals||new Map())):[]):(cur.pitchMetricRowsByKey&&cur.pitchMetricRowsByKey[metric]||[]),expanded=!!(cur.leagueExpanded&&cur.leagueExpanded['p_'+metric]),rows=all.slice(0,expanded?10:3),loading=metric==='goals'?!!cur.pitchLoading:(cur.pitchMetricLoadingByKey&&cur.pitchMetricLoadingByKey[metric]),error=metric==='goals'?cur.pitchError:(cur.pitchMetricErrorsByKey&&cur.pitchMetricErrorsByKey[metric]);return `<section class="league-stat-section reference-league-card"><button type="button" class="league-stat-heading" data-league-expand="p_${metric}"><b>${title}</b><span>${expanded?'−':'›'}</span></button><div class="league-feature-list">${rows.length?rows.map((r,i)=>leaguePlayerCard(r,i,metric,cur.season,cur.code)).join(''):loading?'<div class="empty">PitchAPI oyuncu verileri yükleniyor…</div>':`<div class="empty">${esc(error||'Bu kategori için veri bulunamadı.')}</div>`}</div>${expanded?'<small class="league-rank-foot">İlk 10 oyuncu</small>':''}</section>`};
         body=controls+'<div class="league-stats-reference-title">Oyuncu İstatistikleri</div>'+metrics.map(m=>renderMetric(m[0],m[1])).join('');
         loadPitchLeaders(cur);for(const [metric] of metrics)if(metric!=='goals')loadPitchStatLeaders(cur,metric);
       }
@@ -3465,12 +3481,28 @@ function currentTeamSeason(){const d=new Date();return d.getMonth()>=6?d.getFull
 function loadTeamData(my){
   const season=Number(my.season)||currentTeamSeason(),token=(my.teamReqToken||0)+1;
   my.teamReqToken=token;
+  const tmQs='code='+encodeURIComponent(my.code||'')+'&name='+encodeURIComponent(my.raw||my.name)+'&season='+encodeURIComponent(season);
+  api('/tm-team-data?'+tmQs).then(db=>{
+    if(cur!==my||my.teamReqToken!==token||Number(my.season)!==season||!db||!db.found)return;
+    my.tmTeamData=db;my.seasons=db.seasons&&db.seasons.length?db.seasons:my.seasons||[];
+    if(Array.isArray(db.roster)&&db.roster.length)my.roster=db.roster;
+    my.rosterNote='';my.rerr='';
+    my.pitchTeamStats={team:db.team||{},players:db.players||{},done:true,totalMatches:Number(db.teamStats&&db.teamStats.matches)||0,failedMatches:0};
+    my.pitchTeamStatsCompetition='Transfermarkt · '+season;my.pitchTeamStatsError='';
+    if(!my.data)my.data={team:db.team||{},code:my.code,groups:[],tables:[],seasons:my.seasons,warning:''};
+    else if(my.data.team)my.data.team={...my.data.team,...db.team};
+    renderTeam();
+  }).catch(()=>{});
   const qs='id='+encodeURIComponent(my.id||'')+'&code='+encodeURIComponent(my.code||'')+'&name='+encodeURIComponent(my.raw||my.name)+'&tsdb='+encodeURIComponent(my.tsdb||'')+'&af='+encodeURIComponent(my.af||'')+'&season='+encodeURIComponent(season)+'&logo='+encodeURIComponent(my.logo||'');
   api('/team?'+qs).then(j=>{
     if(cur!==my||my.teamReqToken!==token||Number(my.season)!==season)return;
-    my.data=j;if(j.team&&!j.team.logo&&my.logo)j.team.logo=my.logo;my.seasons=j.seasons||my.seasons||[];if(j.afTeamId)my.af=j.afTeamId;my.st=Array.isArray(j.tables)&&j.tables.length?j.tables:null;my.sterr='';
+    const db=my.tmTeamData;
+    my.data=db?{...j,team:{...(j.team||{}),...(db.team||{})},seasons:db.seasons&&db.seasons.length?db.seasons:j.seasons}:j;
+    if(my.data.team&&!my.data.team.logo&&my.logo)my.data.team.logo=my.logo;my.seasons=my.data.seasons||my.seasons||[];if(j.afTeamId)my.af=j.afTeamId;my.st=Array.isArray(j.tables)&&j.tables.length?j.tables:null;my.sterr='';
+    if(db&&Array.isArray(db.roster)&&db.roster.length)my.roster=db.roster;
+    if(db)my.pitchTeamStats={team:db.team||{},players:db.players||{},done:true,totalMatches:Number(db.teamStats&&db.teamStats.matches)||0,failedMatches:0};
     if(my.tab==='ozet'||my.tab==='kadro'||my.tab==='puan'||my.tab==='istat'||my.tab==='liderler'){teamTab(my.tab);return}renderTeam();
-  }).catch(e=>{if(cur===my&&my.teamReqToken===token&&Number(my.season)===season){my.err=e.message||String(e);renderTeam()}});
+  }).catch(e=>{if(cur===my&&my.teamReqToken===token&&Number(my.season)===season){if(!my.tmTeamData){my.err=e.message||String(e)}renderTeam()}});
 }
 const TEAM_FAV_KEY='skorhane.teamFavorites.v1';
 function readTeamFavorites(){try{const v=JSON.parse(localStorage.getItem(TEAM_FAV_KEY)||'[]');return Array.isArray(v)?v:[]}catch(_){return []}}
@@ -3481,7 +3513,7 @@ function openTeam(key){
   const [id,code,raw,name,tsdb,af,season,logo]=a;
   const clean=careerTeamClean(raw||name||'');
   const fallbackLogo=typeof logo==='string'&&/^https?:\/\//i.test(logo)?logo:'';
-  cur={kind:'team',prev:cur,id,code,name:clean,raw:clean,tsdb:tsdb||'',af:af||'',logo:fallbackLogo,season:Number(season)||currentTeamSeason(),seasons:[],tab:'ozet',comp:0,data:null,err:'',roster:null,rerr:'',st:null,sterr:'',stByCode:{},stComp:'',teamStatsMode:'team',teamStatsCode:'all',teamPlayerSort:'goals',pitchTeamStats:null,pitchTeamStatsLoading:false,pitchTeamStatsError:'',pitchTeamStatsReq:0};
+  cur={kind:'team',prev:cur,id,code,name:clean,raw:clean,tsdb:tsdb||'',af:af||'',logo:fallbackLogo,season:Number(season)||currentTeamSeason(),seasons:[],tab:'ozet',comp:0,data:null,err:'',roster:null,rerr:'',st:null,sterr:'',stByCode:{},stComp:'',teamStatsMode:'team',teamStatsCode:'all',teamPlayerSort:'goals',pitchTeamStats:null,pitchTeamStatsLoading:false,pitchTeamStatsError:'',pitchTeamStatsReq:0,tmTeamData:null};
   $('#sheet').scrollTop=0;
   renderTeam();
   loadTeamData(cur);
@@ -3490,7 +3522,7 @@ function changeTeamSeason(year){
   if(!cur||cur.kind!=='team')return;
   const my=cur;my.season=Number(year)||currentTeamSeason();my.comp=0;my.data=null;my.err='';
   my.roster=null;my.rerr='';my.rosterNote='';my.rosterLoading=false;my.rosterReqToken=(my.rosterReqToken||0)+1;
-  my.st=null;my.sterr='';my.stLoading=false;my.stReqToken=(my.stReqToken||0)+1;my.stByCode={};my.stComp='';my.stCompName='';my.pitchTeamStats=null;my.pitchTeamStatsError='';my.pitchTeamStatsLoading=false;my.pitchTeamStatsReq=(my.pitchTeamStatsReq||0)+1;my.teamStatsCode='all';
+  my.st=null;my.sterr='';my.stLoading=false;my.stReqToken=(my.stReqToken||0)+1;my.stByCode={};my.stComp='';my.stCompName='';my.pitchTeamStats=null;my.pitchTeamStatsError='';my.pitchTeamStatsLoading=false;my.pitchTeamStatsReq=(my.pitchTeamStatsReq||0)+1;my.teamStatsCode='all';my.tmTeamData=null;
   renderTeam();loadTeamData(my);
 }
 const TEAM_COMP_NAME_CODES=[
@@ -4010,7 +4042,7 @@ function openPlayer(it){
   $('#shTitle').textContent=trPlayerName(it.name);$('#sheet').scrollTop=0;
   renderPlayer();
   const my=cur,qs='&slug='+encodeURIComponent(it.slug||slugOf(it.url||it.link)||'')+'&name='+encodeURIComponent(it.name)+'&tm='+encodeURIComponent(it.tm||it.transfermarktId||'')+'&tsdb='+encodeURIComponent(it.tsdb||it.tsdbPlayerId||'')+'&af='+encodeURIComponent(it.af||it.afPlayerId||'')+'&espn='+encodeURIComponent(it.espn||it.espnPlayerId||'')+'&team='+encodeURIComponent(it.team||it.teamName||'')+'&pos='+encodeURIComponent(it.pos||it.position||'')+'&wiki='+encodeURIComponent(it.wiki||'')+'&pitch='+encodeURIComponent(it.pitchId||'')+'&pitchCode='+encodeURIComponent(it.pitchCode||it.pitchLeagueCode||guessPitchCodeFromTeam(it.team||it.teamName||'')||'')+'&pitchYear='+encodeURIComponent(it.pitchYear||'')+'&photo='+encodeURIComponent((Array.isArray(it.photos)&&it.photos[0])||it.logo||it.photo||'')+(it.role==='coach'?'&role=coach':'');
-  loadPitchPlayerProfilePhoto(my);loadPitchPlayerRecent(my);
+  
   api('/player?part=info'+qs).then(j=>{if(cur===my){my.info=j;my.infoLoaded=true;savePlayerInfoCache(it.name,j);renderPlayer();if(j.tmRefreshRequired&&j.tmRefreshQueued)scheduleTmRefreshProbe(my,qs,0);loadPitchPlayerProfilePhoto(my);loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,j)}}).catch(e=>{if(cur===my){my.err=e.message||String(e);my.infoLoaded=true;renderPlayer();loadPitchPlayerProfilePhoto(my);loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info)}});
   api('/player?part=stats'+qs).then(j=>{if(cur===my){my.stats=j;my.statsLoaded=true;savePlayerStatsCache(it.name,j);if(Array.isArray(my.pitchCareerRows))mergePitchCareerIntoStats(my.stats,my.pitchCareerRows);renderPlayer();if(j.tmRefreshRequired&&j.tmRefreshQueued)scheduleTmRefreshProbe(my,qs,0);loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info)}}).catch(e=>{if(cur===my){my.serr=e.message||String(e);my.statsLoaded=true;if(Array.isArray(my.pitchCareerRows)&&my.pitchCareerRows.length){my.stats={player:{name:it.name},bio:{},seasons:[],national:[],sources:{}};mergePitchCareerIntoStats(my.stats,my.pitchCareerRows)}renderPlayer();loadPitchPlayerRecent(my);if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,my.info)}});
 }
