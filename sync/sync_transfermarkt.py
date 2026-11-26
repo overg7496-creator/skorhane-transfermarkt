@@ -44,8 +44,9 @@ HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT_SECONDS", "30"))
 MAX_RETRIES = int(os.getenv("HTTP_MAX_RETRIES", "4"))
 DELAY_MIN = float(os.getenv("REQUEST_DELAY_MIN_SECONDS", "1.5"))
 DELAY_MAX = float(os.getenv("REQUEST_DELAY_MAX_SECONDS", "3.5"))
-FELIPE_DELAY_MIN = float(os.getenv("FELIPE_DELAY_MIN_SECONDS", "5.5"))
-FELIPE_DELAY_MAX = float(os.getenv("FELIPE_DELAY_MAX_SECONDS", "7.0"))
+# Pause only separates calls to the local API; upstream scrape concurrency stays at 1.
+FELIPE_DELAY_MIN = float(os.getenv("FELIPE_DELAY_MIN_SECONDS", "0.8"))
+FELIPE_DELAY_MAX = float(os.getenv("FELIPE_DELAY_MAX_SECONDS", "1.2"))
 TM_MAX_PLAYERS_PER_RUN = int(os.getenv("TM_MAX_PLAYERS_PER_RUN", "80"))
 TM_MAX_MATCH_PAGES = int(os.getenv("TM_MAX_MATCH_PAGES", "5"))
 
