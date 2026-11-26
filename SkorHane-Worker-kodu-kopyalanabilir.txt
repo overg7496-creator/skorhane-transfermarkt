@@ -4140,16 +4140,11 @@ async function tmPlayer(env, id) {
     market_value_payload: chooseSnapshot("market_value_payload", "player_market_values", ["marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"]),
     injuries_payload: chooseSnapshot("injuries_payload", "player_injuries", ["injuries", "data", "items"])
   };
-  const refreshState = await queueTmPlayerRefresh(env, playerId, row, sourceRecords).catch(error => ({
+  // Start queue evaluation immediately, while the independent history reads below run.
+  const refreshPromise = queueTmPlayerRefresh(env, playerId, row, sourceRecords).catch(error => ({
     required: true, queued: false, configured: !!(env && env.GITHUB_ACTIONS_TOKEN),
     reason: String(error && error.message || error)
   }));
-  out.refreshRequired = !!refreshState.required;
-  out.refreshQueued = !!refreshState.queued;
-  out.refreshConfigured = !!refreshState.configured;
-  out.refreshReason = refreshState.reason || "";
-  out.refreshState = refreshState.state || (refreshState.required ? (refreshState.queued ? "queued" : "required") : "current");
-  out.refreshRetryAt = refreshState.retryAt || "";
   const profileRaw = row.profile_payload || {};
   const b = profileRaw.player || profileRaw.data || profileRaw.profile || profileRaw;
   const statsRaw = row.stats_payload || {};
@@ -4169,6 +4164,14 @@ async function tmPlayer(env, id) {
     ]);
     transferRows = transferResult;
     marketRows = marketResult;
+  }
+  const refreshState = await refreshPromise;
+  out.refreshRequired = !!refreshState.required;
+  out.refreshQueued = !!refreshState.queued;
+  out.refreshConfigured = !!refreshState.configured;
+  out.refreshReason = refreshState.reason || "";
+  out.refreshState = refreshState.state || (refreshState.required ? (refreshState.queued ? "queued" : "required") : "current");
+  out.refreshRetryAt = refreshState.retryAt || "";
     const normalizeRows = rows => rows.map(x => ({
       seasonID: x.season_id, competitionName: x.competition_name, clubName: x.club_name,
       appearances: x.appearances, starts: x.starts, goals: x.goals, assists: x.assists,
