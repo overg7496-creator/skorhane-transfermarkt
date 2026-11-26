@@ -287,6 +287,8 @@ class SyncHelperTests(unittest.TestCase):
                 {
                     "TM_DETAIL_MAX_RUNTIME_SECONDS": "0",
                     "TM_DETAIL_CONTINUATION_WORKFLOW": "refresh-imported-player-details.yml",
+                    "TM_DETAIL_SQUAD_SEEN_AFTER": "",
+                    "TM_DETAIL_SQUAD_SEEN_BEFORE": "",
                 },
             ),
         ):
