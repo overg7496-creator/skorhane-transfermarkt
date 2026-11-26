@@ -1711,12 +1711,73 @@ def seed_dcaribou_history() -> int:
     LOG.info("dcaribou seed çalışması tamamlandı/kısmi: %s yeni oyuncu profili işlendi, %s toplam tekil oyuncu biriktirildi.", total_profiles, len(all_players))
     return total_profiles
 
+def parse_preseed_player_ids(raw: str | None) -> list[str]:
+    """Parse a comma/semicolon/whitespace-separated Transfermarkt player ID list."""
+    tokens = [item for item in re.split(r"[\s,;]+", str(raw or "").strip()) if item]
+    invalid = [item for item in tokens if not re.fullmatch(r"\d+", item)]
+    if invalid:
+        raise RuntimeError("Geçersiz Transfermarkt oyuncu ID'si: " + ", ".join(invalid[:10]))
+    ids = list(dict.fromkeys(tokens))
+    maximum = max(1, int(os.getenv("TM_PRESEED_MAX_PLAYERS", "50")))
+    if len(ids) > maximum:
+        raise RuntimeError(
+            f"Tek ön doldurma çalışmasında en fazla {maximum} oyuncu destekleniyor; "
+            f"gelen={len(ids)}. Listeyi birkaç çalışmaya bölün."
+        )
+    return ids
+
+
+def sync_preseed_players(raw_player_ids: str | None) -> int:
+    """Pre-fetch missing/stale Transfermarkt details for an explicit player ID list."""
+    player_ids = parse_preseed_player_ids(raw_player_ids)
+    if not player_ids:
+        raise RuntimeError(
+            "Ön doldurma için --player-ids veya TM_PRESEED_PLAYER_IDS ile "
+            "virgülle ayrılmış Transfermarkt oyuncu ID'leri verin."
+        )
+    successful = 0
+    missing_ids: list[str] = []
+    for index, player_id in enumerate(player_ids, 1):
+        rows = db_get(
+            f"tm_players?select=tm_id,name&tm_id=eq.{quote(player_id)}&limit=1"
+        )
+        if not rows:
+            missing_ids.append(player_id)
+            LOG.warning(
+                "Ön doldurma atlandı: oyuncu tm_players tablosunda yok (%s/%s, ID=%s).",
+                index, len(player_ids), player_id,
+            )
+            continue
+        player_name = rows[0].get("name") or player_id
+        LOG.info(
+            "Ön doldurma başlıyor: %s/%s | %s | Transfermarkt ID=%s",
+            index, len(player_ids), player_name, player_id,
+        )
+        successful += sync_felipeall(only_player=player_id, missing_only=True)
+    LOG.info(
+        "Ön doldurma tamamlandı: listede=%s, başarıyla güncellenen=%s, tm_players içinde bulunmayan=%s.",
+        len(player_ids), successful, len(missing_ids),
+    )
+    if missing_ids:
+        raise RuntimeError(
+            "Şu oyuncu ID'leri önce tm_players tablosuna aktarılmalı: " + ", ".join(missing_ids)
+        )
+    return successful
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "refresh-imported-details", "refresh-rotation", "seed-history", "one-player-test", "refresh-player-missing", "has-pending-details"))
+    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "refresh-imported-details", "refresh-rotation", "seed-history", "one-player-test", "refresh-player-missing", "preseed-players", "has-pending-details"))
     parser.add_argument("--player-id", default=os.getenv("TM_TEST_PLAYER_ID", ""))
+    parser.add_argument("--player-ids", default=os.getenv("TM_PRESEED_PLAYER_IDS", ""))
     args = parser.parse_args()
     require_db()
+    if args.mode == "preseed-players":
+        logged_run(
+            "felipeall", "preseed-players",
+            lambda: sync_preseed_players(args.player_ids or args.player_id),
+        )
+        return 0
     if args.mode == "has-pending-details":
         pending = has_pending_player_details()
         output_path = os.getenv("GITHUB_OUTPUT", "")
