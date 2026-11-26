@@ -1,156 +1,158 @@
-# SkorHane – PostgreSQL / Transfermarkt Veri Katmanı
+# SkorHane — Transfermarkt veri katmanı
 
-Bu depo, SkorHane'nin oyuncu, kadro, transfer, piyasa değeri ve sezon istatistiklerini Supabase PostgreSQL üzerinde tutar. Transfermarkt'a ait kaynak istekleri tarayıcıdan değil, GitHub Actions içinde başlatılan yerel Felipe API sunucusu ve Python senkronizasyon işçileri üzerinden yapılır.
+Bu depo, Transfermarkt oyuncu detaylarını `felipeall/transfermarkt-api` v5.0.0 üzerinden alır; GitHub Actions içinde çalışan Python işçisi verileri Supabase PostgreSQL'e yazar. Cloudflare Worker yalnızca Supabase'ten okur, eksik/eski oyuncu alanlarını algıladığında tek oyuncu yenileme iş akışını tetikler. Tarayıcı Transfermarkt'a doğrudan bağlanmaz.
 
-## 1. Mimari
+## Mimari
 
 ```text
-Transfermarkt veri kaynağı
-          │
-          ▼
-felipeall/transfermarkt-api (v5.0.0)
-          │
-          ▼
-GitHub Actions
-  ├─ sync/sync_squads_and_clubs.py
-  │    ├─ lig → kulüpler
-  │    ├─ kulüp → güncel kadro
-  │    ├─ 1.5–3.0 sn istek aralığı
-  │    └─ lig/kulüp checkpoint + tekrar çalıştırma
-  └─ sync/sync_transfermarkt.py
-       ├─ oyuncu profili
-       ├─ piyasa değeri geçmişi
-       ├─ transfer geçmişi
-       ├─ sezon istatistikleri
-       ├─ sakatlıklar / eksik maçlar
-       └─ güncel sezon maçları
-          │
-          ▼
-Supabase PostgreSQL
-  ├─ tm_players
-  ├─ tm_player_season_stats
-  ├─ tm_transfers
-  ├─ tm_market_values
-  ├─ tm_appearances
-  ├─ tm_source_records
-  └─ tm_sync_runs
-          ▲
-          │ yalnızca DB okuma
-Cloudflare Worker → SkorHane HTML
+SkorHane HTML
+    │
+    ▼
+Cloudflare Worker (skor3)
+    ├─ Supabase'ten oyuncu detaylarını okur
+    ├─ eksik/eski alanları kontrol eder
+    ├─ oyuncu başına kalıcı kuyruk kilidi tutar
+    └─ GITHUB_ACTIONS_TOKEN ile tek oyuncu workflow_dispatch
+             │
+             ▼
+        GitHub Actions
+             ├─ felipeall/transfermarkt-api v5.0.0 (127.0.0.1:8000)
+             └─ sync/sync_transfermarkt.py
+                    │
+                    ▼
+                Supabase
 ```
 
-- GitHub Actions, Felipe API'yi aynı runner üzerinde `127.0.0.1:8000` adresinde başlatır. Harici bir API token'ı gerekmez.
-- Supabase'e yazma işlemleri `SUPABASE_SERVICE_ROLE_KEY` ile sunucu tarafında yapılır. Bu anahtar HTML dosyasına veya istemci JavaScript'ine konulmamalıdır.
-- Kadro işçisi yalnızca normalize edilmiş alanları yazar; ham HTML ve tam upstream yanıtları Supabase'e kopyalanmaz.
-- UPSERT fonksiyonları dolu alanları korur. Hata, boş yanıt veya eksik alan mevcut dolu oyuncu verisini silmek için kullanılmaz.
+## Aktarılan alanlar
 
-## 2. Veri kaynağı ve endpoint eşleştirmesi
-
-### A. felipeall/transfermarkt-api
-
-Depo: https://github.com/felipeall/transfermarkt-api
-
-**Güncel lig ve kadro aktarımı** `sync/sync_squads_and_clubs.py` tarafından yapılır:
-
-| Aktarım | Felipe API endpoint'i | Supabase hedefi |
+| Alan | Felipe API endpoint | Supabase hedefi |
 |---|---|---|
-| Lig → kulüpler | `GET /competitions/{competition_id}/clubs?season_id=` | Lig/kulüp ilerleme bilgisi `tm_source_records` |
-| Kulüp → takım profili | `GET /clubs/{club_id}/profile` | Logo, resmi ad, lig, teknik direktör ve stadyum alanları `tm_source_records` |
-| Kulüp → güncel kadro | `GET /clubs/{club_id}/players?season_id=` | `tm_players` |
-| Oyuncu fotoğrafı | Kadro yanıtındaki `image_url` | `tm_players.photo_url` |
-| Güncel piyasa değeri | Kadro yanıtındaki `market_value` | `tm_players.current_market_value_*` |
-| Mevcut takım / mevki | Kadro yanıtındaki `current_club`, `position` | `tm_players.team_name`, `position` |
-| Katılım / geldiği kulüp | `joined_on`, `signed_from` | `tm_transfers` içinde tekil gözlem |
+| Oyuncu profili ve mevcut piyasa değeri | `/players/{id}/profile` | `tm_players.profile_payload`, `current_market_value_*` |
+| Piyasa değeri geçmişi | `/players/{id}/market_value` | `tm_players.market_value_payload`, `tm_market_values` |
+| Transfer geçmişi ve ücretler | `/players/{id}/transfers` | `tm_players.transfers_payload`, `tm_transfers` |
+| Sezon istatistikleri | `/players/{id}/stats` | `tm_players.stats_payload`, `tm_player_season_stats` |
+| Sakatlık geçmişi | `/players/{id}/injuries?page_number=` | `tm_players.injuries_payload` |
+| Tam sezon maç verisi (tam test/normal mod) | `/players/{id}/matches` | `current_season_payload`, sezon toplamları |
+| Eksik maç/diğer yokluklar (tam test/normal mod) | `/players/{id}/absences?page_number=` | `absences_payload` |
 
-Kadro endpoint'i oyuncu ID'si, adı, fotoğrafı, pozisyonu, forma numarası, kaptanlık, uyruk, boy, ayak, katılım tarihi, geldiği kulüp, sözleşme tarihi ve piyasa değeri alanlarını tanımlar. Mevcut veritabanı şemasında ayrı bir kulüp/lig tablosu bulunmadığı için takım adı oyuncu kaydında tutulur; küçük senkronizasyon checkpoint'leri `tm_source_records` tablosuna yazılır.
+`seasonId` ve `clubId` alanları normalize edilir. `clubFrom` / `clubTo` nesneleri kulüp adına ve gerekiyorsa şeffaf `Kulüp #ID` etiketine dönüştürülür. Transfer ücreti ve piyasa değeri için EUR sayısal değerleri ile kaynağın metin gösterimi ayrı tutulur. Kaleci sezon kayıtlarında `goals_conceded` ve `clean_sheets` alanları da saklanır.
 
-**Oyuncu detayları** aynı API'nin aşağıdaki endpoint'leriyle `sync/sync_transfermarkt.py` tarafından güncellenir:
+## 1. Supabase kurulumu
 
-| Veri | Endpoint |
-|---|---|
-| Profil ve fotoğraf | `GET /players/{player_id}/profile` |
-| Piyasa değeri ve geçmişi | `GET /players/{player_id}/market_value` |
-| Transfer geçmişi | `GET /players/{player_id}/transfers` |
-| Sezon istatistikleri | `GET /players/{player_id}/stats` |
-| Oynanan maçlar | `GET /players/{player_id}/matches?season_id=&page_number=` |
-| Sakatlık geçmişi | `GET /players/{player_id}/injuries?page_number=` |
-| Diğer eksiklikler | `GET /players/{player_id}/absences?page_number=` |
+1. Supabase projesinin SQL Editor bölümünü aç.
+2. `database/001_transfermarkt_schema.sql` dosyasının tamamını çalıştır. Dosya mevcut tabloları koruyarak eksik `goals_conceded` ve `clean_sheets` kolonlarını `ADD COLUMN IF NOT EXISTS` ile ekler.
+3. Aşağıdaki tabloların oluştuğunu doğrula: `tm_players`, `tm_player_season_stats`, `tm_transfers`, `tm_market_values`, `tm_appearances`, `tm_source_records`, `tm_sync_runs`.
+4. `tm_appearance_season_totals` görünümünün sorgulanabildiğini kontrol et.
 
-Yeni kadrodan eklenen oyuncular `tm_players` tablosuna UPSERT edilir; mevcut oyuncu detay kuyruğu bunları sonraki çalışmalarda tamamlar.
+Şema RLS'i etkinleştirir; tablolar `anon` ve `authenticated` rollerine kapalıdır. Yazma/okuma işlemlerinde yalnızca sunucu tarafı `service_role` anahtarı kullanılır. Bu anahtarı HTML'e veya tarayıcı JavaScript'ine asla koyma.
 
-**Önemli kaynak notu:** Felipe API'nin kendi README'si, Transfermarkt'ın kullandığı JSON arayüzünün dahili ve belgelenmemiş olduğunu; upstream'in değişebileceğini ve projenin MIT lisansının Transfermarkt verisine kullanım hakkı vermediğini belirtir. Üretimde veya ticari yayında kullanmadan önce Transfermarkt'ın güncel koşullarını ve veri kullanım izinlerini kontrol et. Bu worker engel aşma, proxy döndürme veya WAF atlatma yapmaz.
+## 2. GitHub Secrets
 
-### B. dcaribou/transfermarkt-scraper
+GitHub deposunda **Settings → Secrets and variables → Actions → Secrets** bölümüne ekle:
 
-Depo: https://github.com/dcaribou/transfermarkt-scraper
-
-- Yalnızca `seed-history` manuel göreviyle çalışır; normal kadro cron'u bu aracı çağırmaz.
-- Varsayılan ligler `TR1,GB1,ES1,L1,IT1,FR1`; tarihsel sezonlar `2022,2023,2024,2025` (sezon başlangıç yılı) olarak tanımlıdır.
-- Tarihsel oyuncu ve maç performansları tekilleştirilir; tekrar çalıştırmalarda checkpoint kullanılır.
-- Crawler eşzamanlılığı 1'dir; tamamlanan kulüp ve oyuncu batch'leri tekrar taranmaz.
-- Tarihsel seed uzun sürebilir; yalnızca ihtiyaç varsa manuel çalıştır.
-
-## 3. Supabase kurulumu
-
-1. Supabase'te PostgreSQL projesi oluştur.
-2. **SQL Editor** bölümünde `database/001_transfermarkt_schema.sql` dosyasının tamamını çalıştır.
-3. `tm_players`, `tm_player_season_stats`, `tm_transfers`, `tm_market_values`, `tm_appearances`, `tm_source_records` ve `tm_sync_runs` tablolarının oluştuğunu kontrol et.
-4. Project URL ve sunucu tarafı service-role/secret anahtarını al. Anahtarı gizli tut.
-
-SQL şeması RLS'i açar ve tabloları `anon` / `authenticated` rollerine kapatır. Arka plan görevleri ve Worker yalnızca sunucu tarafındaki erişim anahtarını kullanır.
-
-## 4. GitHub Actions kurulumu
-
-GitHub deposunda **Settings → Secrets and variables → Actions → Secrets** bölümüne şu iki secret'ı ekle:
-
-| Secret | Değer |
+| Secret | İçerik |
 |---|---|
 | `SUPABASE_URL` | Supabase Project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase servis/secret anahtarı |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service-role / secret anahtarı |
 
-Felipe API, workflow içinde klonlanıp runner üzerinde başlatılır. Kadro işçisi için ayrıca API token gerekmez. Zamanlanmış ana kadro/detay senkronizasyonu başlangıçta kapalıdır; testlerden sonra repository variable olarak `ENABLE_TRANSFERMARKT_CRON=true` tanımlanır.
+Bu iki secret GitHub Actions işçisi içindir. Workflow dosyalarında gerçek anahtar bulunmamalıdır.
 
-## 5. Önerilen test sırası
+## 3. Cloudflare Worker (skor3)
 
-1. **Eksik ligleri içe aktar:** Actions → `SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı`. Bu ayrı iş akışı 2. Lig grupları `TR3A, TR3B`, 3. Lig grupları `TR4A–TR4D` ile Bundesliga `L1`, Serie A `IT1` ve Ligue 1 `FR1` kadrolarını ana oyuncu detay aktarımından bağımsız içe aktarır. Dosya güncellendiğinde otomatik başlar; Actions ekranından elle de başlatılabilir.
-2. **Tüm kadroları elle aktar:** Actions → `SkorHane Transfermarkt Sync` → Run workflow → `import-squads`.
-3. **Supabase'i kontrol et:**
+Cloudflare Worker → Settings → Variables and Secrets bölümünde şu secret/binding değerleri bulunmalı:
+
+| Secret / değişken | Kullanım |
+|---|---|
+| `SUPABASE_URL` | Aynı Supabase Project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Worker'ın sunucu tarafı Supabase erişimi |
+| `GITHUB_ACTIONS_TOKEN` | Tek oyuncu workflow'unu tetikleyen fine-grained GitHub PAT |
+
+`GITHUB_ACTIONS_TOKEN` için yalnızca bu depoya erişim ver. Fine-grained PAT izinleri `Actions: Read and write` ve `Contents: Read` olmalı. Token'ı `SkorHane-HTML-kodu-kopyalanabilir.txt` içine koyma; yalnızca Cloudflare secret olarak sakla. Token sızdıysa GitHub'dan iptal edip yenisini üret.
+
+`SkorHane-Worker.js` dosyasının tamamını Cloudflare `skor3` Worker koduyla değiştir ve Deploy et. `SkorHane-Worker-kodu-kopyalanabilir.txt` aynı içeriğin kopyasıdır.
+
+## 4. GitHub Actions çalışma biçimi
+
+Ana iş akışı **SkorHane Transfermarkt Tek Oyuncu Yenileme** adını taşır ve yalnızca `workflow_dispatch` ile çalışır. `push` veya cron tetikleri yoktur. Aynı oyuncu ID'si için paralel iki iş çalıştırılmaz; farklı oyuncular birbirinden bağımsız işlenebilir.
+
+İki mod bulunur:
+
+- `refresh-player-missing`: Yalnızca eksik veya eski profil, piyasa değeri, transfer, sezon istatistiği ve sakatlık endpoint'lerini çağırır. Güncel ve doğrulanmış boş listeyi tekrar tekrar çekmez.
+- `one-player-test`: Belirtilen tek oyuncunun tüm detay endpoint'lerini ve güncel sezon maç/absans verisini tam entegrasyon testi olarak çeker.
+
+Her iki mod da Felipe API v5.0.0 sunucusunu aynı runner üzerinde `127.0.0.1:8000` adresinde başlatır. Upstream eşzamanlılığı 1'dir; istekler gecikmeli ve sınırlı tekrar denemelidir. Toplu tarama ana iş akışından çıkarılmıştır.
+
+Diğer lig/kadro aktarım iş akışları otomatik başlamaz. `SkorHane Eksik Ligler — Paralel Takım ve Kadro Aktarımı` yalnızca Actions ekranından manuel tetiklenir. Yeni kadro tarih aralığı için kullanılan kurtarma iş akışı da yalnızca elle verilecek iki UTC sınırıyla çalışır.
+
+## 5. Tek seferlik canlıya alma ve test
+
+1. Supabase SQL Editor'da `database/001_transfermarkt_schema.sql` dosyasının tamamını çalıştır.
+2. GitHub Secrets içine `SUPABASE_URL` ve `SUPABASE_SERVICE_ROLE_KEY` ekle.
+3. Cloudflare `skor3` Worker secret'larına `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` ve `GITHUB_ACTIONS_TOKEN` ekle. Fine-grained PAT'yi bu depoyla sınırla.
+4. `SkorHane-Worker.js` dosyasını Worker'a yapıştırıp Deploy et.
+5. SkorHane HTML kaynağını `SkorHane-HTML-kodu-kopyalanabilir.txt` içeriğiyle değiştir.
+6. GitHub → Actions → **SkorHane Transfermarkt Tek Oyuncu Yenileme** → Run workflow.
+7. İlk doğrulama için `refresh-player-missing` seç ve `player_id` alanına `401923` (Victor Osimhen) yaz. Sadece eksik/eski alanlar çağrılır.
+8. Workflow tamamlandığında Actions logundaki Supabase doğrulama bölümünde güncel değer, sezon satırı, değer geçmişi, transfer ve sakatlık sayısını kontrol et.
+9. SkorHane'de aynı oyuncu profilini aç. Eksik veri varsa Worker kuyruğa alır; ekran 30 saniye aralıklarla kontrol ederek yeni verileri otomatik yükler.
+10. Bir endpoint'in tam cevabını ayrıca denemek gerektiğinde aynı workflow'da `one-player-test` modunu seç.
+
+Supabase'te elle kontrol için:
 
 ```sql
-select tm_id, name, team_name, position, photo_url, current_market_value_text
+select
+  tm_id, name, current_market_value_text, current_market_value_eur,
+  last_felipe_synced_at,
+  jsonb_array_length(coalesce(stats_payload->'stats', '[]'::jsonb)) as raw_stats
 from public.tm_players
-where is_active = true
-order by name
-limit 30;
+where tm_id = '401923';
+
+select season_id, competition_name, club_name, appearances, goals, assists,
+       goals_conceded, clean_sheets
+from public.tm_player_season_stats
+where tm_id = '401923'
+order by season_id desc;
+
+select transfer_date, from_club, to_club, transfer_type, fee_text, fee_eur
+from public.tm_transfers
+where tm_id = '401923'
+order by transfer_date desc;
+
+select valuation_date, display_value, value_eur, club_name
+from public.tm_market_values
+where tm_id = '401923'
+order by valuation_date desc;
 ```
 
-4. **Tek oyuncu testi:** Actions'ta `one-player-test` seçip `player_id` alanına mevcut bir `tm_id` yaz.
-5. **Normal senkronizasyon:** `sync` modunu çalıştır. Önce güncel kadrolar, ardından oyuncu detayları işlenir.
-6. **Tarihsel seed:** Yalnızca tarihsel maç istatistikleri gerekiyorsa `seed-history` modunu manuel başlat.
+## 6. Boş yanıt, 404/429 ve veri koruma kuralları
 
-## 6. Otomatik zamanlama ve güvenli devam
+- `404`, `429`, timeout, HTTP 5xx, geçersiz JSON veya beklenmeyen response şeması oyuncuyu tamamlandı olarak işaretlemez.
+- Geçici hatalarda oyuncu başına `retry_at` ve artan bekleme süresi tutulur. Kalıcı 404/410/422 veya çok sayıda başarısız deneme `blocked` durumuna geçer; profil açıldıkça aynı oyuncu için yeni workflow spam'i oluşmaz.
+- Boş `stats`, `transfers` veya `marketValueHistory` cevabı eski dolu kayıtların üzerine yazılmaz. Kaynak kontrol zamanı yine güncellenerek sağlayıcının gerçekten boş döndüğü kaydedilir.
+- Boş sakatlık listesi yalnızca taze ve doğrulanmış provider cevabıysa boş kabul edilir. Önceden alınmış, eski `[]` değeri doğrulanmış sayılmaz.
+- Güncel piyasa değeri `NULL` veya boş string ile ezilmez; yeni bir değer yoksa mevcut değer korunur.
+- Gerçekten transferi/sakatlığı olmayan oyuncuya sahte satır üretilmez. Boş sonuç, boş olarak gösterilir.
+- Worker kuyruğundaki `queued`, `running`, `retry`, `blocked`, `dispatch-failed` ve `completed` durumları Python işçisi tarafından aynı Supabase kaydında güncellenir.
 
-- Kadro cron'u ana `transfermarkt-sync.yml` içinde pazartesi ve perşembe 03:20 UTC'de tanımlıdır. Türkiye saatiyle 06:20'dir. Başlatmak için `ENABLE_TRANSFERMARKT_CRON=true` repository variable'ını ekle.
-- Kadro istekleri sırayla yapılır; her dış API çağrısından önce 1.5–3.0 saniye rastgele bekleme uygulanır. Yerel API'nin upstream eşzamanlılığı 1'dir.
-- Her lig için tamamlanan kulüp ID'leri `tm_source_records` içine checkpoint olarak yazılır. Çalışma gece yarısını geçse bile `running` durumundaki checkpoint silinmez; tekrar başladığında tamamlanan kulüpleri atlayıp sıradaki kulüpten devam eder. Tamamlanan ligler aynı sezon içinde gereksiz yere yeniden içe aktarılmaz.
-- Bir kulübün kadrosu boş veya geçersiz gelirse o kulüp tamamlandı sayılmaz; tekrar denenecek şekilde bırakılır.
-- Bir kulübün oyuncuları yazılırken hata olursa kulüp checkpoint'i tamamlanmaz. Sonraki çalıştırma aynı kulübü yeniden işler; RPC UPSERT'leri aynı oyuncuyu çoğaltmaz.
-- Dolu `photo_url`, piyasa değeri, takım adı ve diğer mevcut alanlar null/boş veriyle silinmez.
-- Her çalışma `tm_sync_runs` tablosuna durum ve süre kaydı bırakır.
+## 7. Güvenlik ve veri kaynağı notu
 
-## 7. Cloudflare Worker
+Depo Public olsa bile Supabase service-role anahtarı, GitHub PAT veya başka bir özel token kod dosyalarında tutulmamalıdır. Yalnızca GitHub Secrets ve Cloudflare Worker Secrets kullan. Depoda açıkça yazılmış token veya özel anahtar bulunursa derhal iptal et/yenile.
 
-1. `SkorHane-Worker.js` dosyasını mevcut Cloudflare Worker koduyla değiştir.
-2. Worker → Settings → Variables and Secrets bölümünde `SUPABASE_URL` ve `SUPABASE_SERVICE_ROLE_KEY` değerlerini tanımla.
-3. Mevcut diğer futbol sağlayıcı anahtarlarını silme veya yeniden adlandırma.
-4. Worker'ı Deploy et. Arayüz HTML'sinde değişiklik gerekmez.
+`felipeall/transfermarkt-api`, Transfermarkt'ın dahili ve belgelenmemiş JSON arayüzünü kullanır; upstream değişiklikleri servisi etkileyebilir. Kütüphanenin lisansı Transfermarkt verisi için ayrıca kullanım hakkı vermez. Ticari/yayın ortamında kullanımdan önce Transfermarkt'ın geçerli koşullarını ve veri kullanım izinlerini kontrol et.
 
-## 8. Dosyalar
+## 8. Dosya özeti
 
-- `sync/sync_squads_and_clubs.py` – Felipe API'den lig/kulüp/kadro aktarımı.
-- `sync/sync_transfermarkt.py` – oyuncu detayları, transferler, değer geçmişi, istatistik ve tarihsel seed işleri.
-- `.github/workflows/transfermarkt-sync.yml` – ana manuel/zamanlanmış görevler.
-- `.github/workflows/import-missing-leagues.yml` – eksik ligler için ana oyuncu yenilemesinden ayrı, paralel ve süre sınırında checkpoint’ten otomatik devam eden görev.
-- `.github/workflows/resume-long-sync.yml` – 6 saatlik sert zaman aşımı durumunda yedek otomatik devam mekanizması.
-- `database/001_transfermarkt_schema.sql` – tablolar, RLS ve UPSERT RPC'leri.
-- `tests/` – ağ gerektirmeyen senkronizasyon testleri.
+| Dosya | Rol |
+|---|---|
+| `sync/sync_transfermarkt.py` | Felipe API çağrıları, dönüşümler, tek oyuncu yenileme kuyruğu, güvenli UPSERT |
+| `sync/sync_squads_and_clubs.py` | Lig/kulüp/kadro aktarımı (ayrı manuel workflow) |
+| `.github/workflows/transfermarkt-sync.yml` | Tek oyuncu / eksik alan odaklı manuel yenileme ve doğrulama |
+| `.github/workflows/refresh-imported-player-details.yml` | Elle verilen UTC aralığı için isteğe bağlı toplu kurtarma |
+| `.github/workflows/import-missing-leagues.yml` | Manuel eksik lig/kadro aktarımı |
+| `.github/workflows/validate-detail-queues.yml` / `test-sync-workers.yml` | Manuel test ve kuyruk kontrolü |
+| `database/001_transfermarkt_schema.sql` | Tablolar, güvenli merge RPC'leri, RLS ve ek sezon kolonları |
+| `SkorHane-Worker.js` | Canlı Cloudflare Worker |
+| `SkorHane-Worker-kodu-kopyalanabilir.txt` | Worker ile birebir kopya |
+| `SkorHane-HTML-kodu-kopyalanabilir.txt` | Oyuncu profil ekranı ve yenileme durumu UI'si |
+| `tests/` | Ağ gerektirmeyen Python regresyon testleri |
+
