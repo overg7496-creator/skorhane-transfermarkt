@@ -234,7 +234,7 @@ def normalize_tm_season(value: Any) -> str | None:
     match = re.search(r"(?<!\d)(\d{2,4})\s*/\s*(\d{2,4})(?!\d)", raw)
     if match:
         first, second = int(match.group(1)), int(match.group(2))
-        start_year = first if first >= 1000 else 2000 + first
+        start_year = first if first >= 1000 else (1900 + first if first >= 50 else 2000 + first)
         end_year = second if second >= 1000 else (start_year // 100) * 100 + second
         if end_year < start_year:
             end_year += 100
@@ -348,10 +348,23 @@ def source_record_snapshot(
     )
     rows = db_get(query)
     row_keys = SOURCE_RECORD_ROW_KEYS.get(record_type)
+    now = datetime.now(timezone.utc).isoformat()
     if rows and row_keys and snapshot_has_rows(rows[0].get("payload"), row_keys) and not snapshot_has_rows(payload, row_keys):
-        LOG.warning("%s boş yanıtı mevcut dolu kaynak anlık görüntüsünü ezmedi (ID=%s).", record_type, external_id)
+        # Preserve useful historical rows but record that this endpoint was checked
+        # successfully and returned empty, avoiding an endless re-fetch loop.
+        old_payload = rows[0].get("payload") if isinstance(rows[0].get("payload"), dict) else {}
+        preserved = {
+            **old_payload,
+            "_skorhane_sync": {"last_checked_at": now, "provider_returned_empty": True},
+        }
+        row_id = rows[0].get("id")
+        if row_id is None:
+            raise RuntimeError(f"{record_type} anlık görüntüsünün DB kimliği okunamadı.")
+        db_patch(f"tm_source_records?id=eq.{quote(str(row_id))}",
+                 {"payload": preserved, "fetched_at": now})
+        LOG.warning("%s boş yanıtı mevcut dolu kaynak anlık görüntüsünü korudu; kontrol zamanı yenilendi (ID=%s).", record_type, external_id)
         return
-    snapshot = {"payload": payload, "fetched_at": datetime.now(timezone.utc).isoformat()}
+    snapshot = {"payload": payload, "fetched_at": now}
     if rows:
         row_id = rows[0].get("id")
         if row_id is None:
@@ -476,16 +489,34 @@ def numeric(row: dict[str, Any], *keys: str) -> int | None:
         return None
 
 def parse_money_eur(value: Any) -> int | None:
-    if isinstance(value, (int, float)):
+    """Parse EUR values without mistaking thousands separators for decimals."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         return int(value)
     if not isinstance(value, str):
         return None
-    raw = value.strip().lower().replace("€", "").replace("eur", "").replace(",", ".").replace(" ", "")
-    match = re.search(r"(\d+(?:\.\d+)?)([kmb])?", raw)
+    raw = value.strip().lower().replace("€", "").replace("eur", "").replace(" ", "").replace("\u00a0", "")
+    match = re.search(r"([+-]?\d[\d.,]*)([kmb])?", raw)
     if not match:
         return None
-    amount = float(match.group(1))
-    suffix = match.group(2)
+    number_text, suffix = match.group(1), match.group(2)
+
+    def normalize_separators(text: str) -> str:
+        if "," in text and "." in text:
+            decimal_sep = "," if text.rfind(",") > text.rfind(".") else "."
+            thousands_sep = "." if decimal_sep == "," else ","
+            return text.replace(thousands_sep, "").replace(decimal_sep, ".")
+        if "," in text or "." in text:
+            sep = "," if "," in text else "."
+            chunks = text.split(sep)
+            if len(chunks) > 1 and all(len(chunk) == 3 for chunk in chunks[1:]):
+                return "".join(chunks)
+            return "".join(chunks[:-1]) + "." + chunks[-1]
+        return text
+
+    try:
+        amount = float(normalize_separators(number_text))
+    except ValueError:
+        return None
     multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(suffix, 1)
     return int(amount * multiplier)
 
@@ -503,8 +534,10 @@ def build_current_season_stats(matches: list[dict[str, Any]]) -> list[dict[str, 
             competition = safe_text(competition_obj.get("name"), competition_obj.get("displayName"))
         if not club and isinstance(club_obj, dict):
             club = safe_text(club_obj.get("name"), club_obj.get("displayName"))
-        competition = competition or "Diğer"
-        club = club or "Bilinmeyen takım"
+        # Never invent a club or competition label when the upstream row is incomplete.
+        # Without a club, the appearance cannot be safely attributed to a season row.
+        if not club:
+            continue
         key = (competition, club)
         aggregate = groups.setdefault(key, {
             "seasonID": str(TM_SEASON), "competitionName": competition, "clubName": club,
@@ -656,9 +689,23 @@ def fetch_player_paged_rows(base: str, endpoint: str, key: str) -> dict[str, Any
     return result
 
 
-def load_player_detail_queue_states() -> dict[str, dict[str, Any]]:
+def load_player_detail_queue_states(tm_id: str | None = None) -> dict[str, dict[str, Any]]:
     """Load durable per-player retry/checkpoint state from tm_source_records."""
     states: dict[str, dict[str, Any]] = {}
+    if tm_id:
+        rows = db_get(
+            "tm_source_records?select=external_id,payload"
+            "&source=eq.felipeall&record_type=eq.player_detail_queue&record_key=eq.details"
+            f"&external_id=eq.{quote(str(tm_id))}&limit=1"
+        )
+        if not isinstance(rows, list):
+            raise RuntimeError("Oyuncu detay kuyruğu kayıtları okunamadı.")
+        for row in rows:
+            key = str(row.get("external_id") or "").strip()
+            payload = row.get("payload")
+            if key and isinstance(payload, dict):
+                states[key] = payload
+        return states
     offset = 0
     page_size = 1000
     while True:
@@ -678,6 +725,27 @@ def load_player_detail_queue_states() -> dict[str, dict[str, Any]]:
             break
         offset += len(rows)
     return states
+
+
+def update_worker_refresh_queue(tm_id: str, status: str, **details: Any) -> None:
+    """Mirror the per-player Felipe result into the Worker-owned refresh lock."""
+    query = (
+        "tm_source_records?select=id,payload"
+        "&source=eq.skorhane_worker&record_type=eq.player_detail_refresh"
+        f"&external_id=eq.{quote(str(tm_id))}&record_key=eq.details&limit=1"
+    )
+    rows = db_get(query)
+    if not rows:
+        return
+    row = rows[0]
+    current = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {**current, "status": status, "player_id": str(tm_id), "updated_at": now, **details}
+    row_id = row.get("id")
+    if row_id is None:
+        raise RuntimeError(f"Worker yenileme kuyruğunun DB kimliği okunamadı (ID={tm_id}).")
+    db_patch(f"tm_source_records?id=eq.{quote(str(row_id))}",
+             {"payload": payload, "fetched_at": now})
 
 
 def validate_detail_squad_window(seen_after: str, seen_before: str) -> tuple[str, str]:
@@ -867,7 +935,7 @@ def sync_felipeall(
     if only_player:
         query = f"tm_players?select=*&tm_id=eq.{quote(only_player)}&limit=1" if missing_only else f"tm_players?select={select}&tm_id=eq.{quote(only_player)}&limit=1"
         players = db_get(query)
-        states: dict[str, dict[str, Any]] = {}
+        states = load_player_detail_queue_states(only_player) if missing_only else {}
     elif backfill_only:
         states = load_player_detail_queue_states()
         squad_seen_after = squad_seen_after or os.getenv("TM_DETAIL_SQUAD_SEEN_AFTER", "").strip() or None
@@ -897,6 +965,16 @@ def sync_felipeall(
             if state.get("status") == "retry" and not detail_retry_is_due(state, now):
                 continue
         if missing_only:
+            if not detail_retry_is_due(state, now):
+                update_worker_refresh_queue(
+                    tm_id, "blocked" if state.get("status") == "blocked" else "retry",
+                    attempts=int(state.get("attempts") or 0),
+                    retry_at=state.get("retry_at") or "",
+                    last_error=state.get("last_error") or "",
+                    last_endpoint=state.get("last_endpoint") or "",
+                )
+                LOG.info("Oyuncu yeniden deneme bekleme süresinde; API çağrısı yapılmadı (ID=%s).", tm_id)
+                continue
             due = player_detail_refresh_plan(tm_id, player)
             if not due:
                 # All per-endpoint snapshots are fresh. Align the aggregate marker too,
@@ -904,9 +982,13 @@ def sync_felipeall(
                 db_patch(f"tm_players?tm_id=eq.{quote(tm_id)}", {
                     "last_felipe_synced_at": datetime.now(timezone.utc).isoformat()
                 })
+                update_worker_refresh_queue(tm_id, "completed",
+                                            completed_at=datetime.now(timezone.utc).isoformat())
                 LOG.info("Oyuncunun Transfermarkt detayları güncel; API çağrısı yapılmadı (ID=%s).", tm_id)
                 continue
             player["_refresh_endpoints"] = sorted(due)
+            update_worker_refresh_queue(tm_id, "running", endpoint="starting",
+                                         attempts=int(state.get("attempts") or 0) + 1)
             LOG.info("Oyuncu eksik/eski uç noktaları: %s (ID=%s)", ",".join(sorted(due)), tm_id)
         work.append(player)
 
@@ -1183,6 +1265,8 @@ def sync_felipeall(
                     "yellowCards": numeric(row, "yellow_cards", "yellowCards"),
                     "secondYellowCards": numeric(row, "second_yellow_cards", "secondYellowCards"),
                     "redCards": numeric(row, "red_cards", "redCards"),
+                    "goalsConceded": numeric(row, "goals_conceded", "goalsConceded"),
+                    "cleanSheets": numeric(row, "clean_sheets", "cleanSheets"),
                 }
                 normalized_stats.append(mapped)
                 rpc("tm_upsert_season_stat", {"p_row": {
@@ -1198,6 +1282,8 @@ def sync_felipeall(
                     "yellow_cards": mapped["yellowCards"],
                     "second_yellow_cards": mapped["secondYellowCards"],
                     "red_cards": mapped["redCards"],
+                    "goals_conceded": mapped["goalsConceded"],
+                    "clean_sheets": mapped["cleanSheets"],
                     "payload": row,
                     "source": "felipeall",
                 }})
@@ -1233,6 +1319,9 @@ def sync_felipeall(
                 "last_felipe_synced_at": datetime.now(timezone.utc).isoformat()
             })
             successful += 1
+            if missing_only:
+                update_worker_refresh_queue(tm_id, "completed",
+                                            completed_at=datetime.now(timezone.utc).isoformat())
             LOG.info("felipeall oyuncu tamamen tamamlandı: %s/%s | ID=%s", idx, len(players), tm_id)
     
     
@@ -1252,6 +1341,12 @@ def sync_felipeall(
             state = {"status": "blocked" if permanent else "retry", "attempts": attempts, "last_endpoint": progress.get("endpoint", "unknown"), "last_error": message, "http_status": http_status or 0, "retry_at": retry_at, "last_failed_at": datetime.now(timezone.utc).isoformat()}
             source_record("felipeall", "player_detail_queue", tm_id, "details", state)
             states[tm_id] = state
+            if missing_only:
+                update_worker_refresh_queue(
+                    tm_id, state["status"], attempts=attempts, retry_at=retry_at,
+                    last_error=message, http_status=http_status or 0,
+                    last_endpoint=state["last_endpoint"],
+                )
             LOG.error("Oyuncu detay hatası; sıradaki oyuncuya geçiliyor: ID=%s, endpoint=%s, HTTP=%s, deneme=%s, durum=%s, hata=%s", tm_id, state["last_endpoint"], http_status or "bilinmiyor", attempts, state["status"], message)
     remaining_due = [
         player for player in players
