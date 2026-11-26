@@ -31,10 +31,9 @@ jobs:
           3) Worker kodunu kopyalamak icin SkorHane-Worker-kodu-kopyalanabilir.txt dosyasini kullanabilirsin.
           4) Worker.js ve kopyalanabilir TXT dosyasinin icerigi aynidir.
 
-          NOT: Oyuncu kariyeri, piyasa degeri, sakatlik ve transfer gecmisi icin
-          GitHub Actions icinde 'refresh-details' modu da calistirilmalidir.
-          Bu mod her calismada en fazla 80 oyuncuyu Transfermarkt ayrintilariyla gunceller.
-          525 oyuncunun tamamini islemek icin 80 oyunculuk partiler halinde tekrar calistir.
+          NOT: Bir oyuncunun eksik Transfermarkt alanlarini yenilemek icin GitHub Actions
+          ekraninda 'SkorHane Transfermarkt Tek Oyuncu Yenileme' workflow'unu ac,
+          'refresh-player-missing' modunu sec ve player_id alanina Transfermarkt ID'sini gir.
           EOF
           cd package
           zip -q -j ../SkorHane-Guncel.zip SkorHane-HTML.html SkorHane-HTML-kodu-kopyalanabilir.txt SkorHane-Worker.js SkorHane-Worker-kodu-kopyalanabilir.txt KURULUM.txt
