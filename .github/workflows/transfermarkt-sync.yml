@@ -44,8 +44,10 @@ permissions:
   actions: write
 
 concurrency:
-  group: skorhane-transfermarkt-sync
-  cancel-in-progress: true
+  # Keep independent on-demand player refreshes from cancelling one another.
+  # A single player remains serialized; separate player IDs can run independently.
+  group: skorhane-transfermarkt-${{ github.event.inputs.player_id || github.event.schedule || github.event_name }}
+  cancel-in-progress: false
 
 jobs:
   sync:
