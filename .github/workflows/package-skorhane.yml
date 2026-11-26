@@ -1,9 +1,6 @@
 name: Build SkorHane HTML and Worker ZIP
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
