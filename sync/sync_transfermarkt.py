@@ -999,12 +999,15 @@ def sync_felipeall(
             current_value = value_from(profile_player, ("market_value", "marketValue"))
             if current_value is None:
                 current_value = value_from(market_obj, ("market_value", "marketValue"))
+            if isinstance(current_value, dict):
+                current_value = safe_text(current_value)
             current_value_eur = parse_money_eur(current_value)
             market_history = iterable_from(
                 market_payload, ("market_value_history", "marketValueHistory", "history", "marketValues", "valuations")
             )
             latest_market_date = normalize_date(
                 value_from(market_obj, ("last_updated", "lastUpdated"))
+                or value_from(market_obj, ("updatedAt", "updated_at"))
                 or (market_history[0].get("date") if market_history else None)
             )
     
@@ -1115,6 +1118,8 @@ def sync_felipeall(
                 if not valuation_date:
                     continue
                 value = value_from(item, ("market_value", "marketValue", "value_eur", "value"))
+                if isinstance(value, dict):
+                    value = safe_text(value)
                 club = safe_text(item.get("club_name"), item.get("clubName"), item.get("club"))
                 rpc("tm_upsert_market_value", {"p_row": {
                     "tm_id": tm_id,
