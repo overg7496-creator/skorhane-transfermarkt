@@ -1,11 +1,6 @@
 name: SkorHane Sync Worker Tests
 
 on:
-  push:
-    paths:
-      - "sync/**"
-      - "tests/**"
-      - ".github/workflows/test-sync-workers.yml"
   workflow_dispatch:
 
 permissions:
