@@ -4407,7 +4407,10 @@ async function tmPlayer(env, id, executionCtx = null) {
   out.refreshReason = refreshState.reason || "";
   out.refreshState = refreshState.state || (refreshState.required ? (refreshState.queued ? "queued" : "required") : "current");
   out.refreshRetryAt = refreshState.retryAt || "";
-  const currentSeason = row.current_season_payload || {};
+  const storedCurrentSeason = row.current_season_payload;
+  const currentSeason = storedCurrentSeason && typeof storedCurrentSeason === "object" && Object.keys(storedCurrentSeason).length
+    ? storedCurrentSeason
+    : (sourceByType.current_season_matches || {});
   if ((!Array.isArray(statsRows) || !statsRows.length) && Array.isArray(currentSeason.stats)) statsRows = currentSeason.stats;
   const listPayload = (raw, keys) => tmPayloadArray(raw, keys) || [];
   const rawCurrentMatches = listPayload(currentSeason, ["matches", "matchHistory", "data", "items"]);
