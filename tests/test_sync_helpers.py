@@ -272,7 +272,7 @@ class SyncHelperTests(unittest.TestCase):
         from unittest.mock import patch
 
         rows = [
-            {"tm_id": "1", "last_felipe_synced_at": "2026-11-26T08:00:00Z"},
+            {"tm_id": "1", "last_felipe_synced_at": "2026-11-27T08:00:00Z"},
             {"tm_id": "2", "last_felipe_synced_at": None},
         ]
         with (
@@ -290,7 +290,7 @@ class SyncHelperTests(unittest.TestCase):
         from unittest.mock import patch
 
         rows = [
-            {"tm_id": "1", "last_felipe_synced_at": "2026-11-26T08:00:00Z"},
+            {"tm_id": "1", "last_felipe_synced_at": "2026-11-27T08:00:00Z"},
             {"tm_id": "2", "last_felipe_synced_at": None},
             {"tm_id": "3", "last_felipe_synced_at": None},
         ]
@@ -445,9 +445,68 @@ class SyncHelperTests(unittest.TestCase):
             inputs={"seen_after": after, "seen_before": before},
         )
 
+    def test_detail_aggregate_freshness_includes_old_and_unfinished_players(self):
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 11, 28, 12, 0, tzinfo=timezone.utc)
+        self.assertFalse(sync.detail_aggregate_is_fresh(
+            {"last_felipe_synced_at": None}, now
+        ))
+        self.assertFalse(sync.detail_aggregate_is_fresh(
+            {"last_felipe_synced_at": "2026-11-26T08:00:00Z"}, now
+        ))
+        self.assertTrue(sync.detail_aggregate_is_fresh(
+            {"last_felipe_synced_at": "2026-11-27T08:00:00Z"}, now
+        ))
+
+    def test_history_detail_worker_queries_only_its_league_partition(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(sync, "db_get", return_value=[]) as fetch,
+            patch.dict(os.environ, {
+                "TM_DETAIL_PRESEED_ALL_HISTORY": "true",
+                "TM_DETAIL_COMPETITION_ID": "TR1",
+            }),
+        ):
+            self.assertEqual(sync.load_pending_player_detail_candidates(), [])
+        query = fetch.call_args.args[0]
+        self.assertIn("tm_detail_preseed_candidates_by_worker", query)
+        self.assertIn("worker_competition_id=eq.TR1", query)
+        self.assertNotIn("tm_detail_preseed_candidates?select", query)
+
+    def test_history_detail_worker_rejects_unknown_league_code(self):
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {
+            "TM_DETAIL_PRESEED_ALL_HISTORY": "true",
+            "TM_DETAIL_COMPETITION_ID": "TR4A",
+        }):
+            with self.assertRaisesRegex(RuntimeError, "Geçersiz TM_DETAIL_COMPETITION_ID"):
+                sync.load_pending_player_detail_candidates()
+
+    def test_league_worker_migration_assigns_each_player_to_one_of_nine_leagues(self):
+        migration = (
+            ROOT / "database" / "014_parallel_league_detail_workers.sql"
+        ).read_text(encoding="utf-8").lower()
+        for competition in ("tr1", "tr2", "tr3a", "tr3b", "gb1", "es1", "l1", "it1", "fr1"):
+            self.assertIn("'" + competition + "'", migration)
+        self.assertIn("row_number() over", migration)
+        self.assertIn("partition by lm.tm_id", migration)
+        self.assertIn("where rm.worker_rank = 1", migration)
+
+    def test_league_detail_workflow_runs_seven_of_nine_matrix_workers(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("max-parallel: 7", workflow)
+        self.assertIn("competition_id: [TR1, TR2, TR3A, TR3B, GB1, ES1, L1, IT1, FR1]", workflow)
+        self.assertIn("TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}", workflow)
+        self.assertIn("competition_id == matrix.competition_id", workflow)
+
     def test_backfill_queue_is_resumable_and_uses_time_guard(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
-        self.assertIn('pending = [row for row in candidates if not row.get("last_felipe_synced_at")]', script)
+        self.assertIn("pending = [row for row in candidates if not detail_aggregate_is_fresh(row)]", script)
         self.assertIn('"player_detail_queue"', script)
         self.assertIn("dispatch_refresh_details_continuation(", script)
         self.assertIn("TM_DETAIL_CONTINUATION_WORKFLOW", script)
