@@ -346,6 +346,24 @@ DETAIL_ENDPOINTS = {
 # One-time repair boundary: snapshots fetched before this code fix must be
 # rechecked, because older code treated empty arrays as proof that data existed.
 DETAIL_REPAIR_CUTOFF = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
+DETAIL_WORKER_COMPETITIONS = ("TR1", "TR2", "TR3A", "TR3B", "GB1", "ES1", "L1", "IT1", "FR1")
+
+
+def detail_aggregate_is_fresh(player: dict[str, Any], now: datetime | None = None) -> bool:
+    """True only when the aggregate marker is inside the active detail-refresh window."""
+    stamp = player.get("last_felipe_synced_at")
+    if not stamp:
+        return False
+    try:
+        parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return False
+    current = now or datetime.now(timezone.utc)
+    stale_days = max(1, int(os.getenv("TM_DETAIL_STALE_DAYS", "7")))
+    cutoff = max(current - timedelta(days=stale_days), DETAIL_REPAIR_CUTOFF)
+    return parsed >= cutoff
 
 
 def player_detail_refresh_plan(tm_id: str, player: dict[str, Any]) -> set[str]:
@@ -853,6 +871,13 @@ def load_pending_player_detail_candidates(
     offset = 0
     page_size = 1000
     all_history_requested = os.getenv("TM_DETAIL_PRESEED_ALL_HISTORY", "").strip().lower() in {"1", "true", "yes"}
+    worker_competition = os.getenv("TM_DETAIL_COMPETITION_ID", "").strip().upper()
+    if worker_competition and worker_competition not in DETAIL_WORKER_COMPETITIONS:
+        raise RuntimeError(
+            f"Geçersiz TM_DETAIL_COMPETITION_ID: {worker_competition}. "
+            f"İzin verilen ligler: {', '.join(DETAIL_WORKER_COMPETITIONS)}"
+        )
+    worker_view = False
     has_explicit_window = bool(squad_seen_after or squad_seen_before)
 
     # An explicit import window always wins over all-history mode. The squad
@@ -871,6 +896,14 @@ def load_pending_player_detail_candidates(
         squad_filter = "&" + quote(window, safe="=.")
         use_preseed_view = True
         cohort_label = "açık kadro aktarım aralığı"
+    elif worker_competition:
+        # Every historical player is assigned to exactly one league worker.
+        # This prevents two concurrent league jobs from fetching/upserting the
+        # same Transfermarkt player at the same time.
+        squad_filter = ""
+        use_preseed_view = True
+        worker_view = True
+        cohort_label = f"{worker_competition} işçisine atanmış tarihî oyuncular"
     elif all_history_requested:
         # The SQL view limits this to TR1/TR2/TR3A/TR3B/GB1/ES1/L1/IT1/FR1
         # and season starts 2022-2026; it includes completed rows for accurate
@@ -885,7 +918,13 @@ def load_pending_player_detail_candidates(
         cohort_label = "son 14 günlük aktif kadro"
 
     while True:
-        if use_preseed_view:
+        if worker_view:
+            query = (
+                f"tm_detail_preseed_candidates_by_worker?select={select}"
+                f"&worker_competition_id=eq.{quote(worker_competition, safe='')}"
+                f"&order=tm_id.asc&limit={page_size}&offset={offset}"
+            )
+        elif use_preseed_view:
             query = (
                 f"tm_detail_preseed_candidates?select={select}"
                 f"{squad_filter}&order=tm_id.asc&limit={page_size}&offset={offset}"
@@ -916,7 +955,7 @@ def load_pending_player_detail_candidates(
                 "Yanlış gruba taşmamak için hiçbir oyuncu işlenmedi."
             )
 
-    pending = [row for row in candidates if not row.get("last_felipe_synced_at")]
+    pending = [row for row in candidates if not detail_aggregate_is_fresh(row)]
     LOG.info(
         "Detay ön-doldurma kohortu (%s): toplam=%s, daha önce tamamlanan=%s, kalan=%s",
         cohort_label, len(candidates), len(candidates) - len(pending), len(pending),
@@ -1539,9 +1578,12 @@ def sync_felipeall(
                     "seen_before": squad_seen_before,
                 }
             else:
-                # The dedicated imported-player workflow accepts an empty dispatch
-                # and resumes the durable, recent-unprocessed cohort from Supabase.
-                continuation_inputs = {}
+                # Resume the same league partition; never restart all nine workers
+                # when a single league reaches its safe runtime limit.
+                worker_competition = os.getenv("TM_DETAIL_COMPETITION_ID", "").strip().upper()
+                continuation_inputs = (
+                    {"competition_id": worker_competition} if worker_competition else {}
+                )
             dispatch_refresh_details_continuation(
                 workflow_file=continuation_workflow,
                 inputs=continuation_inputs,
@@ -2780,6 +2822,7 @@ def main() -> int:
             "felipeall", "refresh-imported-details",
             lambda: sync_felipeall(
                 backfill_only=True,
+                missing_only=bool(os.getenv("TM_DETAIL_COMPETITION_ID", "").strip()),
                 squad_seen_after=seen_after or None,
                 squad_seen_before=seen_before or None,
             ),
