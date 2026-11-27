@@ -11,7 +11,7 @@ on:
         type: string
         default: ""
       seen_before:
-        description: "Kadro aktarımının bitiş zamanı (ISO 8601 UTC); boşsa son 14 günlük eksik kayıtlar taranır."
+        description: "Bitiş zamanı (ISO 8601 UTC). İki sınır verilirse yalnızca o aktarım penceresi; ikisi de boşsa 9 lig × 2022-2026 tarihî kapsamı taranır."
         required: false
         type: string
         default: ""
