@@ -4937,7 +4937,10 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     if (marked.length > 1) for (const row of seasonRows) row.seasonLastTeam = false;
   }
   const sp = splitSeasons(rows);
-  await attachCareerTeamLogos(env, [...sp.seasons, ...(out.national || [])]);
+  // Career rows come from Supabase and are returned immediately. Team-logo lookups
+  // are presentation-only network work, so they must not delay the player data response.
+  const careerLogoTask = attachCareerTeamLogos(env, [...sp.seasons, ...(out.national || [])]).catch(() => {});
+  if (executionCtx && typeof executionCtx.waitUntil === "function") executionCtx.waitUntil(careerLogoTask);
   if (coach && out.afCoach && out.afCoach.career.length) {
     const apiRows = out.afCoach.career;
     const wikiRows = out.coachRows || [];
