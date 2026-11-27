@@ -1912,6 +1912,478 @@ def _seed_dcaribou_history_scraper() -> int:
     LOG.info("dcaribou seed çalışması tamamlandı/kısmi: %s yeni oyuncu profili işlendi, %s toplam tekil oyuncu biriktirildi.", total_profiles, len(all_players))
     return total_profiles
 
+
+
+def history_checkpoint_key(season_id: str, tm_id: str) -> str:
+    return f"player_season_appearances:{season_id}:{tm_id}"
+
+
+def load_felipe_history_checkpoints() -> set[str]:
+    rows = db_get(
+        "tm_source_records?select=record_key&source=eq.felipeall"
+        "&record_type=eq.history_appearance_checkpoint"
+        "&record_key=like.player_season_appearances:*&limit=10000"
+    )
+    if not isinstance(rows, list):
+        raise RuntimeError("Felipe geçmiş maç checkpoint kayıtları okunamadı.")
+    return {
+        str(row.get("record_key") or "")
+        for row in rows
+        if isinstance(row, dict) and row.get("record_key")
+    }
+
+
+def mark_felipe_history_checkpoint(
+    season_id: str, tm_id: str, *, appearance_rows: int, source_name: str
+) -> None:
+    source_record(
+        "felipeall", "history_appearance_checkpoint", tm_id,
+        history_checkpoint_key(season_id, tm_id),
+        {
+            "status": "completed",
+            "season_id": str(season_id),
+            "tm_id": str(tm_id),
+            "appearance_rows": int(appearance_rows),
+            "source": source_name,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+def load_supabase_history_roster(competition_id: str, season_id: str) -> list[dict[str, Any]]:
+    """Read imported historical squad membership before requesting new roster data."""
+    collected: list[dict[str, Any]] = []
+    offset = 0
+    page_size = 1000
+    while True:
+        query = (
+            "tm_team_season_squads?select=competition_id,competition_name,season_id,"
+            "club_id,club_name,tm_id,player_name,position,photo_url"
+            f"&competition_id=eq.{quote(str(competition_id), safe='')}"
+            f"&season_id=eq.{quote(str(season_id), safe='')}"
+            f"&order=tm_id.asc&limit={page_size}&offset={offset}"
+        )
+        rows = db_get(query)
+        if not isinstance(rows, list):
+            raise RuntimeError(
+                f"Supabase geçmiş kadro yanıtı liste değil ({competition_id}/{season_id})."
+            )
+        collected.extend(row for row in rows if isinstance(row, dict) and row.get("tm_id"))
+        if len(rows) < page_size:
+            break
+        offset += len(rows)
+    return collected
+
+
+def fetch_felipe_history_roster(competition_id: str, season_id: str) -> list[dict[str, Any]]:
+    """Fallback roster discovery using Felipe API v5 competition and club endpoints."""
+    base = FELIPE_API_BASE.rstrip("/")
+    if not base:
+        raise RuntimeError("FELIPE_API_BASE tanımlı değil.")
+    comp = quote(str(competition_id), safe="")
+    season = quote(str(season_id), safe="")
+    competition_payload = json_request(
+        f"{base}/competitions/{comp}/clubs?season_id={season}",
+        source=f"felipeall {competition_id}/{season_id} kulüp listesi",
+        delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
+    )
+    if not isinstance(competition_payload, dict) or not isinstance(competition_payload.get("clubs"), list):
+        raise RuntimeError(
+            f"Felipe API {competition_id}/{season_id}: competition clubs yanıtında clubs listesi yok."
+        )
+    competition_name = safe_text(competition_payload.get("name")) or competition_id
+    clubs = [row for row in competition_payload["clubs"] if isinstance(row, dict)]
+    if not clubs:
+        LOG.warning(
+            "Felipe API %s/%s için kulüp listesi boş döndü; Supabase kayıtları korundu.",
+            competition_id, season_id,
+        )
+        return []
+
+    collected: list[dict[str, Any]] = []
+    for club in clubs:
+        club_id = safe_text(club.get("id"), club.get("clubId"))
+        club_name = safe_text(club.get("name"), club.get("clubName"))
+        if not club_id:
+            LOG.warning(
+                "Felipe API %s/%s kulüp satırında ID yok; satır atlandı.",
+                competition_id, season_id,
+            )
+            continue
+        club_payload = json_request(
+            f"{base}/clubs/{quote(club_id, safe='')}/players?season_id={season}",
+            source=f"felipeall {club_name or club_id} {season_id} kadrosu",
+            delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
+        )
+        if not isinstance(club_payload, dict) or not isinstance(club_payload.get("players"), list):
+            LOG.warning(
+                "Felipe API %s/%s/%s oyuncu listesi eksik; kulüp atlandı.",
+                competition_id, season_id, club_id,
+            )
+            continue
+        for player in club_payload["players"]:
+            if not isinstance(player, dict):
+                continue
+            tm_id = safe_text(player.get("id"), player.get("playerId"), player.get("player_id"))
+            if not tm_id:
+                tm_id = player_id_from_row(player)
+            if not tm_id or not str(tm_id).isdigit():
+                continue
+            player_name = safe_text(player.get("name"), player.get("playerName")) or str(tm_id)
+            position = safe_text(player.get("position"))
+            photo = safe_text(player.get("imageUrl"), player.get("image_url"), player.get("photoUrl"))
+            roster_row = {
+                "competition_id": competition_id,
+                "competition_name": competition_name,
+                "season_id": str(season_id),
+                "club_id": club_id,
+                "club_name": club_name or "",
+                "tm_id": str(tm_id),
+                "player_name": player_name,
+                "position": position,
+                "photo_url": photo,
+            }
+            collected.append(roster_row)
+
+            # Cache recovered roster data where the season-squad migration exists.
+            # In-memory processing still continues if this optional cache write fails.
+            try:
+                upsert_player(str(tm_id), "felipeall", {
+                    "name": player_name, "position": position, "photo_url": photo,
+                })
+                rpc("tm_upsert_team_season_squad", {"p_row": {
+                    **roster_row,
+                    "shirt_number": player.get("shirtNumber"),
+                    "age": player.get("age"),
+                    "nationality": player.get("nationality"),
+                    "market_value_eur": numeric(player, "marketValue", "market_value"),
+                    "payload": player,
+                }})
+            except Exception as exc:
+                LOG.warning(
+                    "Felipe API kadro satırı RAM'de tutuldu; Supabase kadro cache yazılamadı "
+                    "(%s/%s/%s): %s",
+                    competition_id, season_id, club_id, safe_error_for_log(exc),
+                )
+    return collected
+
+
+def fetch_felipe_player_season_matches(tm_id: str, season_id: str) -> list[dict[str, Any]]:
+    """Fetch all pages of one player's matches in one Transfermarkt season."""
+    base = FELIPE_API_BASE.rstrip("/")
+    if not base:
+        raise RuntimeError("FELIPE_API_BASE tanımlı değil.")
+    player = quote(str(tm_id), safe="")
+    season = quote(str(season_id), safe="")
+    first = json_request(
+        f"{base}/players/{player}/matches?season_id={season}&page_number=1",
+        source=f"felipeall {tm_id}/{season_id} tarihsel maçları",
+        delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
+    )
+    if not isinstance(first, dict) or not isinstance(first.get("matches"), list):
+        raise RuntimeError(
+            f"Felipe API {tm_id}/{season_id}: matches listesi olmayan/geçersiz yanıt."
+        )
+    last_page = numeric(first, "lastPageNumber", "last_page_number")
+    first_page = numeric(first, "pageNumber", "page_number")
+    if last_page is None or last_page < 1 or first_page != 1:
+        raise RuntimeError(
+            f"Felipe API {tm_id}/{season_id}: sayfalama metadata geçersiz "
+            f"(page={first_page}, last={last_page})."
+        )
+    max_pages = max(1, int(os.getenv("TM_MAX_HISTORY_MATCH_PAGES", "20")))
+    if last_page > max_pages:
+        raise RuntimeError(
+            f"Felipe API {tm_id}/{season_id}: {last_page} sayfa bulundu; "
+            f"TM_MAX_HISTORY_MATCH_PAGES={max_pages}. Eksik veri tamamlandı sayılmadı."
+        )
+    all_rows = [row for row in first["matches"] if isinstance(row, dict)]
+    for page in range(2, last_page + 1):
+        payload = json_request(
+            f"{base}/players/{player}/matches?season_id={season}&page_number={page}",
+            source=f"felipeall {tm_id}/{season_id} maç sayfa {page}",
+            delay_range=(FELIPE_DELAY_MIN, FELIPE_DELAY_MAX),
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("matches"), list):
+            raise RuntimeError(
+                f"Felipe API {tm_id}/{season_id} sayfa {page}: matches listesi yok."
+            )
+        page_number = numeric(payload, "pageNumber", "page_number")
+        page_last = numeric(payload, "lastPageNumber", "last_page_number")
+        if page_number != page or page_last != last_page:
+            raise RuntimeError(
+                f"Felipe API {tm_id}/{season_id} sayfa tutarsızlığı: "
+                f"page={page_number}, last={page_last}, beklenen={page}/{last_page}."
+            )
+        page_rows = [row for row in payload["matches"] if isinstance(row, dict)]
+        if page < last_page and not page_rows:
+            raise RuntimeError(
+                f"Felipe API {tm_id}/{season_id} sayfa {page} boş; eksik sayfalama kabul edildi."
+            )
+        all_rows.extend(page_rows)
+    return all_rows
+
+
+def persist_felipe_history_appearances(
+    tm_id: str, season_id: str, matches: list[dict[str, Any]],
+    fallback_competition_name: str | None = None,
+) -> int:
+    """Persist actual player appearances; never invent ratings or match facts."""
+    saved = 0
+    for match in matches:
+        game_id = safe_text(match.get("gameId"), match.get("game_id"), match.get("match_id"))
+        played_at = normalize_date(match.get("date"))
+        if not game_id or not played_at:
+            LOG.warning(
+                "Felipe maç satırı ID/tarih olmadan geldi; oyuncu=%s sezon=%s atlandı.",
+                tm_id, season_id,
+            )
+            continue
+        participation = (
+            safe_text(match.get("participation"), match.get("playerStatus"), match.get("status")) or ""
+        ).lower()
+        minutes = numeric(match, "minutesPlayed", "minutes", "playedMinutes") or 0
+        played = minutes > 0 or participation in {
+            "played", "starting_xi", "starting xi", "substitute", "substituted",
+        }
+        if not played:
+            # Felipe also returns missed/injured/on-bench games. They are not appearances.
+            continue
+        competition_name = safe_text(match.get("competition")) or fallback_competition_name
+        club_name = safe_text(match.get("club"), match.get("playerClubName"), match.get("clubName"))
+        opponent_name = safe_text(match.get("opponent"), match.get("opponentName"))
+        is_starting = match.get("isStarting") is True or match.get("is_starting") is True
+        yellow = match.get("yellowCard") is True or match.get("yellow_card") is True
+        second_yellow = (
+            match.get("secondYellowCard") is True or match.get("second_yellow_card") is True
+        )
+        red = match.get("redCard") is True or match.get("red_card") is True
+        source_key = f"{tm_id}:{season_id}:{game_id}"
+        raw_payload = {**match, "season_id": str(season_id), "history_source": "felipeall"}
+        rpc("tm_upsert_appearance", {"p_row": {
+            "source": "felipeall",
+            "source_record_key": source_key,
+            "tm_id": str(tm_id),
+            "game_id": str(game_id),
+            "played_at": played_at,
+            "competition_name": competition_name,
+            "club_name": club_name,
+            "opponent_name": opponent_name,
+            "appearances": 1,
+            "starts": 1 if is_starting else 0,
+            "minutes": minutes,
+            "goals": numeric(match, "goals", "playerGoals") or 0,
+            "assists": numeric(match, "assists", "playerAssists") or 0,
+            "yellow_cards": 1 if yellow or second_yellow else 0,
+            "red_cards": 1 if red or second_yellow else 0,
+            "payload": raw_payload,
+        }})
+        saved += 1
+    return saved
+
+
+def load_supabase_current_season_matches(tm_id: str, season_id: str) -> list[dict[str, Any]]:
+    """Use an existing current-season Felipe snapshot only for the matching season."""
+    if str(season_id) != str(TM_SEASON):
+        return []
+    rows = db_get(
+        "tm_players?select=current_season_payload"
+        f"&tm_id=eq.{quote(str(tm_id), safe='')}&limit=1"
+    )
+    if not rows or not isinstance(rows[0].get("current_season_payload"), dict):
+        return []
+    matches = rows[0]["current_season_payload"].get("matches")
+    return [row for row in matches if isinstance(row, dict)] if isinstance(matches, list) else []
+
+
+def seed_felipe_history_fallback() -> int:
+    """Continue from Supabase season squads, using Felipe API for roster and match gaps."""
+    if not FELIPE_API_BASE:
+        LOG.warning("Felipe API fallback atlandı: FELIPE_API_BASE tanımlı değil.")
+        return 0
+
+    wanted = list(dict.fromkeys(DCARIBOU_COMPETITIONS))
+    seasons = list(dict.fromkeys(
+        str(value) for value in (DCARIBOU_SEASONS or [TM_SEASON - 1])
+    ))
+    players_by_season: dict[tuple[str, str], dict[str, Any]] = {}
+    supabase_roster_rows = 0
+    api_roster_rows = 0
+
+    for competition_id in wanted:
+        for season_id in seasons:
+            try:
+                roster_rows = load_supabase_history_roster(competition_id, season_id)
+            except Exception as exc:
+                LOG.warning(
+                    "Supabase geçmiş kadro okunamadı (%s/%s); Felipe API denenecek: %s",
+                    competition_id, season_id, safe_error_for_log(exc),
+                )
+                roster_rows = []
+            if roster_rows:
+                supabase_roster_rows += len(roster_rows)
+                LOG.info(
+                    "Geçmiş kadro kaynağı=Supabase: %s/%s oyuncu-kulüp satırı=%s",
+                    competition_id, season_id, len(roster_rows),
+                )
+            else:
+                LOG.info(
+                    "Supabase geçmiş kadrosu yok (%s/%s); Felipe API competition/clubs/players fallback başlıyor.",
+                    competition_id, season_id,
+                )
+                try:
+                    roster_rows = fetch_felipe_history_roster(competition_id, season_id)
+                except Exception as exc:
+                    LOG.warning(
+                        "Felipe API geçmiş kadro fallback başarısız (%s/%s): %s",
+                        competition_id, season_id, safe_error_for_log(exc),
+                    )
+                    continue
+                api_roster_rows += len(roster_rows)
+                if not roster_rows:
+                    LOG.warning(
+                        "%s/%s için Supabase veya Felipe API oyuncu kadrosu bulunamadı; mevcut veriler korundu.",
+                        competition_id, season_id,
+                    )
+                    continue
+
+            for row in roster_rows:
+                tm_id = safe_text(row.get("tm_id"), row.get("player_id"), row.get("playerId"))
+                season = safe_text(row.get("season_id"), row.get("seasonId")) or str(season_id)
+                if not tm_id or not str(tm_id).isdigit():
+                    continue
+                key = (str(tm_id), season)
+                current = players_by_season.setdefault(key, {
+                    "tm_id": str(tm_id),
+                    "season_id": season,
+                    "competition_name": safe_text(row.get("competition_name"), row.get("competitionName")),
+                })
+                if not current.get("competition_name"):
+                    current["competition_name"] = safe_text(row.get("competition_name"), row.get("competitionName"))
+
+    if not players_by_season:
+        LOG.warning(
+            "Felipe/Supabase fallback için oyuncu-sezon çifti bulunamadı. "
+            "dcaribou boş sonucu hiçbir mevcut kaydı silmedi."
+        )
+        return 0
+
+    completed = load_felipe_history_checkpoints()
+    pending = [
+        (tm_id, season_id, player)
+        for (tm_id, season_id), player in sorted(
+            players_by_season.items(), key=lambda item: (item[0][1], item[0][0])
+        )
+        if history_checkpoint_key(season_id, tm_id) not in completed
+    ]
+    max_pairs = max(1, int(os.getenv("FELIPE_HISTORY_MAX_PLAYER_SEASONS_PER_RUN", "1200")))
+    max_runtime = max(60, int(os.getenv("FELIPE_HISTORY_MAX_RUNTIME_SECONDS", "19800")))
+    started = time.monotonic()
+    saved_rows = 0
+    completed_pairs = 0
+    failed_pairs = 0
+    stopped_for_limit = False
+
+    LOG.info(
+        "Felipe tarihsel maç fallback: Supabase kadro satırı=%s, API kadro satırı=%s, "
+        "tekil oyuncu-sezon=%s, checkpoint tamamlanan=%s, bekleyen=%s",
+        supabase_roster_rows, api_roster_rows, len(players_by_season),
+        len(completed), len(pending),
+    )
+
+    for index, (tm_id, season_id, player) in enumerate(pending, 1):
+        if completed_pairs >= max_pairs or time.monotonic() - started >= max_runtime:
+            stopped_for_limit = True
+            break
+        try:
+            matches = fetch_felipe_player_season_matches(tm_id, season_id)
+            source_name = "felipeall_api"
+        except Exception as api_exc:
+            try:
+                matches = load_supabase_current_season_matches(tm_id, season_id)
+            except Exception as db_exc:
+                matches = []
+                LOG.warning(
+                    "Oyuncu %s/%s: Felipe API hatası=%s; Supabase maç snapshot hatası=%s",
+                    tm_id, season_id, safe_error_for_log(api_exc), safe_error_for_log(db_exc),
+                )
+            if not matches:
+                failed_pairs += 1
+                LOG.warning(
+                    "Oyuncu %s/%s maç geçmişi alınamadı; checkpoint yazılmadı ve sonraki çalışmada tekrar denenecek: %s",
+                    tm_id, season_id, safe_error_for_log(api_exc),
+                )
+                continue
+            source_name = "supabase_current_season_snapshot"
+            LOG.warning(
+                "Oyuncu %s/%s maçları mevcut Supabase snapshot'ından alındı; API yanıtı kullanılamadı.",
+                tm_id, season_id,
+            )
+
+        saved = persist_felipe_history_appearances(
+            tm_id, season_id, matches, player.get("competition_name")
+        )
+        saved_rows += saved
+        mark_felipe_history_checkpoint(
+            season_id, tm_id, appearance_rows=saved, source_name=source_name
+        )
+        completed.add(history_checkpoint_key(season_id, tm_id))
+        completed_pairs += 1
+        if index == 1 or index % 50 == 0:
+            LOG.info(
+                "Felipe tarihsel maç ilerleme: %s/%s oyuncu-sezon | yeni maç satırı=%s",
+                index, len(pending), saved_rows,
+            )
+
+    remaining = len(pending) - completed_pairs - failed_pairs
+    LOG.info(
+        "Felipe tarihsel maç fallback sonucu: tamamlanan=%s, başarısız/tekrar bekleyen=%s, "
+        "kalan=%s, yeni maç satırı=%s",
+        completed_pairs, failed_pairs, max(0, remaining), saved_rows,
+    )
+    if stopped_for_limit and remaining > 0:
+        LOG.warning("Güvenli batch/süre sınırına ulaşıldı; kalan oyuncular checkpoint ile otomatik devam edecek.")
+        dispatch_refresh_details_continuation(
+            workflow_file="seed-player-appearances.yml",
+            inputs={"competitions": ",".join(wanted), "seasons": ",".join(seasons)},
+        )
+    return saved_rows
+
+
+def seed_dcaribou_history() -> int:
+    """Try dcaribou first, then safely continue through Felipe API/Supabase."""
+    dcaribou_count = 0
+    try:
+        dcaribou_count = _seed_dcaribou_history_scraper()
+        LOG.info("dcaribou seed tamamlandı: işlenen yeni oyuncu profili=%s", dcaribou_count)
+    except Exception as exc:
+        LOG.warning(
+            "dcaribou geçmiş kaynağı kullanılamadı; işlem Felipe API/Supabase fallback ile sürecek: %s",
+            safe_error_for_log(exc),
+        )
+
+    try:
+        felipe_count = seed_felipe_history_fallback()
+    except Exception as exc:
+        LOG.error(
+            "Felipe API/Supabase fallback beklenmeyen nedenle tamamlanamadı; mevcut Supabase verileri korundu: %s",
+            safe_error_for_log(exc),
+        )
+        felipe_count = 0
+
+    if dcaribou_count == 0 and felipe_count == 0:
+        LOG.warning(
+            "seed-history güvenli şekilde tamamlandı ancak bu çalışmada yeni geçmiş maç satırı bulunamadı. "
+            "Mevcut Supabase kayıtları silinmedi; Felipe API erişimi ve kadro/checkpoint kayıtları kontrol edilmeli."
+        )
+    else:
+        LOG.info(
+            "seed-history tamamlandı: dcaribou profilleri=%s, Felipe/Supabase maç satırları=%s",
+            dcaribou_count, felipe_count,
+        )
+    return dcaribou_count + felipe_count
+
+
 def parse_preseed_player_ids(raw: str | None) -> list[str]:
     """Parse a comma/semicolon/whitespace-separated Transfermarkt player ID list."""
     tokens = [item for item in re.split(r"[\s,;]+", str(raw or "").strip()) if item]
