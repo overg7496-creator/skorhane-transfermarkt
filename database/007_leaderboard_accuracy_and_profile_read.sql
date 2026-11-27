@@ -53,7 +53,7 @@ as $$
       end
     else null
   end;
-$;
+$$;
 
 create or replace function public.tm_leader_normalize_name(p_value text)
 returns text
