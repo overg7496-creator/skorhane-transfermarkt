@@ -25,6 +25,8 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn("s.competition_id = q.competition_id", self.sql)
         self.assertIn("s.club_id = q.club_id", self.sql)
         self.assertIn("left join lateral", self.sql)
+        self.assertIn("select distinct on (competition_id, season_start_year, club_id, tm_id)", self.sql)
+        self.assertIn("season_start_year::text as season_id", self.sql)
         self.assertIn("max(s.goals)", self.sql)
         self.assertNotIn("sum(s.goals)", self.sql)
 
