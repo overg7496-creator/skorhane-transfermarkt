@@ -890,7 +890,8 @@ matched_season_stats as (
     s.second_yellow_cards,
     s.red_cards,
     s.goals_conceded,
-    s.clean_sheets
+    s.clean_sheets,
+    s.payload
   from public.tm_team_season_squads q
   join public.tm_player_season_stats s
     on s.tm_id = q.tm_id
