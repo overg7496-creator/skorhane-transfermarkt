@@ -33,9 +33,6 @@ create table if not exists public.tm_league_player_season_totals_cache (
   primary key (competition_id, season_id, tm_id)
 );
 
-create index if not exists tm_league_player_season_totals_cache_lookup_idx
-  on public.tm_league_player_season_totals_cache (competition_id, season_id, tm_id);
-
 alter table public.tm_league_player_season_totals_cache enable row level security;
 revoke all on public.tm_league_player_season_totals_cache from public, anon, authenticated;
 grant select on public.tm_league_player_season_totals_cache to service_role;
@@ -62,29 +59,29 @@ begin
     red_cards, goals_conceded, clean_sheets, payload, source
   )
   select
-    x.row->>'tm_id',
-    x.row->>'season_id',
-    coalesce(x.row->>'competition_name', ''),
-    coalesce(x.row->>'club_name', ''),
-    nullif(x.row->>'competition_id', ''),
-    nullif(x.row->>'club_id', ''),
-    nullif(x.row->>'appearances', '')::integer,
-    nullif(x.row->>'starts', '')::integer,
-    nullif(x.row->>'goals', '')::integer,
-    nullif(x.row->>'assists', '')::integer,
-    nullif(x.row->>'minutes', '')::integer,
-    nullif(x.row->>'yellow_cards', '')::integer,
-    nullif(x.row->>'second_yellow_cards', '')::integer,
-    nullif(x.row->>'red_cards', '')::integer,
-    nullif(x.row->>'goals_conceded', '')::integer,
-    nullif(x.row->>'clean_sheets', '')::integer,
-    public.tm_clean_jsonb(x.row->'payload'),
-    coalesce(x.row->>'source', 'felipeall')
-  from jsonb_array_elements(p_rows) as x(row)
-  where coalesce(x.row->>'tm_id', '') <> ''
-    and coalesce(x.row->>'season_id', '') <> ''
-    and coalesce(x.row->>'competition_name', '') <> ''
-    and coalesce(x.row->>'club_name', '') <> ''
+    x.data->>'tm_id',
+    x.data->>'season_id',
+    coalesce(x.data->>'competition_name', ''),
+    coalesce(x.data->>'club_name', ''),
+    nullif(x.data->>'competition_id', ''),
+    nullif(x.data->>'club_id', ''),
+    nullif(x.data->>'appearances', '')::integer,
+    nullif(x.data->>'starts', '')::integer,
+    nullif(x.data->>'goals', '')::integer,
+    nullif(x.data->>'assists', '')::integer,
+    nullif(x.data->>'minutes', '')::integer,
+    nullif(x.data->>'yellow_cards', '')::integer,
+    nullif(x.data->>'second_yellow_cards', '')::integer,
+    nullif(x.data->>'red_cards', '')::integer,
+    nullif(x.data->>'goals_conceded', '')::integer,
+    nullif(x.data->>'clean_sheets', '')::integer,
+    public.tm_clean_jsonb(x.data->'payload'),
+    coalesce(x.data->>'source', 'felipeall')
+  from jsonb_array_elements(p_rows) as x(data)
+  where coalesce(x.data->>'tm_id', '') <> ''
+    and coalesce(x.data->>'season_id', '') <> ''
+    and coalesce(x.data->>'competition_name', '') <> ''
+    and coalesce(x.data->>'club_name', '') <> ''
   on conflict (tm_id, season_id, competition_name, club_name) do update set
     competition_id = coalesce(excluded.competition_id, tm_player_season_stats.competition_id),
     club_id = coalesce(excluded.club_id, tm_player_season_stats.club_id),
