@@ -301,15 +301,15 @@ as $$
     'injury_rows', (
       select count(*) from public.tm_injuries i where i.tm_id = p_tm_id
     ),
-    'raw_payload_rows', coalesce((
+    'raw_payload_counts', coalesce((
       select jsonb_build_object(
-        'stats_payload', public.tm_extract_json_array(p.stats_payload, array['stats','data','items']),
-        'current_season_matches', public.tm_extract_json_array(p.current_season_payload, array['matches','data','items']),
-        'market_value_payload', public.tm_extract_json_array(p.market_value_payload, array[
+        'stats_payload', jsonb_array_length(public.tm_extract_json_array(p.stats_payload, array['stats','statistics','playerStats','data','items'])),
+        'current_season_matches', jsonb_array_length(public.tm_extract_json_array(p.current_season_payload, array['matches','matchHistory','data','items'])),
+        'market_value_payload', jsonb_array_length(public.tm_extract_json_array(p.market_value_payload, array[
           'marketValueHistory','market_value_history','history','marketValues','valuations','items','data'
-        ]),
-        'transfers_payload', public.tm_extract_json_array(p.transfers_payload, array['transfers','history','items','data']),
-        'injuries_payload', public.tm_extract_json_array(p.injuries_payload, array['injuries','data','items','injuryHistory'])
+        ])),
+        'transfers_payload', jsonb_array_length(public.tm_extract_json_array(p.transfers_payload, array['transfers','history','items','data'])),
+        'injuries_payload', jsonb_array_length(public.tm_extract_json_array(p.injuries_payload, array['injuries','data','items','injuryHistory']))
       )
       from public.tm_players p where p.tm_id = p_tm_id limit 1
     ), '{}'::jsonb),
