@@ -1546,7 +1546,46 @@ def competition_codes(item: dict[str, Any]) -> set[str]:
 
     collect(item)
     joined = " ".join(searchable).upper()
-    return set(re.findall(r"(?<![A-Z0-9])[A-Z]{1,5}\d{1,2}(?![A-Z0-9])", joined))
+    codes = set(re.findall(r"(?<![A-Z0-9])[A-Z]{1,5}\d{1,2}(?![A-Z0-9])", joined))
+
+    # The scraper's canonical competition rows often put the league's country
+    # code/name on the parent country and use a numeric ID in the competition URL.
+    def compact(value: str) -> str:
+        import unicodedata
+        return re.sub(
+            r"[^A-Z0-9]",
+            "",
+            unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii").upper(),
+        )
+
+    country_aliases = {
+        "TR1": {"TR", "TUR", "TURKEY", "TURKIYE"},
+        "GB1": {"GB", "GBR", "ENG", "UK", "UNITEDKINGDOM", "ENGLAND"},
+        "ES1": {"ES", "ESP", "SPAIN", "ESPANA"},
+        "L1": {"DE", "DEU", "GER", "GERMANY", "DEUTSCHLAND"},
+        "IT1": {"IT", "ITA", "ITALY", "ITALIA"},
+        "FR1": {"FR", "FRA", "FRANCE"},
+    }
+    country_values: list[str] = []
+    def collect_country(value: Any, depth: int = 0) -> None:
+        if depth > 4 or value is None:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key.lower() in {"country_code", "countrycode", "country_name", "countryname", "country"}:
+                    if isinstance(child, (str, int, float)):
+                        country_values.append(str(child))
+                collect_country(child, depth + 1)
+        elif isinstance(value, list):
+            for child in value:
+                collect_country(child, depth + 1)
+    collect_country(item)
+    normalized_countries = {compact(value) for value in country_values if value}
+    for league_code, aliases in country_aliases.items():
+        if normalized_countries & aliases:
+            codes.add(league_code)
+
+    return codes
 
 
 def is_dcaribou_first_tier(item: dict[str, Any], wanted_codes: set[str]) -> bool:
