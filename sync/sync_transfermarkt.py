@@ -129,31 +129,79 @@ def db_headers() -> dict[str, str]:
     }
 
 
+def supabase_http_request(
+    request_factory,
+    *,
+    operation: str,
+    parse_json: bool = False,
+    empty_value: Any = None,
+) -> Any:
+    """Retry idempotent Supabase reads/RPC writes after transient connection loss."""
+    attempts = max(1, int(os.getenv("SUPABASE_HTTP_MAX_ATTEMPTS", "5")))
+    transient_statuses = {408, 425, 429, 500, 502, 503, 504}
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            req = request_factory()
+            with urlopen(req, timeout=HTTP_TIMEOUT) as response:
+                raw = response.read()
+                if not raw:
+                    return empty_value
+                return json.loads(raw.decode("utf-8")) if parse_json else None
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace").strip()[:1000]
+            last_error = RuntimeError(f"HTTP {exc.code}: {detail or exc.reason}")
+            if exc.code not in transient_statuses:
+                raise last_error from exc
+        except (TimeoutError, URLError, OSError, json.JSONDecodeError) as exc:
+            last_error = exc
+
+        if attempt + 1 < attempts:
+            wait_seconds = min(45, 3 * (2 ** attempt))
+            LOG.warning(
+                "Supabase %s bağlantı/yanıt hatası; %s/%s deneme sonrası tekrar deneniyor: %s",
+                operation, attempt + 1, attempts, safe_error_for_log(last_error),
+            )
+            time.sleep(wait_seconds + random.uniform(0.2, 1.0))
+
+    raise RuntimeError(
+        f"Supabase {operation} {attempts} denemede başarısız: {safe_error_for_log(last_error)}"
+    ) from last_error
+
+
 def rpc(name: str, payload: dict[str, Any]) -> Any:
     url = f"{SUPABASE_URL}/rest/v1/rpc/{name}"
-    req = Request(url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                  headers=db_headers(), method="POST")
-    with urlopen(req, timeout=HTTP_TIMEOUT) as response:
-        raw = response.read()
-        return json.loads(raw.decode("utf-8")) if raw else None
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    return supabase_http_request(
+        lambda: Request(url, data=body, headers=db_headers(), method="POST"),
+        operation=f"RPC {name}", parse_json=True,
+    )
 
 
 def db_get(path: str) -> Any:
-    req = Request(f"{SUPABASE_URL}/rest/v1/{path}", headers=db_headers())
-    with urlopen(req, timeout=HTTP_TIMEOUT) as response:
-        raw = response.read()
-        return json.loads(raw.decode("utf-8")) if raw else []
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    return supabase_http_request(
+        lambda: Request(url, headers=db_headers()),
+        operation="GET", parse_json=True, empty_value=[],
+    )
+
 
 def db_patch(path: str, payload: dict[str, Any]) -> None:
-    req = Request(f"{SUPABASE_URL}/rest/v1/{path}", data=json.dumps(payload).encode("utf-8"),
-                  headers={**db_headers(), "Prefer": "return=minimal"}, method="PATCH")
-    with urlopen(req, timeout=HTTP_TIMEOUT) as response:
-        response.read()
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    body = json.dumps(payload).encode("utf-8")
+    supabase_http_request(
+        lambda: Request(url, data=body,
+                        headers={**db_headers(), "Prefer": "return=minimal"}, method="PATCH"),
+        operation="PATCH",
+    )
+
 
 def db_delete(path: str) -> None:
-    req = Request(f"{SUPABASE_URL}/rest/v1/{path}", headers={**db_headers(), "Prefer": "return=minimal"}, method="DELETE")
-    with urlopen(req, timeout=HTTP_TIMEOUT) as response:
-        response.read()
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    supabase_http_request(
+        lambda: Request(url, headers={**db_headers(), "Prefer": "return=minimal"}, method="DELETE"),
+        operation="DELETE",
+    )
 
 
 def db_insert(path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -1970,9 +2018,14 @@ def load_felipe_history_checkpoints() -> set[str]:
     return completed
 
 
-def history_appearance_needs_refresh(season_id: str, tm_id: str, completed: set[str]) -> bool:
-    """Keep completed old seasons; refresh the active season on each scheduled run."""
-    return str(season_id) == str(TM_SEASON) or history_checkpoint_key(season_id, tm_id) not in completed
+def history_appearance_needs_refresh(
+    season_id: str, tm_id: str, completed: set[str], *, refresh_current_season: bool = False
+) -> bool:
+    """Use checkpoints during continuation; scheduled refreshes may force the active season."""
+    key = history_checkpoint_key(season_id, tm_id)
+    if str(season_id) == str(TM_SEASON) and refresh_current_season:
+        return True
+    return key not in completed
 
 
 def mark_felipe_history_checkpoint(
@@ -2251,6 +2304,7 @@ def seed_felipe_history_fallback() -> int:
     players_by_season: dict[tuple[str, str], dict[str, Any]] = {}
     supabase_roster_rows = 0
     api_roster_rows = 0
+    roster_failures: list[str] = []
 
     for competition_id in wanted:
         for season_id in seasons:
@@ -2276,6 +2330,7 @@ def seed_felipe_history_fallback() -> int:
                 try:
                     roster_rows = fetch_felipe_history_roster(competition_id, season_id)
                 except Exception as exc:
+                    roster_failures.append(f"{competition_id}/{season_id}: {safe_error_for_log(exc)}")
                     LOG.warning(
                         "Felipe API geçmiş kadro fallback başarısız (%s/%s): %s",
                         competition_id, season_id, safe_error_for_log(exc),
@@ -2304,19 +2359,27 @@ def seed_felipe_history_fallback() -> int:
                     current["competition_name"] = safe_text(row.get("competition_name"), row.get("competitionName"))
 
     if not players_by_season:
-        LOG.warning(
+        message = (
             "Felipe/Supabase fallback için oyuncu-sezon çifti bulunamadı. "
             "dcaribou boş sonucu hiçbir mevcut kaydı silmedi."
         )
+        if roster_failures:
+            raise RuntimeError(message + " Kadro kaynak hataları: " + " | ".join(roster_failures[:8]))
+        LOG.warning(message)
         return 0
 
     completed = load_felipe_history_checkpoints()
+    refresh_current_season = os.getenv("TM_HISTORY_REFRESH_CURRENT_SEASON", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
     pending = [
         (tm_id, season_id, player)
         for (tm_id, season_id), player in sorted(
             players_by_season.items(), key=lambda item: (item[0][1], item[0][0])
         )
-        if history_appearance_needs_refresh(season_id, tm_id, completed)
+        if history_appearance_needs_refresh(
+            season_id, tm_id, completed, refresh_current_season=refresh_current_season
+        )
     ]
     max_pairs = max(1, int(os.getenv("FELIPE_HISTORY_MAX_PLAYER_SEASONS_PER_RUN", "1200")))
     max_runtime = max(60, int(os.getenv("FELIPE_HISTORY_MAX_RUNTIME_SECONDS", "19800")))
@@ -2377,53 +2440,83 @@ def seed_felipe_history_fallback() -> int:
                 index, len(pending), saved_rows,
             )
 
-    remaining = len(pending) - completed_pairs - failed_pairs
+    remaining = max(0, len(pending) - completed_pairs)
     LOG.info(
         "Felipe tarihsel maç fallback sonucu: tamamlanan=%s, başarısız/tekrar bekleyen=%s, "
-        "kalan=%s, yeni maç satırı=%s",
-        completed_pairs, failed_pairs, max(0, remaining), saved_rows,
+        "kalan=%s, yeni maç satırı=%s, kadro-kaynak-hatası=%s",
+        completed_pairs, failed_pairs, remaining, saved_rows, len(roster_failures),
     )
-    if stopped_for_limit and remaining > 0:
-        LOG.warning("Güvenli batch/süre sınırına ulaşıldı; kalan oyuncular checkpoint ile otomatik devam edecek.")
-        dispatch_refresh_details_continuation(
+
+    # Only finish green when any remaining work has a confirmed continuation.
+    # A continuation does not force-refresh the active season again; checkpoints
+    # therefore move monotonically through the season/competition backlog.
+    continuation_required = remaining > 0 or bool(roster_failures)
+    if continuation_required:
+        depth = int(os.getenv("TM_HISTORY_CONTINUATION_DEPTH", "0") or "0")
+        max_depth = max(1, int(os.getenv("TM_HISTORY_MAX_CONTINUATIONS", "20")))
+        if depth >= max_depth:
+            raise RuntimeError(
+                f"Maç geçmişi ön-doldurması {depth} devam çalışmasına ulaştı; "
+                f"kalan oyuncu-sezon={remaining}, API hatası={failed_pairs}, "
+                f"kadro hatası={len(roster_failures)}. Checkpoint'ler korundu; manuel yeniden başlatma gerekiyor."
+            )
+        continuation_inputs = {
+            "competitions": ",".join(wanted),
+            "seasons": ",".join(seasons),
+            "continuation_depth": str(depth + 1),
+            "refresh_current_season": "false",
+        }
+        queued = dispatch_refresh_details_continuation(
             workflow_file="seed-player-appearances.yml",
-            inputs={"competitions": ",".join(wanted), "seasons": ",".join(seasons)},
+            inputs=continuation_inputs,
         )
+        if not queued:
+            raise RuntimeError(
+                f"Maç geçmişinde {remaining} oyuncu-sezon işi kaldı ancak GitHub devam çalışmasını kuyruğa alamadı. "
+                "Mevcut checkpoint'ler korundu; Actions üzerinden aynı workflow yeniden başlatılabilir."
+            )
+        LOG.warning(
+            "Maç geçmişi bu parçada kısmi işlendi; devam çalışması kabul edildi. "
+            "Tamamlanan=%s, tekrar bekleyen=%s, kalan=%s, devam derinliği=%s.",
+            completed_pairs, failed_pairs, remaining, depth + 1,
+        )
+    else:
+        LOG.info("Maç geçmişi ön-doldurma kuyruğu tamamlandı; bekleyen oyuncu-sezon kaydı yok.")
+
     return saved_rows
 
 
 def seed_dcaribou_history() -> int:
-    """Try dcaribou first, then safely continue through Felipe API/Supabase."""
+    """Try dcaribou first; Felipe API/Supabase is mandatory fallback."""
     dcaribou_count = 0
     try:
         dcaribou_count = _seed_dcaribou_history_scraper()
         LOG.info("dcaribou seed tamamlandı: işlenen yeni oyuncu profili=%s", dcaribou_count)
     except Exception as exc:
         LOG.warning(
-            "dcaribou geçmiş kaynağı kullanılamadı; işlem Felipe API/Supabase fallback ile sürecek: %s",
+            "dcaribou geçmiş kaynağı kullanılamadı; Felipe API/Supabase fallback ile devam ediliyor: %s",
             safe_error_for_log(exc),
         )
 
+    # Do not swallow a failed API/Supabase pass. logged_run must mark the run
+    # failed instead of converting a connection reset into a false green check.
     try:
         felipe_count = seed_felipe_history_fallback()
     except Exception as exc:
         LOG.error(
-            "Felipe API/Supabase fallback beklenmeyen nedenle tamamlanamadı; mevcut Supabase verileri korundu: %s",
+            "Felipe API/Supabase geçmiş ön-doldurması başarısız; checkpoint'ler ve mevcut kayıtlar korundu: %s",
             safe_error_for_log(exc),
         )
-        felipe_count = 0
+        raise RuntimeError(
+            "Felipe API/Supabase geçmiş ön-doldurması tamamlanamadı; güvenli şekilde yeniden çalıştırılmalı."
+        ) from exc
 
-    if dcaribou_count == 0 and felipe_count == 0:
-        LOG.warning(
-            "seed-history güvenli şekilde tamamlandı ancak bu çalışmada yeni geçmiş maç satırı bulunamadı. "
-            "Mevcut Supabase kayıtları silinmedi; Felipe API erişimi ve kadro/checkpoint kayıtları kontrol edilmeli."
-        )
-    else:
-        LOG.info(
-            "seed-history tamamlandı: dcaribou profilleri=%s, Felipe/Supabase maç satırları=%s",
-            dcaribou_count, felipe_count,
-        )
+    LOG.info(
+        "seed-history bu parçada tamamlandı: dcaribou profilleri=%s, Felipe/Supabase maç satırları=%s",
+        dcaribou_count, felipe_count,
+    )
     return dcaribou_count + felipe_count
+
 
 
 def parse_preseed_player_ids(raw: str | None) -> list[str]:
