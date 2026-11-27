@@ -119,6 +119,62 @@ jobs:
           TM_PRESEED_MAX_PLAYERS: "20"
         run: python sync/sync_transfermarkt.py preseed-players --player-ids "$TM_PRESEED_PLAYER_IDS"
 
+      - name: Verify selected player batch rows in Supabase
+        if: github.event.inputs.mode == 'preseed-players'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TM_PRESEED_PLAYER_IDS: ${{ github.event.inputs.player_ids }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          base = os.environ['SUPABASE_URL'].rstrip('/')
+          key = os.environ['SUPABASE_SERVICE_ROLE_KEY']
+          headers = {
+              'apikey': key,
+              'Authorization': f'Bearer {key}',
+              'Accept': 'application/json',
+              'Prefer': 'count=exact',
+              'Range': '0-0',
+          }
+          ids = list(dict.fromkeys(x for x in re.split(r'[,;\\s]+', os.environ.get('TM_PRESEED_PLAYER_IDS', '').strip()) if x))
+          if not ids or len(ids) > 20 or any(not x.isdigit() for x in ids):
+              raise SystemExit('TM_PRESEED_PLAYER_IDS boş, geçersiz veya 20 ID sınırını aşıyor.')
+
+          def count(table, player_id):
+              query = f'{table}?select=tm_id&tm_id=eq.{quote(player_id, safe="")}'
+              request = Request(f'{base}/rest/v1/{query}', headers=headers)
+              with urlopen(request, timeout=30) as response:
+                  content_range = response.headers.get('Content-Range', '')
+                  if '/' not in content_range:
+                      raise RuntimeError(f'{table}: Content-Range sayısı alınamadı: {content_range}')
+                  total = content_range.rsplit('/', 1)[1]
+                  if total == '*':
+                      raise RuntimeError(f'{table}: Supabase toplam kayıt sayısını döndürmedi.')
+                  return int(total)
+
+          tables = (
+              'tm_players',
+              'tm_player_season_stats',
+              'tm_appearances',
+              'tm_market_values',
+              'tm_transfers',
+              'tm_injuries',
+          )
+          for player_id in ids:
+              print(f'--- Transfermarkt ID {player_id} ---')
+              values = {table: count(table, player_id) for table in tables}
+              for table, total in values.items():
+                  print(f'{table}: {total}')
+              if values['tm_players'] != 1:
+                  raise SystemExit(f'{player_id}: tm_players içinde tam 1 oyuncu kaydı bulunmalı.')
+          print(f'BATCH_SUPABASE_VERIFY_OK: {len(ids)} oyuncu kontrol edildi.')
+          PY
+
       - name: Verify persisted player details in Supabase
         if: github.event.inputs.mode == 'refresh-player-missing' || github.event.inputs.mode == 'one-player-test'
         env:
