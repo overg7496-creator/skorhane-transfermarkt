@@ -1055,15 +1055,43 @@ def dispatch_refresh_details_continuation(
         "User-Agent": "SkorHane-Transfermarkt-Queue",
         "Content-Type": "application/json",
     }, method="POST")
-    try:
-        with urlopen(request, timeout=30) as response:
-            response.read()
-            LOG.info("Kalan oyuncular için otomatik devam çalışması kuyruğa alındı (HTTP %s).", response.status)
-            return True
-    except (HTTPError, URLError, TimeoutError) as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:1000] if isinstance(exc, HTTPError) else str(exc)
-        LOG.error("GitHub otomatik devam şu an kuyruğa alınamadı; zamanlanmış kontrol devam edecek: %s", detail)
-        return False
+    # GitHub API can transiently reject workflow_dispatch. Retry a few times;
+    # the hourly sweep is an independent fallback if dispatch remains unavailable.
+    for attempt in range(3):
+        try:
+            with urlopen(request, timeout=30) as response:
+                response.read()
+                LOG.info(
+                    "Kalan oyuncular için otomatik devam çalışması kuyruğa alındı "
+                    "(HTTP %s, deneme %s/3).",
+                    response.status, attempt + 1,
+                )
+                return True
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:1000]
+            transient = exc.code in (408, 425, 429, 500, 502, 503, 504)
+            if not transient or attempt == 2:
+                LOG.error(
+                    "GitHub otomatik devam kuyruğa alınamadı (HTTP %s). "
+                    "Saatlik otomatik kontrol kalan oyuncuları yeniden tarayacak: %s",
+                    exc.code, detail or exc.reason,
+                )
+                return False
+        except (URLError, TimeoutError, OSError) as exc:
+            if attempt == 2:
+                LOG.error(
+                    "GitHub otomatik devam 3 denemede kuyruğa alınamadı. "
+                    "Saatlik otomatik kontrol kalan oyuncuları yeniden tarayacak: %s",
+                    exc,
+                )
+                return False
+        wait_seconds = min(30, 5 * (2 ** attempt))
+        LOG.warning(
+            "GitHub otomatik devam isteği geçici hata aldı; %s saniye sonra tekrar denenecek (%s/3).",
+            wait_seconds, attempt + 1,
+        )
+        time.sleep(wait_seconds)
+    return False
 
 
 def sync_felipeall(
@@ -1585,10 +1613,16 @@ def sync_felipeall(
                 continuation_inputs = (
                     {"competition_id": worker_competition} if worker_competition else {}
                 )
-            dispatch_refresh_details_continuation(
+            dispatched = dispatch_refresh_details_continuation(
                 workflow_file=continuation_workflow,
                 inputs=continuation_inputs,
             )
+            if not dispatched:
+                LOG.error(
+                    "Kalan %s oyuncu için anlık devam tetiklenemedi; "
+                    "saatlik otomatik kontrol aynı lig kuyruğunu yeniden tarayacak.",
+                    len(remaining_due),
+                )
         else:
             LOG.warning(
                 "Kalan detay oyuncuları kuyrukta bırakıldı; otomatik devam için "
