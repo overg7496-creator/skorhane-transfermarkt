@@ -547,6 +547,11 @@ class SyncHelperTests(unittest.TestCase):
         worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
         copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, copy)
+        requested_copy = (ROOT / "SkorHane-Worker-kopyalanabilir.txt").read_text(encoding="utf-8")
+        html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
+        requested_html = (ROOT / "SkorHane-HTML-kopyalanabilir.txt").read_text(encoding="utf-8")
+        self.assertEqual(worker, requested_copy)
+        self.assertEqual(html, requested_html)
         self.assertIn('"pf42:"', worker)
 
     def test_database_saves_goalkeeper_season_fields(self):
