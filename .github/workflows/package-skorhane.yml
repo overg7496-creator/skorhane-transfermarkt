@@ -28,7 +28,7 @@ jobs:
           import subprocess
           from pathlib import Path
           source = Path("SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
-          scripts = re.findall(r"<script\\b[^>]*>([\\s\\S]*?)</script>", source, flags=re.IGNORECASE)
+          scripts = re.findall(r"<script\b[^>]*>([\s\S]*?)</script>", source, flags=re.IGNORECASE)
           if not scripts:
               raise SystemExit("HTML JavaScript bloğu bulunamadı.")
           for index, script in enumerate(scripts, 1):
