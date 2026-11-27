@@ -2984,7 +2984,25 @@ function tmSeasonLabel(value) {
 
 function tmPayloadArray(payload, keys) {
   if (!payload || typeof payload !== "object") return null;
-  for (const key of keys) if (Array.isArray(payload[key])) return payload[key];
+  if (Array.isArray(payload)) return payload;
+  const queue = [{ value: payload, depth: 0 }];
+  const seen = new Set();
+  const nestedKeys = ["items","data","stats","statistics","playerStats","transfers","history","marketValues","market_value_history","marketValueHistory","valuations","matches","matchHistory","appearances","injuries","injuryHistory","results"];
+  while (queue.length) {
+    const current = queue.shift();
+    const value = current && current.value;
+    if (!value || typeof value !== "object" || seen.has(value) || current.depth > 4) continue;
+    seen.add(value);
+    if (Array.isArray(value)) return value;
+    for (const key of keys || []) {
+      if (Array.isArray(value[key])) return value[key];
+    }
+    for (const key of nestedKeys) {
+      const child = value[key];
+      if (Array.isArray(child)) return child;
+      if (child && typeof child === "object") queue.push({ value: child, depth: current.depth + 1 });
+    }
+  }
   return null;
 }
 function tmHasArrayPayload(payload, keys, requireRows = false) {
@@ -4332,6 +4350,7 @@ async function tmPlayer(env, id, executionCtx = null) {
   const bundleSeasonRows = Array.isArray(bundle && bundle.season_stats) ? bundle.season_stats : [];
   const bundleTransfers = Array.isArray(bundle && bundle.transfers) ? bundle.transfers : [];
   const bundleMarketValues = Array.isArray(bundle && bundle.market_values) ? bundle.market_values : [];
+  const bundleInjuries = Array.isArray(bundle && bundle.injuries) ? bundle.injuries : [];
   const recentAppearanceRows = Array.isArray(bundle && bundle.recent_appearances) ? bundle.recent_appearances : [];
   if (!dbRow) return { ...out, err: "Transfermarkt oyuncusu henüz veritabanına senkronize edilmemiş" };
   const sourceByType = Object.fromEntries(sourceRecords.filter(item => item && item.record_type)
@@ -4377,7 +4396,7 @@ async function tmPlayer(env, id, executionCtx = null) {
   const profileRaw = row.profile_payload || {};
   const b = profileRaw.player || profileRaw.data || profileRaw.profile || profileRaw;
   const statsRaw = row.stats_payload || {};
-  let statsRows = Array.isArray(statsRaw) ? statsRaw : (statsRaw.stats || statsRaw.data || statsRaw.items || []);
+  let statsRows = tmPayloadArray(statsRaw, ["stats", "statistics", "playerStats", "data", "items"]) || [];
   let transferRows = bundleTransfers;
   let marketRows = bundleMarketValues;
   if (bundleSeasonRows.length) statsRows = bundleSeasonRows;
@@ -4388,9 +4407,13 @@ async function tmPlayer(env, id, executionCtx = null) {
   out.refreshReason = refreshState.reason || "";
   out.refreshState = refreshState.state || (refreshState.required ? (refreshState.queued ? "queued" : "required") : "current");
   out.refreshRetryAt = refreshState.retryAt || "";
-  const currentSeason = row.current_season_payload || {};
+  const storedCurrentSeason = row.current_season_payload;
+  const currentSeason = storedCurrentSeason && typeof storedCurrentSeason === "object" && Object.keys(storedCurrentSeason).length
+    ? storedCurrentSeason
+    : (sourceByType.current_season_matches || {});
   if ((!Array.isArray(statsRows) || !statsRows.length) && Array.isArray(currentSeason.stats)) statsRows = currentSeason.stats;
-  const listPayload = (raw, keys) => Array.isArray(raw) ? raw : (raw && typeof raw === "object" ? keys.map(k => raw[k]).find(Array.isArray) || [] : []);
+  const listPayload = (raw, keys) => tmPayloadArray(raw, keys) || [];
+  const rawCurrentMatches = listPayload(currentSeason, ["matches", "matchHistory", "data", "items"]);
   const transferRaw = row.transfers_payload || {};
   const payloadTransfers = listPayload(transferRaw, ["transfers", "history", "items", "data"]);
   try {
@@ -4419,28 +4442,50 @@ async function tmPlayer(env, id, executionCtx = null) {
   }
   if (!marketRows.length) marketRows = listPayload(row.market_value_payload || {}, ["market_value_history", "marketValueHistory", "history", "marketValues", "valuations", "items", "data"]);
   out.marketValueHistory = marketRows;
-  out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]).map(item => ({ ...item, injury: item.injury || item.reason || item.type || item.description || item.injuryType || "", from_date: item.from_date || item.fromDate || item.from || item.startDate || item.start || "", until_date: item.until_date || item.untilDate || item.until || item.endDate || item.end || "", season: item.season || item.seasonName || item.season_id || "", days: item.days ?? item.daysMissed ?? item.durationDays, games_missed: item.games_missed ?? item.gamesMissed ?? item.missedMatches }));
+  const rawInjuryRows = bundleInjuries.length ? bundleInjuries : listPayload(row.injuries_payload || {}, ["injuries", "data", "items", "injuryHistory"]);
+  out.injuries = rawInjuryRows.map(item => {
+    const payload = item && item.payload && typeof item.payload === "object" ? item.payload : item || {};
+    return {
+      ...payload,
+      injury: item.injury || payload.injury || payload.reason || payload.type || payload.description || payload.injuryType || "",
+      from_date: item.from_date || payload.from_date || payload.fromDate || payload.from || payload.startDate || payload.start || "",
+      until_date: item.until_date || payload.until_date || payload.untilDate || payload.until || payload.endDate || payload.end || "",
+      season: item.season || payload.season || payload.seasonName || payload.season_id || "",
+      days: item.days ?? payload.days ?? payload.daysMissed ?? payload.durationDays,
+      games_missed: item.games_missed ?? payload.games_missed ?? payload.gamesMissed ?? payload.missedMatches
+    };
+  });
   out.absences = listPayload(row.absences_payload || {}, ["absences", "data", "items"]);
-  out.recentMatches = recentAppearanceRows.map(item => {
+  const recentSourceRows = recentAppearanceRows.length ? recentAppearanceRows : rawCurrentMatches.filter(match => {
+    const playerData = match && match.player && typeof match.player === "object" ? match.player : match || {};
+    const minutes = Number(pick(playerData, "minutesPlayed", "minutes_played", "minutes", "playedMinutes"));
+    const status = String(pick(playerData, "playerStatus", "participation", "status") || "").toLowerCase();
+    const started = pick(playerData, "isStarting", "isStartingEleven", "is_starting", "started", "startingXI") === true;
+    return (Number.isFinite(minutes) && minutes > 0) || started || /played|start|substitut/.test(status);
+  }).map(payload => ({ payload }));
+  const numberOrNull = value => value == null || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
+  out.recentMatches = recentSourceRows.map(item => {
     const payload = item && item.payload && typeof item.payload === "object" ? item.payload : {};
     const playerPayload = payload.player && typeof payload.player === "object" ? payload.player : payload;
-    const club = String(item && item.club_name || payload.club_name || payload.team_name || payload.teamName || "");
-    const opponent = String(item && item.opponent_name || payload.opponent_name || payload.opponentName || payload.opponent || "");
+    const label = value => typeof value === "object" && value ? (value.name || value.displayName || value.clubName || value.teamName || "") : value;
+    const club = String(item && item.club_name || label(payload.club_name || payload.playerClubName || payload.club || payload.team || payload.teamName) || "");
+    const opponent = String(item && item.opponent_name || label(payload.opponent_name || payload.opponentName || payload.opponent || payload.opposition) || "");
     const ratingRaw = pick(playerPayload, "rating", "playerRating", "player_rating", "averageRating", "average_rating");
     const rating = ratingRaw === "" || ratingRaw == null || !Number.isFinite(Number(ratingRaw)) ? null : Number(ratingRaw);
-    const numberOrNull = value => value == null || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
     return {
-      id: String(item && (item.game_id || item.id) || payload.game_id || payload.match_id || ""),
-      date: String(item && item.played_at || payload.played_at || payload.date || ""),
+      id: String(item && (item.game_id || item.id) || payload.game_id || payload.gameId || payload.match_id || ""),
+      date: String(item && item.played_at || payload.played_at || payload.date || payload.matchDate || ""),
       home: { name: club || "Takım bilgisi yok", logo: String(payload.club_logo || payload.team_logo || "") },
       away: { name: opponent || "Rakip bilgisi yok", logo: String(payload.opponent_logo || "") },
       scoreHome: null, scoreAway: null, isHome: null,
-      league: String(item && item.competition_name || payload.competition_name || payload.league || "Maç"),
+      league: String(item && item.competition_name || payload.competition_name || payload.competition || payload.league || "Maç"),
       leagueCode: String(payload.competition_code || payload.league_code || ""),
-      rating, goals: numberOrNull(item && item.goals), assists: numberOrNull(item && item.assists),
-      minutes: numberOrNull(item && item.minutes), databaseSource: "Supabase"
+      rating, goals: numberOrNull(item && item.goals != null ? item.goals : pick(playerPayload, "goals", "playerGoals")),
+      assists: numberOrNull(item && item.assists != null ? item.assists : pick(playerPayload, "assists", "playerAssists")),
+      minutes: numberOrNull(item && item.minutes != null ? item.minutes : pick(playerPayload, "minutesPlayed", "minutes_played", "minutes", "playedMinutes")),
+      databaseSource: recentAppearanceRows.length ? "Supabase · tm_appearances" : "Supabase · current_season_payload"
     };
-  });
+  }).filter(item => item.date).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 13);
   out.photo = row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "";
   const nationality = pick(b, "citizenship", "nationality", "nationalities");
   const nat = Array.isArray(nationality) ? nationality.join(", ") : nationality || "";
@@ -4511,6 +4556,13 @@ async function tmPlayer(env, id, executionCtx = null) {
     out.seasons = [...mp.values()];
   }
 
+  out.dataCoverage = {
+    recentMatches: out.recentMatches.length,
+    careerSeasons: out.seasons.length,
+    injuries: out.injuries.length,
+    transfers: out.transfers.length,
+    marketValueHistory: out.marketValueHistory.length
+  };
   return out;
 }
 async function tsdbPlayer(id) {
