@@ -24,6 +24,8 @@ class PlayerProfileFallbackTests(unittest.TestCase):
     def test_diagnostic_reports_all_requested_database_tables(self):
         for field in (
             "exact_player_rows",
+            "resolved_tm_id",
+            "normalized_candidate_match_count",
             "numeric_id_format_matches",
             "appearances_rows",
             "season_stats_rows",
@@ -36,6 +38,12 @@ class PlayerProfileFallbackTests(unittest.TestCase):
         ):
             with self.subTest(field=field):
                 self.assertIn("'" + field + "'", self.sql)
+
+
+    def test_profile_rpc_resolves_a_unique_numeric_id_format_match(self):
+        self.assertIn("resolved_tm_id", self.sql)
+        self.assertIn("select count(*)", self.sql)
+        self.assertIn("regexp_replace(p.tm_id, '[^0-9]', '', 'g')", self.sql)
 
     def test_worker_falls_back_to_current_season_matches(self):
         self.assertIn("rawCurrentMatches", self.worker)
