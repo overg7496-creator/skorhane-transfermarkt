@@ -20,6 +20,8 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         cls.source_truth_sql = (ROOT / "database" / "verify_leaderboard_source_truth.sql").read_text(encoding="utf-8")
         cls.leaderboard_sql = (ROOT / "database" / "009_leaderboard_from_player_season_stats.sql").read_text(encoding="utf-8").lower()
         cls.cache_sql = (ROOT / "database" / "010_indexed_league_season_cache.sql").read_text(encoding="utf-8").lower()
+        cls.detail_dashboard_sql = (ROOT / "database" / "013_player_detail_completion_dashboard.sql").read_text(encoding="utf-8").lower()
+        cls.detail_dashboard_verify_sql = (ROOT / "database" / "verify_player_detail_completion_dashboard.sql").read_text(encoding="utf-8").lower()
 
     def test_migration_007_has_valid_season_function_dollar_quotes(self):
         self.assertIn("as $$\n  select case", self.sql007)
@@ -164,6 +166,27 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn("'assists'", self.source_truth_sql)
         self.assertIn("dense_rank() over", self.source_truth_sql.lower())
         self.assertLess(len(self.source_truth_sql.splitlines()), 140)
+
+
+    def test_per_league_player_detail_completion_dashboard(self):
+        sql = self.detail_dashboard_sql
+        self.assertIn("create or replace view public.tm_league_player_detail_sync_dashboard", sql)
+        self.assertIn("tm_leader_season_start_year(q.season_id) between 2022 and 2026", sql)
+        self.assertIn("'tr1', 'tr2', 'tr3a', 'tr3b'", sql)
+        self.assertIn("distinct on (r.external_id, r.record_type)", sql)
+        self.assertIn("player_market_values", sql)
+        self.assertIn("player_stats", sql)
+        self.assertIn("player_transfers", sql)
+        self.assertIn("player_injuries", sql)
+        self.assertIn("refresh_cutoff", sql)
+        self.assertIn("players_with_all_four_core_sections_completed", sql)
+        self.assertIn("players_missing_at_least_one_core_section", sql)
+        self.assertIn("players_remaining_market_value", sql)
+        self.assertIn("players_remaining_career_stats", sql)
+        self.assertIn("players_remaining_transfers", sql)
+        self.assertIn("players_remaining_injuries", sql)
+        self.assertIn("grant select on public.tm_league_player_detail_sync_dashboard to service_role", sql)
+        self.assertIn("from public.tm_league_player_detail_sync_dashboard", self.detail_dashboard_verify_sql)
 
 
 if __name__ == "__main__":
