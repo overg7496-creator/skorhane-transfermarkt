@@ -1747,7 +1747,7 @@ function pitchIsGoalkeeper(entry) {
 function pitchAggregateRows(map) {
   return [...map.values()].map(row => ({ ...row, team: [...row.teams].join(" / ") }))
     .sort((a, b) => b.value - a.value || a.player.localeCompare(b.player, "tr"))
-    .slice(0, 50).map((row, index) => ({ rank: index + 1, player: row.player, playerId: row.playerId, team: row.team, value: row.value, logo: row.logo, source: "PitchAPI" }));
+    .map((row, index) => ({ rank: index + 1, player: row.player, playerId: row.playerId, team: row.team, value: row.value, logo: row.logo, source: "PitchAPI" }));
 }
 async function pitchLeaderBatch(env, code, year, offset) {
   if (!pitchApiKey(env)) throw new Error("PitchAPI entegrasyonu için Skor3 Worker ayarlarına PITCH_API_KEY gizli değişkeni eklenmeli.");
@@ -3031,8 +3031,10 @@ function tmPlayerRefreshPlan(row, sourceRecords = [], normalizedCoverage = {}) {
     const sourceHasVerifiedArray = sourceFresh && tmHasArrayPayload(sourceRecord.payload, keys, false);
     return !sourceFresh || (!localHasData && !sourceHasVerifiedArray);
   });
-  // A stale timestamp alone must not hide existing rows from normalized Supabase tables.
-  return { required: missing, stale, missing };
+  // A stale timestamp or one empty source snapshot must not hide the normalized
+  // rows already available for this player's other profile sections.
+  const hasNormalizedData = Object.values(normalizedCoverage || {}).some(Boolean);
+  return { required: missing && !hasNormalizedData, stale, missing };
 }
 
 const TSDB = "https://www.thesportsdb.com/api/v1/json/123/";
