@@ -4091,12 +4091,19 @@ function tmLeaderRows(rows, metric) {
     if (row.club_name && !old.team.includes(String(row.club_name))) old.team = [old.team, String(row.club_name)].filter(Boolean).join(" / ");
   }
   return [...unique.values()]
-    .sort((a,b) => b.value-a.value || a.player.localeCompare(b.player, "tr"))
+    .sort((a,b) => b.value-a.value ||
+      (metric === "goals" ? b.assists-a.assists : metric === "assists" ? b.goals-a.goals : 0) ||
+      b.minutes-a.minutes || a.player.localeCompare(b.player, "tr"))
     .map((row,index) => ({...row, rank:row.rank || index+1}));
 }
 async function tmLeagueData(env, code, year) {
   const competitionId = tmCompetitionIdForCode(code);
-  if (!competitionId) return { found:false, code, season:year, seasons:[], goals:[], assists:[], standings:[], goalLeadersAvailable:false, assistLeadersAvailable:false, metricAvailability:{} };
+  if (!competitionId) return {
+    found:false, code, season:year, seasons:[], goals:[], assists:[], standings:[],
+    goalLeadersAvailable:false, assistLeadersAvailable:false,
+    leaderboardCoverage:{ complete:false, expectedPlayers:0, completedPlayers:0, missingPlayers:0 },
+    metricAvailability:{}
+  };
   const season = String(year);
   const statesQuery = "tm_source_records?select=record_key,payload&source=eq.felipeall&record_type=eq.squad_sync_state&external_id=eq." +
     encodeURIComponent(competitionId) + "&order=record_key.desc";
@@ -4108,19 +4115,46 @@ async function tmLeagueData(env, code, year) {
     "&order=leader_rank.asc";
   const totalsQuery = "tm_league_player_season_totals?select=tm_id,player_name,photo_url,club_name,appearances,starts,goals,assists,minutes,yellow_cards,red_cards,goals_conceded,clean_sheets" +
     "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) + "&order=tm_id.asc";
+  // A non-empty leaders view is not proof of a complete list. Every player in
+  // the selected league-season roster must have a v2 league-stats checkpoint.
+  const checkpointNeedle = encodeURIComponent(JSON.stringify({
+    coverage_version: 2,
+    scope_competitions: [competitionId],
+    scope_seasons: [season],
+    status: "completed"
+  }));
+  const checkpointQuery = "tm_source_records?select=external_id&source=eq.felipeall&record_type=eq.league_stats_player_checkpoint" +
+    "&payload=cs." + checkpointNeedle + "&order=external_id.asc";
   const tableQuery = "tm_source_records?select=payload&source=eq.felipeall&record_type=eq.competition_table" +
     "&external_id=eq." + encodeURIComponent(competitionId) + "&record_key=eq." + encodeURIComponent(season) + "&limit=1";
-  const [statesR, goalsR, assistsR, totalsR, tableR] = await Promise.allSettled([
+  const [statesR, goalsR, assistsR, totalsR, checkpointsR, tableR] = await Promise.allSettled([
     tmDbRowsPaged(env, statesQuery, 1000, 40000),
     tmDbRowsPaged(env, goalsQuery, 1000, 10000),
     tmDbRowsPaged(env, assistsQuery, 1000, 10000),
     tmDbRowsPaged(env, totalsQuery, 1000, 10000),
+    tmDbRowsPaged(env, checkpointQuery, 1000, 20000),
     tmDbRows(env, tableQuery)
   ]);
   const states = statesR.status === "fulfilled" ? statesR.value : [];
   const goals = goalsR.status === "fulfilled" ? tmLeaderRows(goalsR.value, "goals") : [];
   const assists = assistsR.status === "fulfilled" ? tmLeaderRows(assistsR.value, "assists") : [];
   const totals = totalsR.status === "fulfilled" ? totalsR.value : [];
+  const expectedPlayerIds = [...new Set(totals.map(row => String(row && row.tm_id || "").trim()).filter(Boolean))];
+  const completedPlayerIds = new Set(checkpointsR.status === "fulfilled"
+    ? checkpointsR.value.map(row => String(row && row.external_id || "").trim()).filter(Boolean)
+    : []);
+  const completedPlayers = expectedPlayerIds.filter(id => completedPlayerIds.has(id)).length;
+  const coverageComplete = totalsR.status === "fulfilled" &&
+    checkpointsR.status === "fulfilled" &&
+    expectedPlayerIds.length > 0 &&
+    completedPlayers === expectedPlayerIds.length;
+  const leaderboardCoverage = {
+    complete: coverageComplete,
+    expectedPlayers: expectedPlayerIds.length,
+    completedPlayers,
+    missingPlayers: Math.max(0, expectedPlayerIds.length - completedPlayers),
+    version: 2
+  };
   const metricFields = {
     appearances:"appearances", starts:"starts", minutes:"minutes", yellow:"yellow_cards",
     red:"red_cards", goalsConceded:"goals_conceded", cleanSheets:"clean_sheets"
@@ -4128,23 +4162,26 @@ async function tmLeagueData(env, code, year) {
   const leaders = Object.fromEntries(Object.entries(metricFields).map(([key, field]) => [
     key, tmLeaderRows(totals, field)
   ]));
-  const metricAvailability = Object.fromEntries(Object.entries(leaders).map(([key, rows]) => [key, rows.length > 0]));
+  // An empty list is complete only when the player-by-player sync coverage is complete.
+  const metricAvailability = Object.fromEntries(Object.keys(leaders).map(key => [key, coverageComplete]));
   const tableRecord = tableR.status === "fulfilled" ? tableR.value[0] : null;
-  const goalLeadersAvailable = goalsR.status === "fulfilled" && goals.length > 0;
-  const assistLeadersAvailable = assistsR.status === "fulfilled" && assists.length > 0;
+  const goalLeadersAvailable = coverageComplete && goalsR.status === "fulfilled";
+  const assistLeadersAvailable = coverageComplete && assistsR.status === "fulfilled";
   return {
     found: !!(goalLeadersAvailable || assistLeadersAvailable || Object.values(metricAvailability).some(Boolean) || states.length || tableRecord),
-    goalLeadersAvailable, assistLeadersAvailable, metricAvailability,
+    goalLeadersAvailable, assistLeadersAvailable, metricAvailability, leaderboardCoverage,
     code: competitionId, requestedCode:code, season:Number(season),
     seasons:tmSeasonRows(states), goals, assists, leaders,
     standings:tmExtractTableRows(tableRecord && tableRecord.payload),
     syncState: states.find(row => String(row.record_key) === season)?.payload || null,
     errors: {
       goals: goalsR.status === "rejected" ? String(goalsR.reason && goalsR.reason.message || goalsR.reason) : "",
-      assists: assistsR.status === "rejected" ? String(assistsR.reason && assistsR.reason.message || assistsR.reason) : ""
+      assists: assistsR.status === "rejected" ? String(assistsR.reason && assistsR.reason.message || assistsR.reason) : "",
+      coverage: checkpointsR.status === "rejected" ? String(checkpointsR.reason && checkpointsR.reason.message || checkpointsR.reason) : ""
     }
   };
 }
+
 async function tmTeamData(env, code, year, teamName) {
   const competitionId = tmCompetitionIdForCode(code);
   if (!competitionId || !String(teamName || "").trim()) return { found:false, roster:[], players:[], seasons:[] };
@@ -4283,7 +4320,11 @@ async function tmPlayer(env, id) {
   const out = { photo: "", bio: {}, seasons: [], transfers: [], marketValueHistory: [], injuries: [], absences: [], recentMatches: [] };
   const playerId = String(id || "").replace(/\D/g, "");
   if (!playerId) return { ...out, err: "geçersiz Transfermarkt oyuncu kimliği" };
-  const bundle = await tmDbRpc(env, "tm_player_profile_bundle", { p_tm_id: playerId });
+  const bundleCache = await cached("tm-player-profile-bundle:v3:" + playerId, async () => {
+    const value = await tmDbRpc(env, "tm_player_profile_bundle", { p_tm_id: playerId });
+    return { body: value, ttl: value && value.player ? 60 : 10 };
+  });
+  const bundle = bundleCache.body;
   const dbRow = bundle && bundle.player;
   const sourceRecords = Array.isArray(bundle && bundle.source_records) ? bundle.source_records : [];
   const bundleSeasonRows = Array.isArray(bundle && bundle.season_stats) ? bundle.season_stats : [];
@@ -4473,7 +4514,9 @@ async function tmPlayer(env, id) {
       // Do not attribute an unattributed historical row to the player's current club.
       if (!clubLabel) continue;
       if (/^(?:[a-z]{2,5}\.)[a-z0-9._-]+$/i.test(clubLabel) || /\b(?:super lig|bundesliga|premier league|serie a|la liga|ligue 1|champions league|europa league)\b/i.test(clubLabel)) continue;
-      const k = se + "|" + clubLabel;
+      // Same Transfermarkt club ID can have multiple display-name spellings.
+      // Group by ID first, using normalized name only for legacy rows without IDs.
+      const k = se + "|" + (clubId !== "" ? "id:" + String(clubId).trim() : "name:" + teamSearchKey(clubLabel));
       const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Toplam Dakika": null, "Sarı Kart": null, "Kırmızı Kart": null, "Yenilen Gol": null, "Gol Yemeden": null, cats: emptyCats() };
       const m = num(pick(x, "appearances", "apps", "matches")), g = num(pick(x, "goals")), rawAssists = pick(x, "assists"), a = num(rawAssists);
       const rawStarts = pick(x, "starts", "gamesStarted", "appearancesAsStarter", "is_starting"), starts = rawStarts === "" ? null : num(rawStarts);
@@ -4875,7 +4918,7 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     return {date,from,to,kind:endLoan?'Kiralıktan dönüş':loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
   }).filter(x=>x.from||x.to||x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const transfers=tmTransfers;
-  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], recentMatches: out.tm && out.tm.recentMatches || [], tmRefreshRequired: !!(out.tm && out.tm.refreshRequired), tmRefreshQueued: !!(out.tm && out.tm.refreshQueued), tmRefreshConfigured: out.tm ? !!out.tm.refreshConfigured : null, tmRefreshReason: out.tm && out.tm.refreshReason || "", tmRefreshState: out.tm && out.tm.refreshState || "", tmRefreshRetryAt: out.tm && out.tm.refreshRetryAt || "", sources: st, stats: null };
+  return { part: part || "all", role: coach ? "coach" : "player", tmId: String(out.tmId || tmId || ""), player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], recentMatches: out.tm && out.tm.recentMatches || [], tmRefreshRequired: !!(out.tm && out.tm.refreshRequired), tmRefreshQueued: !!(out.tm && out.tm.refreshQueued), tmRefreshConfigured: out.tm ? !!out.tm.refreshConfigured : null, tmRefreshReason: out.tm && out.tm.refreshReason || "", tmRefreshState: out.tm && out.tm.refreshState || "", tmRefreshRetryAt: out.tm && out.tm.refreshRetryAt || "", sources: st, stats: null };
 }
 
 // ---------- PitchAPI: seçilen oyuncunun erişilebilir geçmiş sezonlarını maç maç birleştir ----------
@@ -8202,7 +8245,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf48:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf49:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear, executionCtx);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
@@ -8711,8 +8754,8 @@ export default {
       } else if (p === "/tm-league-data") {
         const code = q.get("code") || "", year = Number(q.get("season")) || seasonStartYear();
         if (!/^[a-z0-9._-]+$/i.test(code) || !Number.isInteger(year) || year < 1900 || year > seasonStartYear() + 1) return json({ error: "Geçersiz Transfermarkt ligi veya sezon" }, 400);
-        res = await cached("tm-league-data:v2:" + code + ":" + year, async () => ({
-          body: await tmLeagueData(env, code, year), ttl: 180
+        res = await cached("tm-league-data:v3:" + code + ":" + year, async () => ({
+          body: await tmLeagueData(env, code, year), ttl: 60
         }));
       } else if (p === "/tm-team-data") {
         const code = q.get("code") || "", name = (q.get("name") || "").slice(0, 100), year = Number(q.get("season")) || seasonStartYear();
