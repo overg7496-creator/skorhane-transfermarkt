@@ -1529,8 +1529,66 @@ def run_dcaribou_crawler(name: str, parents: list[dict[str, Any]] | None = None,
     return records, success
 
 def competition_codes(item: dict[str, Any]) -> set[str]:
-    text = " ".join(str(item.get(k) or "") for k in ("href", "competition_id", "id", "code", "competition_name"))
-    return set(re.findall(r"(?<![A-Z0-9])[A-Z]{1,5}\d{1,2}(?![A-Z0-9])", text.upper()))
+    """Resolve Transfermarkt league codes from hrefs or the country's metadata.
+
+    dcaribou's competition crawler often exposes numeric competition URLs and
+    keeps the country code/name on the competition row instead of the URL.
+    The previous implementation only scanned URL/name text for e.g. TR1,
+    so valid first-tier rows were silently discarded.
+    """
+    searchable: list[str] = []
+    for key in ("href", "competition_id", "id", "code", "competition_name"):
+        value = item.get(key)
+        if value is not None:
+            searchable.append(str(value))
+
+    parent = item.get("parent")
+    if isinstance(parent, dict):
+        for key in ("country_code", "country_name", "country", "name"):
+            value = parent.get(key)
+            if value is not None:
+                searchable.append(str(value))
+    for key in ("country_code", "country_name"):
+        value = item.get(key)
+        if value is not None:
+            searchable.append(str(value))
+
+    joined = " ".join(searchable).upper()
+    codes = set(re.findall(r"(?<![A-Z0-9])[A-Z]{1,5}\d{1,2}(?![A-Z0-9])", joined))
+
+    def compact(value: str) -> str:
+        # Keep this normalization local so only country labels are normalized.
+        import unicodedata
+        return re.sub(
+            r"[^A-Z0-9]",
+            "",
+            unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii").upper(),
+        )
+
+    country_aliases = {
+        "TR1": {"TR", "TUR", "TURKEY", "TURKIYE"},
+        "GB1": {"GB", "GBR", "ENG", "UK", "UNITEDKINGDOM", "ENGLAND"},
+        "ES1": {"ES", "ESP", "SPAIN", "ESPANA"},
+        "L1": {"DE", "DEU", "GER", "GERMANY", "DEUTSCHLAND"},
+        "IT1": {"IT", "ITA", "ITALY", "ITALIA"},
+        "FR1": {"FR", "FRA", "FRANCE"},
+    }
+    country_values = [
+        str(item.get("country_code") or ""),
+        str(item.get("country_name") or ""),
+    ]
+    if isinstance(parent, dict):
+        country_values.extend([
+            str(parent.get("country_code") or ""),
+            str(parent.get("country_name") or ""),
+            str(parent.get("country") or ""),
+        ])
+    normalized_countries = {compact(value) for value in country_values if value}
+    for league_code, aliases in country_aliases.items():
+        if normalized_countries & aliases:
+            codes.add(league_code)
+
+    return codes
 
 
 def seed_checkpoint_payload(record_key: str) -> dict[str, Any]:
