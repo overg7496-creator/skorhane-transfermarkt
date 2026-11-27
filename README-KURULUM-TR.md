@@ -47,8 +47,9 @@ Cloudflare Worker (skor3)
 6. `database/005_player_profile_fallbacks.sql` dosyasını çalıştır. Bu migration ayrı `tm_injuries` tablosunu oluşturur, eski JSON sakatlık kayıtlarını geri doldurur, oyuncu profil RPC'sine sakatlık satırlarını ekler ve `tm_player_data_diagnostic(text)` tanı fonksiyonunu oluşturur.
 7. `database/006_player_profile_full_history.sql`, `database/007_leaderboard_accuracy_and_profile_read.sql`, `database/008_profile_leaderboard_accuracy_v3.sql` ve `database/009_leaderboard_from_player_season_stats.sql` dosyalarını sırasıyla çalıştır.
 8. `database/010_indexed_league_season_cache.sql` dosyasını çalıştır. Bu yeni migration oyuncu sezon istatistiklerini tek seferde toplu yazan RPC'yi, lig/sezon bazında indeksli hazır okuma tablosunu ve her oyuncunun verisi geldikten sonra yalnızca o oyuncunun cache satırlarını yenileyen RPC'yi oluşturur. Eski v2 senkron checkpoint'leri kullanılmaz; güncel iş akışı 9 lig × 2022–2026 kapsamını v3 ile yeniden tarar.
-9. Tabloların oluştuğunu doğrula: `tm_players`, `tm_player_season_stats`, `tm_transfers`, `tm_market_values`, `tm_appearances`, `tm_source_records`, `tm_sync_runs`, `tm_team_season_squads`, `tm_league_player_season_totals_cache`.
-10. İki dashboard görünümünü kontrol et:
+9. `database/011_detail_preseed_scope.sql` dosyasını çalıştır. Oyuncu detay ön-doldurma havuzunu yalnızca `TR1,TR2,TR3A,TR3B,GB1,ES1,L1,IT1,FR1` ve 2022–2026 sezon başlangıçlarıyla sınırlar; `TR4A/B/C` ve daha eski sezonları dışarıda bırakır.
+10. Tabloların oluştuğunu doğrula: `tm_players`, `tm_player_season_stats`, `tm_transfers`, `tm_market_values`, `tm_appearances`, `tm_source_records`, `tm_sync_runs`, `tm_team_season_squads`, `tm_league_player_season_totals_cache`.
+11. İki dashboard görünümünü kontrol et:
 
 ```sql
 select *
@@ -175,6 +176,7 @@ Depo Public olsa bile Supabase service-role anahtarı, GitHub PAT veya başka bi
 | `database/004_league_sync_dashboard_detail.sql` | Lig ve sezon bazında ayrıntılı veri kapsamı dashboard görünümleri |
 | `database/006_player_profile_full_history.sql` – `009_leaderboard_from_player_season_stats.sql` | Oyuncu geçmişi, güvenilir lig/sezon istatistik eşlemesi ve liderlik görünümleri |
 | `database/010_indexed_league_season_cache.sql` | Toplu sezon-istatistik UPSERT'i ve indeksli lig/sezon okuma cache'i |
+| `database/011_detail_preseed_scope.sql` | Oyuncu detay ön-doldurmasını 9 lig × 2022–2026 ile sınırlar |
 | `database/verify_nine_league_five_season_coverage.sql` | 9 lig × 5 sezon için 45 satırlık tamlık denetimi |
 | `SkorHane-Worker.js` | Canlı Cloudflare Worker |
 | `SkorHane-Worker-kodu-kopyalanabilir.txt` | Worker ile birebir kopya |
