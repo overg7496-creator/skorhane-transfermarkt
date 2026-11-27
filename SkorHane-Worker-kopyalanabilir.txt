@@ -4123,7 +4123,7 @@ async function tmLeagueData(env, code, year) {
     status: "completed",
     completed_scope_keys: [scopeKey]
   }));
-  const checkpointQuery = "tm_source_records?select=external_id&source=eq.felipeall&record_type=eq.league_stats_player_checkpoint" +
+  const checkpointQuery = "tm_source_records?select=external_id,payload&source=eq.felipeall&record_type=eq.league_stats_player_checkpoint" +
     "&payload=cs." + checkpointNeedle + "&order=external_id.asc";
   const rosterQuery = "tm_team_season_player_stats?select=tm_id&competition_id=eq." +
     encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
@@ -4146,7 +4146,10 @@ async function tmLeagueData(env, code, year) {
   const expectedPlayerIds = [...new Set((rosterR.status === "fulfilled" ? rosterR.value : [])
     .map(row => String(row && row.tm_id || "").trim()).filter(Boolean))];
   const completedPlayerIds = new Set(checkpointsR.status === "fulfilled"
-    ? checkpointsR.value.map(row => String(row && row.external_id || "").trim()).filter(Boolean)
+    ? checkpointsR.value
+      .filter(row => row && row.payload && row.payload.status === "completed" &&
+        Number(row.payload.coverage_version) === 2 && row.payload.no_matching_league_rows !== true)
+      .map(row => String(row.external_id || "").trim()).filter(Boolean)
     : []);
   const completedPlayers = expectedPlayerIds.filter(id => completedPlayerIds.has(id)).length;
   const coverageComplete = rosterR.status === "fulfilled" &&
