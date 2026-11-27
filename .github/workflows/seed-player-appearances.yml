@@ -44,7 +44,7 @@ jobs:
       - name: Install historical Transfermarkt scraper
         run: |
           python -m pip install --disable-pip-version-check --upgrade pip
-          python -m pip install "git+https://github.com/dcaribou/transfermarkt-scraper.git"
+          python -m pip install "git+https://github.com/dcaribou/transfermarkt-scraper.git@6c1eb59a59349f6869155164808e17c617b0e80d"
 
       - name: Validate sync script
         run: python -m py_compile sync/sync_transfermarkt.py
