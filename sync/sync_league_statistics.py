@@ -298,29 +298,52 @@ def matching_targets(stat: dict[str, Any], targets: list[dict[str, Any]]) -> lis
     return matches
 
 def identity_conflict_scope_keys(stat: dict[str, Any], targets: list[dict[str, Any]]) -> set[str]:
-    """Flag only same-season/name rows whose same-namespace provider IDs conflict."""
+    """Flag provider rows that belong to this league-season but no imported club stint."""
     year = season_start_year(text_value(stat, "season_id", "seasonId", "seasonID", "season"))
     competition_id = stat_competition_id(stat)
     competition = norm(stat_competition_name(stat))
     club_id = stat_club_id(stat)
     club = norm(stat_club_name(stat))
     conflicts: set[str] = set()
-    if year is None or not competition:
+    if year is None or (not competition_id and not competition):
         return conflicts
+
+    same_scope: list[dict[str, Any]] = []
     for target in targets:
-        if target.get("season_start") != year or competition != norm(target.get("competition_name")):
+        if target.get("season_start") != year:
             continue
         target_competition_id = str(target.get("competition_id") or "").strip()
-        if (competition_id and target_competition_id and
-                competition_ids_share_namespace(competition_id, target_competition_id) and
-                competition_id != target_competition_id):
-            conflicts.add(f"{target_competition_id}:{target.get('season_id')}")
-            continue
-        target_club_id = str(target.get("club_id") or "").strip()
-        target_club = norm(target.get("club_name"))
-        if (club and club == target_club and club_id and target_club_id and
-                stat_ids_share_namespace(club_id, target_club_id) and club_id != target_club_id):
-            conflicts.add(f"{target_competition_id}:{target.get('season_id')}")
+        target_competition = norm(target.get("competition_name"))
+        if competition_id and target_competition_id and competition_ids_share_namespace(competition_id, target_competition_id):
+            same_competition = competition_id == target_competition_id
+        else:
+            same_competition = bool(competition and target_competition and competition == target_competition)
+        if same_competition:
+            same_scope.append(target)
+
+    if not same_scope:
+        return conflicts
+
+    scope_key = target_scope_key(same_scope[0])
+    target_club_ids = {
+        str(target.get("club_id") or "").strip()
+        for target in same_scope
+        if str(target.get("club_id") or "").strip()
+    }
+    comparable_ids = {
+        value for value in target_club_ids
+        if club_id and stat_ids_share_namespace(club_id, value)
+    }
+    if club_id and comparable_ids and club_id not in comparable_ids:
+        # The provider reports a club in this league-season, but no imported
+        # roster stint has that ID. Do not silently create a false zero row.
+        conflicts.add(scope_key)
+        return conflicts
+
+    if club_id and target_club_ids and not comparable_ids:
+        matching_name = any(club and club == norm(target.get("club_name")) for target in same_scope)
+        if matching_name:
+            conflicts.add(scope_key)
     return conflicts
 
 def map_stat_payloads(tm_id: str, stat: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -573,6 +596,7 @@ def run() -> int:
                 # zero league appearances; persist those zeros instead of leaving
                 # the player invisible in the season read model.
                 zero_filled_scope_keys: set[str] = set()
+                zero_filled_row_count = 0
                 for target in targets[player_id]:
                     scope_key = target_scope_key(target)
                     if scope_key in unmatched_scope_keys:
@@ -581,6 +605,7 @@ def run() -> int:
                     if identity not in mapped_by_identity:
                         mapped_by_identity[identity] = zero_stat_payload(player_id, target)
                         zero_filled_scope_keys.add(scope_key)
+                        zero_filled_row_count += 1
 
                 rows_to_save = list(mapped_by_identity.values())
                 if rows_to_save:
@@ -606,7 +631,7 @@ def run() -> int:
                     "attempts": attempts,
                     "stats_rows_seen": len(stat_rows),
                     "stats_rows_saved": len(rows_to_save),
-                    "provider_stat_rows_saved": len(mapped_by_identity) - len(zero_filled_scope_keys),
+                    "provider_stat_rows_saved": len(mapped_by_identity) - zero_filled_row_count,
                     "matched_scope_keys": sorted(matched_scope_keys),
                     "zero_filled_scope_keys": sorted(zero_filled_scope_keys),
                     "completed_scope_keys": completed_scope_keys,
@@ -621,7 +646,7 @@ def run() -> int:
                 }
                 totals["players_fetched"] += 1
                 totals["stat_rows_saved"] += len(rows_to_save)
-                totals["zero_rows_filled"] += len(zero_filled_scope_keys)
+                totals["zero_rows_filled"] += zero_filled_row_count
                 if not stat_rows:
                     totals["no_stats"] += 1
                 if index == 1 or index % 25 == 0:
