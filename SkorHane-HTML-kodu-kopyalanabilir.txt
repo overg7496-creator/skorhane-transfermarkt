@@ -3924,8 +3924,8 @@ async function loadPitchPlayerCareer(my){
     : 'Transfermarkt sezon kaydı bulunamadı';
   renderPlayer();
 }
-const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v7.'+pitchClientTeamKey(name||'');
-const playerInfoCacheKey=name=>'skorhane.playerinfo.v1.'+pitchClientTeamKey(name||'');
+const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v8.'+pitchClientTeamKey(name||'');
+const playerInfoCacheKey=name=>'skorhane.playerinfo.v2.'+pitchClientTeamKey(name||'');
 function readPlayerInfoCache(name){try{const raw=localStorage.getItem(playerInfoCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<30*86400e3&&x.data&&typeof x.data==='object'&&x.data.bio&&typeof x.data.bio==='object'?x.data:null}catch(_){return null}}
 function savePlayerInfoCache(name,data){try{if(data&&typeof data==='object'&&data.bio&&typeof data.bio==='object')localStorage.setItem(playerInfoCacheKey(name),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
 function readPlayerStatsCache(name){try{const raw=localStorage.getItem(playerStatsCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<7*86400e3&&x.data&&Array.isArray(x.data.seasons)?x.data:null}catch(_){return null}}
