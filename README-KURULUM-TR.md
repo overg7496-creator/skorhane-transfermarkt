@@ -57,7 +57,7 @@ from public.tm_league_sync_dashboard_seasons
 order by competition_id, season_id desc;
 ```
 
-İlk görünüm liglerin genel veri kapsamını; ikinci görünüm her lig/sezonun takım, oyuncu, piyasa değeri, sakatlık/transfer kapsamı, performans istatistikleri, gol/asist liderleri, puan tablosu ve kadro aktarım durumunu ayrı ayrı gösterir.
+İlk görünüm liglerin genel veri kapsamını; ikinci görünüm her lig/sezonun takım, oyuncu, piyasa değeri, sakatlık/transfer kapsamı, performans istatistikleri, gol/asist liderleri, puan tablosu ve kadro aktarım durumunu ayrı ayrı gösterir. Ayrıca `raw_stat_metric_coverage` JSON alanı, standartlaştırılmış alanların dışındaki kaynak istatistik metriklerini de dinamik olarak listeler; her metrik için kaç oyuncuda bulunduğunu, kaç kayıt içerdiğini ve sayısal toplamını verir.
 
 Şema RLS'i etkinleştirir; tablolar `anon` ve `authenticated` rollerine kapalıdır. Yazma/okuma işlemlerinde yalnızca sunucu tarafı `service_role` anahtarı kullanılır. Bu anahtarı HTML'e veya tarayıcı JavaScript'ine asla koyma.
 
