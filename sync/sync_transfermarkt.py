@@ -291,6 +291,7 @@ DETAIL_ENDPOINTS = {
     "transfers": ("transfers_payload", "player_transfers", ("transfers", "history", "items", "data")),
     "stats": ("stats_payload", "player_stats", ("stats", "data", "items")),
     "injuries": ("injuries_payload", "player_injuries", ("injuries", "data", "items")),
+    "matches": ("current_season_payload", "current_season_matches", ("matches", "matchHistory", "data", "items")),
 }
 
 
@@ -301,13 +302,23 @@ DETAIL_REPAIR_CUTOFF = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
 
 def player_detail_refresh_plan(tm_id: str, player: dict[str, Any]) -> set[str]:
     """Return only missing or stale Felipe endpoint names for one player."""
-    record_types = ",".join(item[1] for item in DETAIL_ENDPOINTS.values())
+    record_types = ",".join(item[1] for endpoint, item in DETAIL_ENDPOINTS.items())
     rows = db_get(
-        "tm_source_records?select=record_type,fetched_at"
+        "tm_source_records?select=record_type,record_key,fetched_at"
         f"&source=eq.felipeall&external_id=eq.{quote(str(tm_id))}"
-        f"&record_key=eq.&record_type=in.({record_types})&limit=20"
+        f"&record_type=in.({record_types})&order=fetched_at.desc&limit=100"
     )
-    fetched = {str(row.get("record_type")): row.get("fetched_at") for row in rows if isinstance(row, dict)}
+    fetched: dict[str, Any] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        record_type = str(row.get("record_type") or "")
+        # Current-season snapshots are keyed by season; ignore historical season keys.
+        if record_type == "current_season_matches" and str(row.get("record_key") or "") != str(TM_SEASON):
+            continue
+        # Query is newest-first; keep the latest checked snapshot per endpoint.
+        if record_type and record_type not in fetched:
+            fetched[record_type] = row.get("fetched_at")
     stale_days = max(1, int(os.getenv("TM_DETAIL_STALE_DAYS", "7")))
     cutoff = max(datetime.now(timezone.utc) - timedelta(days=stale_days), DETAIL_REPAIR_CUTOFF)
     due: set[str] = set()
@@ -1081,11 +1092,12 @@ def sync_felipeall(
             progress["endpoint"] = "injuries"
             injuries_payload = (fetch_player_paged_rows(base, "/injuries", "injuries")
                                 if "injuries" in refresh_endpoints else existing_injuries)
-            absences_payload = existing_absences
+            absences_payload = (
+                fetch_player_paged_rows(base, "/absences", "absences")
+                if "absences" in refresh_endpoints else existing_absences
+            )
 
-            if not missing_only:
-                progress["endpoint"] = "absences"
-                absences_payload = fetch_player_paged_rows(base, "/absences", "absences")
+            if "matches" in refresh_endpoints:
                 progress["endpoint"] = "matches"
                 matches = get_player_current_matches(base, tm_id)
                 current_stats = build_current_season_stats(matches)
@@ -1095,7 +1107,6 @@ def sync_felipeall(
                     "matches": matches,
                     "stats": current_stats,
                 }
-                refresh_endpoints.update({"absences", "matches"})
             else:
                 current_payload = existing_current
                 current_stats = current_payload.get("stats", []) if isinstance(current_payload.get("stats"), list) else []
@@ -1216,6 +1227,11 @@ def sync_felipeall(
                 source_record_snapshot("felipeall", "player_absences", tm_id, "", absences_payload)
             if "matches" in refresh_endpoints:
                 source_record_snapshot("felipeall", "current_season_matches", tm_id, str(TM_SEASON), current_payload)
+                saved_appearances = persist_felipe_history_appearances(tm_id, str(TM_SEASON), matches)
+                LOG.info(
+                    "Güncel sezon maçları appearance tablosuna işlendi: ID=%s | API satırı=%s | oynanmış maç=%s",
+                    tm_id, len(matches), saved_appearances,
+                )
 
             # Resolve club IDs in Transfermarkt season-stat rows using profile and
             # the player's own transfer history, avoiding guesses from other providers.
@@ -2421,8 +2437,69 @@ def parse_preseed_player_ids(raw: str | None) -> list[str]:
     return ids
 
 
+def parse_player_match_seasons(raw_seasons: str | None) -> list[str]:
+    """Parse a bounded list of Felipe season IDs for targeted match-history seeding."""
+    raw = str(raw_seasons or TM_SEASON).strip()
+    tokens = [item for item in re.split(r"[\s,;]+", raw) if item]
+    if not tokens:
+        tokens = [str(TM_SEASON)]
+    invalid = [item for item in tokens if not re.fullmatch(r"\d{4}", item)]
+    if invalid:
+        raise RuntimeError("Geçersiz sezon ID'si: " + ", ".join(invalid[:10]))
+    seasons = list(dict.fromkeys(tokens))
+    if len(seasons) > 12:
+        raise RuntimeError("Tek çalışmada en fazla 12 sezon destekleniyor.")
+    if any(int(season) < 1900 or int(season) > 9999 for season in seasons):
+        raise RuntimeError("Sezon ID'leri dört basamaklı yıl olmalı.")
+    return seasons
+
+
+def sync_player_match_history(raw_player_ids: str | None, raw_seasons: str | None) -> int:
+    """Fetch explicit Felipe player/season match lists and persist played appearances."""
+    player_ids = parse_preseed_player_ids(raw_player_ids)
+    seasons = parse_player_match_seasons(raw_seasons)
+    if not player_ids:
+        raise RuntimeError(
+            "Maç geçmişi için --player-ids veya TM_PRESEED_PLAYER_IDS ile oyuncu ID'leri verin."
+        )
+    total_saved = 0
+    missing_ids: list[str] = []
+    for index, player_id in enumerate(player_ids, 1):
+        rows = db_get(
+            f"tm_players?select=tm_id,name&tm_id=eq.{quote(player_id)}&limit=1"
+        )
+        if not rows:
+            missing_ids.append(player_id)
+            LOG.warning("Maç geçmişi atlandı: oyuncu tm_players tablosunda yok (ID=%s).", player_id)
+            continue
+        player_name = rows[0].get("name") or player_id
+        for season_id in seasons:
+            LOG.info(
+                "Felipe oyuncu maç geçmişi: %s/%s | %s | ID=%s | sezon=%s",
+                index, len(player_ids), player_name, player_id, season_id,
+            )
+            matches = fetch_felipe_player_season_matches(player_id, season_id)
+            saved = persist_felipe_history_appearances(player_id, season_id, matches)
+            total_saved += saved
+            source_record_snapshot(
+                "felipeall", "player_season_matches", player_id, season_id,
+                {
+                    "season_id": season_id,
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "matches": matches,
+                },
+            )
+            LOG.info(
+                "Felipe oyuncu sezonu tamamlandı: ID=%s | sezon=%s | API maç satırı=%s | oynanmış maç=%s",
+                player_id, season_id, len(matches), saved,
+            )
+    if missing_ids:
+        raise RuntimeError("tm_players içinde bulunmayan oyuncular: " + ", ".join(missing_ids))
+    return total_saved
+
+
 def sync_preseed_players(raw_player_ids: str | None) -> int:
-    """Force-refresh full Felipe player details for an explicit ID list; never call dcaribou."""
+    """Force-refresh full Felipe player details; also seeds current-season appearances."""
     player_ids = parse_preseed_player_ids(raw_player_ids)
     if not player_ids:
         raise RuntimeError(
@@ -2485,15 +2562,22 @@ def sync_preseed_players(raw_player_ids: str | None) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "refresh-imported-details", "refresh-rotation", "seed-history", "one-player-test", "refresh-player-missing", "preseed-players", "has-pending-details"))
+    parser.add_argument("mode", choices=("sync", "import-squads", "refresh-details", "refresh-imported-details", "refresh-rotation", "seed-history", "one-player-test", "refresh-player-missing", "preseed-players", "seed-player-matches", "has-pending-details"))
     parser.add_argument("--player-id", default=os.getenv("TM_TEST_PLAYER_ID", ""))
     parser.add_argument("--player-ids", default=os.getenv("TM_PRESEED_PLAYER_IDS", ""))
+    parser.add_argument("--seasons", default=os.getenv("TM_PRESEED_SEASONS", str(TM_SEASON)))
     args = parser.parse_args()
     require_db()
     if args.mode == "preseed-players":
         logged_run(
             "felipeall", "preseed-players",
             lambda: sync_preseed_players(args.player_ids or args.player_id),
+        )
+        return 0
+    if args.mode == "seed-player-matches":
+        logged_run(
+            "felipeall", "seed-player-matches",
+            lambda: sync_player_match_history(args.player_ids or args.player_id, args.seasons),
         )
         return 0
     if args.mode == "has-pending-details":
