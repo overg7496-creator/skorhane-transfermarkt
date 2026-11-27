@@ -248,6 +248,34 @@ with league_members as (
   select distinct competition_id, competition_name, tm_id
   from public.tm_team_season_squads
 ),
+matched_season_stats as (
+  -- Repeat the exact competition + season + club match for league-wide distinct-player metrics.
+  select distinct
+    q.competition_id,
+    q.season_id,
+    s.id as stat_row_id,
+    s.tm_id,
+    s.appearances,
+    s.starts,
+    s.goals,
+    s.assists,
+    s.minutes,
+    s.yellow_cards,
+    s.second_yellow_cards,
+    s.red_cards,
+    s.goals_conceded,
+    s.clean_sheets
+  from public.tm_team_season_squads q
+  join public.tm_player_season_stats s
+    on s.tm_id = q.tm_id
+   and (
+        s.season_id = q.season_id
+        or s.season_id like q.season_id || '/%'
+        or s.season_id like q.season_id || '-%'
+   )
+   and lower(trim(coalesce(s.competition_name, ''))) = lower(trim(q.competition_name))
+   and lower(trim(coalesce(s.club_name, ''))) = lower(trim(q.club_name))
+),
 league_base as (
   select
     q.competition_id,
