@@ -314,11 +314,13 @@ def identity_conflict_scope_keys(stat: dict[str, Any], targets: list[dict[str, A
             continue
         target_competition_id = str(target.get("competition_id") or "").strip()
         target_competition = norm(target.get("competition_name"))
+        scope_key = target_scope_key(target)
         if competition_id and target_competition_id and competition_ids_share_namespace(competition_id, target_competition_id):
-            same_competition = competition_id == target_competition_id
-        else:
-            same_competition = bool(competition and target_competition and competition == target_competition)
-        if same_competition:
+            if competition_id == target_competition_id:
+                same_scope.append(target)
+            elif competition and competition == target_competition:
+                conflicts.add(scope_key)
+        elif competition and target_competition and competition == target_competition:
             same_scope.append(target)
 
     if not same_scope:
@@ -335,8 +337,8 @@ def identity_conflict_scope_keys(stat: dict[str, Any], targets: list[dict[str, A
         if club_id and stat_ids_share_namespace(club_id, value)
     }
     if club_id and comparable_ids and club_id not in comparable_ids:
-        # The provider reports a club in this league-season, but no imported
-        # roster stint has that ID. Do not silently create a false zero row.
+        # Provider reports a club in this league-season, but no imported roster
+        # stint has that ID. Do not silently create a false zero row.
         conflicts.add(scope_key)
         return conflicts
 
