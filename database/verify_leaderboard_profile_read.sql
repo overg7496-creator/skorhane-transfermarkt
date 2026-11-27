@@ -22,9 +22,8 @@ completed_checkpoints as (
     and r.record_type = 'league_stats_player_checkpoint'
     and r.payload @> jsonb_build_object(
       'coverage_version', 2,
-      'scope_competitions', jsonb_build_array(p.competition_code),
-      'scope_seasons', jsonb_build_array(p.season_id),
-      'status', 'completed'
+      'status', 'completed',
+      'completed_scope_keys', jsonb_build_array(p.competition_code || ':' || p.season_id)
     )
 ),
 coverage as (
