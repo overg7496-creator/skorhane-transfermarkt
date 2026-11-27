@@ -208,8 +208,8 @@ def build_player_targets() -> dict[str, list[dict[str, Any]]]:
                     "club_id": club_id,
                     "club_name": club_name,
                 }
-                identity = (competition_id, str(season_id), club_id, player_id)
-                if all((x["competition_id"], x["season_id"], x["club_id"], player_id) != identity for x in targets[player_id]):
+                identity = (competition_id, str(season_id), club_id, club_name, player_id)
+                if all((x["competition_id"], x["season_id"], x["club_id"], x["club_name"], player_id) != identity for x in targets[player_id]):
                     targets[player_id].append(target)
             try:
                 save_competition_table_if_missing(competition_id, season_id)
@@ -229,10 +229,16 @@ def stat_club_name(row: dict[str, Any]) -> str:
 
 def stat_club_id(row: dict[str, Any]) -> str:
     value = row.get("club_id") or row.get("clubId") or row.get("clubID")
-    if value is None and isinstance(row.get("club"), dict):
-        value = row["club"].get("id") or row["club"].get("clubId")
-    if value is None and isinstance(row.get("team"), dict):
-        value = row["team"].get("id")
+    if value is None:
+        club = row.get("club")
+        if isinstance(club, dict):
+            value = club.get("id") or club.get("clubId")
+        elif club is not None:
+            value = club
+    if value is None:
+        team = row.get("team")
+        if isinstance(team, dict):
+            value = team.get("id")
     return str(value).strip() if value is not None else ""
 
 def matching_targets(stat: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
