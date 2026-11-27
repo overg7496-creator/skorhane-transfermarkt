@@ -459,6 +459,28 @@ class SyncHelperTests(unittest.TestCase):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
         self.assertIn("case when p_source = 'dcaribou' then tm_players.current_market_value_eur", schema)
 
+    def test_dcaribou_competition_codes_fall_back_to_country_metadata(self):
+        cases = [
+            ({"competition_type": "first_tier", "country_name": "Türkiye", "href": "/super-lig/startseite/wettbewerb/123"}, "TR1"),
+            ({"competition_type": "first_tier", "country_name": "England", "href": "/premier-league/startseite/wettbewerb/111"}, "GB1"),
+            ({"competition_type": "first_tier", "country_code": "ESP", "href": "/laliga/startseite/wettbewerb/222"}, "ES1"),
+            ({"competition_type": "first_tier", "parent": {"country_name": "Germany"}}, "L1"),
+            ({"competition_type": "first_tier", "country_code": "ITA"}, "IT1"),
+            ({"competition_type": "first_tier", "country_name": "France"}, "FR1"),
+        ]
+        for item, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertIn(expected, sync.competition_codes(item))
+
+    def test_dcaribou_competition_code_in_href_is_preserved(self):
+        self.assertIn(
+            "TR1",
+            sync.competition_codes({
+                "competition_type": "first_tier",
+                "href": "/super-lig/startseite/wettbewerb/TR1",
+            }),
+        )
+
     def test_historical_seed_uses_checkpoints_and_small_batches(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
         workflow = (ROOT / ".github" / "workflows" / "seed-player-appearances.yml").read_text(encoding="utf-8")
