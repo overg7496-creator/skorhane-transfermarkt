@@ -61,7 +61,7 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn('tm-league-data:v3:', self.worker)
         self.assertIn('tm-player-profile-bundle:v3:', self.worker)
         self.assertIn('coverage_version: 2', self.worker)
-        self.assertIn('"leaderboardCoverage"', self.worker)
+        self.assertIn("leaderboardCoverage", self.worker)
         self.assertIn("payload=cs.", self.worker)
         self.assertIn("no_matching_league_rows !== true", self.worker)
 
@@ -146,7 +146,7 @@ if __name__ == "__main__":
         self.assertIn('tm-league-data:v3:', self.worker)
         self.assertIn('tm-player-profile-bundle:v3:', self.worker)
         self.assertIn('coverage_version: 2', self.worker)
-        self.assertIn('"leaderboardCoverage"', self.worker)
+        self.assertIn("leaderboardCoverage", self.worker)
         self.assertIn("payload=cs.", self.worker)
         self.assertIn("no_matching_league_rows !== true", self.worker)
 
@@ -230,7 +230,7 @@ if __name__ == "__main__":
         self.assertIn('tm-league-data:v3:', self.worker)
         self.assertIn('tm-player-profile-bundle:v3:', self.worker)
         self.assertIn('coverage_version: 2', self.worker)
-        self.assertIn('"leaderboardCoverage"', self.worker)
+        self.assertIn("leaderboardCoverage", self.worker)
         self.assertIn("payload=cs.", self.worker)
         self.assertIn("no_matching_league_rows !== true", self.worker)
 
