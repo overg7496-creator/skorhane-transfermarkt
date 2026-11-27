@@ -950,6 +950,20 @@ class HistoryFallbackTests(unittest.TestCase):
 
 
 
+    def test_empty_supabase_and_felipe_rosters_are_not_reported_as_success(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(sync, "FELIPE_API_BASE", "http://127.0.0.1:8000"),
+            patch.object(sync, "DCARIBOU_COMPETITIONS", ["TR1"]),
+            patch.object(sync, "DCARIBOU_SEASONS", [2025]),
+            patch.object(sync, "TM_SEASON", 2026),
+            patch.object(sync, "load_supabase_history_roster", return_value=[]),
+            patch.object(sync, "fetch_felipe_history_roster", return_value=[]),
+            self.assertRaisesRegex(RuntimeError, "oyuncu-sezon çifti bulunamadı"),
+        ):
+            sync.seed_felipe_history_fallback()
+
     def test_seed_history_does_not_swallow_felipe_database_failure(self):
         from unittest.mock import patch
 
