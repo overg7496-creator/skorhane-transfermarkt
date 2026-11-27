@@ -8,6 +8,7 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.sql = (ROOT / "database" / "008_profile_leaderboard_accuracy_v3.sql").read_text(encoding="utf-8").lower()
+        cls.sql007 = (ROOT / "database" / "007_leaderboard_accuracy_and_profile_read.sql").read_text(encoding="utf-8").lower()
         cls.worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
         cls.worker_copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         cls.requested_worker_copy = (ROOT / "SkorHane-Worker-kopyalanabilir.txt").read_text(encoding="utf-8")
@@ -17,6 +18,12 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         cls.league_sync = (ROOT / "sync" / "sync_league_statistics.py").read_text(encoding="utf-8")
         cls.verify_sql = (ROOT / "database" / "verify_leaderboard_profile_read.sql").read_text(encoding="utf-8")
         cls.leaderboard_sql = (ROOT / "database" / "009_leaderboard_from_player_season_stats.sql").read_text(encoding="utf-8").lower()
+
+    def test_migration_007_has_valid_season_function_dollar_quotes(self):
+        self.assertIn("as $\\n  select case", self.sql007)
+        self.assertIn("\\n$;", self.sql007)
+        self.assertNotIn("\\nas $\\n", self.sql007)
+        self.assertNotIn("\\n$;\\n", self.sql007)
 
     def test_migration_008_is_self_contained_for_007_helpers(self):
         self.assertIn("create or replace function public.tm_leader_season_start_year", self.sql)
