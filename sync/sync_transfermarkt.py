@@ -492,7 +492,7 @@ def iterable_from(payload: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
             if isinstance(value, list):
                 return [x for x in value if isinstance(x, dict)]
             if isinstance(value, dict):
-                for nested in ("items", "data", "stats", "transfers", "history", "marketValues", "market_value_history", "valuations", "matches", "results", "appearances", "injuries", "absences"):
+                for nested in ("items", "data", "stats", "statistics", "playerStats", "transfers", "history", "marketValues", "market_value_history", "marketValueHistory", "valuations", "matches", "matchHistory", "results", "appearances", "injuries", "injuryHistory", "absences"):
                     if isinstance(value.get(nested), list):
                         return [x for x in value[nested] if isinstance(x, dict)]
     return []
@@ -1205,6 +1205,13 @@ def sync_felipeall(
                 source_record_snapshot("felipeall", "player_stats", tm_id, "", stats_payload)
             if "injuries" in refresh_endpoints:
                 source_record_snapshot("felipeall", "player_injuries", tm_id, "", injuries_payload)
+                injury_rows = iterable_from(injuries_payload, SNAPSHOT_ROW_KEYS["injuries_payload"])
+                replaced_injuries = rpc("tm_replace_player_injuries", {
+                    "p_tm_id": tm_id,
+                    "p_source": "felipeall",
+                    "p_rows": injury_rows,
+                })
+                LOG.info("Normalize sakatlık kayıtları: ID=%s | satır=%s", tm_id, replaced_injuries)
             if "absences" in refresh_endpoints:
                 source_record_snapshot("felipeall", "player_absences", tm_id, "", absences_payload)
             if "matches" in refresh_endpoints:
