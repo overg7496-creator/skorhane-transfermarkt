@@ -227,41 +227,101 @@ def stat_competition_name(row: dict[str, Any]) -> str:
 def stat_club_name(row: dict[str, Any]) -> str:
     return text_value(row, "club_name", "clubName", "club", "team", "teamName") or ""
 
+def stat_competition_id(row: dict[str, Any]) -> str:
+    for key in ("competition_id", "competitionId", "competitionID", "league_id", "leagueId", "leagueID"):
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    for key in ("competition", "league"):
+        item = row.get(key)
+        if isinstance(item, dict):
+            value = item.get("id") or item.get("competitionId") or item.get("leagueId")
+            if value is not None and str(value).strip():
+                return str(value).strip()
+    return ""
+
 def stat_club_id(row: dict[str, Any]) -> str:
-    value = row.get("club_id") or row.get("clubId") or row.get("clubID")
-    if value is None:
-        club = row.get("club")
-        if isinstance(club, dict):
-            value = club.get("id") or club.get("clubId")
-        elif club is not None:
-            value = club
-    if value is None:
-        team = row.get("team")
-        if isinstance(team, dict):
-            value = team.get("id")
-    return str(value).strip() if value is not None else ""
+    for key in ("club_id", "clubId", "clubID", "team_id", "teamId", "teamID"):
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    for key in ("club", "team"):
+        item = row.get(key)
+        if isinstance(item, dict):
+            value = item.get("id") or item.get("clubId") or item.get("teamId")
+            if value is not None and str(value).strip():
+                return str(value).strip()
+    return ""
+
+def competition_ids_share_namespace(left: str, right: str) -> bool:
+    """Compare canonical Transfermarkt codes together and numeric provider IDs together."""
+    if not left or not right:
+        return False
+    left_code = bool(re.fullmatch(r"[A-Z]{2,4}[0-9]+[A-Z]?", left, re.IGNORECASE))
+    right_code = bool(re.fullmatch(r"[A-Z]{2,4}[0-9]+[A-Z]?", right, re.IGNORECASE))
+    return (left_code and right_code) or (left.isdigit() and right.isdigit())
+
+def stat_ids_share_namespace(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return left.isdigit() == right.isdigit()
 
 def matching_targets(stat: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     season_value = text_value(stat, "season_id", "seasonId", "seasonID", "season")
     year = season_start_year(season_value)
+    competition_id = stat_competition_id(stat)
     competition = norm(stat_competition_name(stat))
     club_id = stat_club_id(stat)
     club = norm(stat_club_name(stat))
-    if year is None or not competition:
+    if year is None or (not competition_id and not competition):
         return []
     matches = []
     for target in targets:
-        if target.get("season_start") != year or norm(target.get("competition_name")) != competition:
+        if target.get("season_start") != year:
             continue
-        target_club_id = str(target.get("club_id") or "")
+        target_competition_id = str(target.get("competition_id") or "").strip()
+        target_competition = norm(target.get("competition_name"))
+        if competition_id and target_competition_id and competition_ids_share_namespace(competition_id, target_competition_id):
+            same_competition = competition_id == target_competition_id
+        else:
+            same_competition = bool(competition and target_competition and competition == target_competition)
+        if not same_competition:
+            continue
+        target_club_id = str(target.get("club_id") or "").strip()
         target_club = norm(target.get("club_name"))
-        if club_id and target_club_id:
+        if club_id and target_club_id and stat_ids_share_namespace(club_id, target_club_id):
             same_club = club_id == target_club_id
         else:
             same_club = bool(club and target_club and club == target_club)
         if same_club:
             matches.append(target)
     return matches
+
+def identity_conflict_scope_keys(stat: dict[str, Any], targets: list[dict[str, Any]]) -> set[str]:
+    """Flag only same-season/name rows whose same-namespace provider IDs conflict."""
+    year = season_start_year(text_value(stat, "season_id", "seasonId", "seasonID", "season"))
+    competition_id = stat_competition_id(stat)
+    competition = norm(stat_competition_name(stat))
+    club_id = stat_club_id(stat)
+    club = norm(stat_club_name(stat))
+    conflicts: set[str] = set()
+    if year is None or not competition:
+        return conflicts
+    for target in targets:
+        if target.get("season_start") != year or competition != norm(target.get("competition_name")):
+            continue
+        target_competition_id = str(target.get("competition_id") or "").strip()
+        if (competition_id and target_competition_id and
+                competition_ids_share_namespace(competition_id, target_competition_id) and
+                competition_id != target_competition_id):
+            conflicts.add(f"{target_competition_id}:{target.get('season_id')}")
+            continue
+        target_club_id = str(target.get("club_id") or "").strip()
+        target_club = norm(target.get("club_name"))
+        if (club and club == target_club and club_id and target_club_id and
+                stat_ids_share_namespace(club_id, target_club_id) and club_id != target_club_id):
+            conflicts.add(f"{target_competition_id}:{target.get('season_id')}")
+    return conflicts
 
 def map_stat_payloads(tm_id: str, stat: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map only exact season + competition + club matches; never mix cup/league rows."""
@@ -271,6 +331,8 @@ def map_stat_payloads(tm_id: str, stat: dict[str, Any], targets: list[dict[str, 
         row = {
             "tm_id": str(tm_id),
             "season_id": stat_season_id(season_value, str(target["season_id"])),
+            "competition_id": str(target.get("competition_id") or ""),
+            "club_id": str(target.get("club_id") or ""),
             "competition_name": target["competition_name"],
             "club_name": target["club_name"],
             "appearances": tm.numeric(stat, "appearances", "matches", "gamesPlayed"),
@@ -313,7 +375,9 @@ def fetch_player_stats(tm_id: str) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 def checkpoint_scope() -> str:
-    return "v1_" + "-".join(COMPETITIONS) + "_" + "-".join(SEASONS)
+    # v2 forces a one-time refetch after league/team IDs became first-class columns.
+    # Old v1 checkpoints must not label rows written without typed IDs as complete.
+    return "v2_" + "-".join(COMPETITIONS) + "_" + "-".join(SEASONS)
 
 def load_checkpoints(scope: str) -> dict[str, dict[str, Any]]:
     query = (
@@ -437,14 +501,32 @@ def run() -> int:
             try:
                 stat_rows = fetch_player_stats(player_id)
                 saved = 0
+                matched_scope_keys: set[str] = set()
+                unmatched_scope_keys: set[str] = set()
                 for stat in stat_rows:
+                    unmatched_scope_keys.update(identity_conflict_scope_keys(stat, targets[player_id]))
                     for payload in map_stat_payloads(player_id, stat, targets[player_id]):
                         tm.rpc("tm_upsert_season_stat", {"p_row": payload})
                         saved += 1
+                        matched_scope_keys.add(
+                            f"{payload['competition_id']}:{payload['season_id']}"
+                        )
+                expected_scope_keys = {
+                    f"{target['competition_id']}:{target['season_id']}"
+                    for target in targets[player_id]
+                }
+                # A successful player-stats response is complete for a target
+                # scope even when it contains no row for that club/season.
+                # But an explicit same-namespace ID conflict must stay incomplete.
+                completed_scope_keys = sorted(expected_scope_keys - unmatched_scope_keys)
                 now = datetime.now(timezone.utc).isoformat()
                 save_checkpoint(player_id, scope, {
-                    "status": "completed", "attempts": int(old_state.get("attempts") or 0),
+                    "status": "completed", "coverage_version": 2,
+                    "attempts": int(old_state.get("attempts") or 0),
                     "stats_rows_seen": len(stat_rows), "stats_rows_saved": saved,
+                    "matched_scope_keys": sorted(matched_scope_keys),
+                    "completed_scope_keys": completed_scope_keys,
+                    "unmatched_scope_keys": sorted(unmatched_scope_keys),
                     "no_matching_league_rows": len(stat_rows) > 0 and saved == 0,
                     "scope_competitions": COMPETITIONS, "scope_seasons": SEASONS,
                     "completed_at": now, "source": "felipeall",
@@ -461,7 +543,7 @@ def run() -> int:
                 attempts = int(old_state.get("attempts") or 0) + 1
                 status = "retryable_failed" if attempts < MAX_FAILURE_ATTEMPTS else "failed"
                 save_checkpoint(player_id, scope, {
-                    "status": status, "attempts": attempts,
+                    "status": status, "coverage_version": 2, "attempts": attempts,
                     "last_error": tm.safe_error_for_log(exc),
                     "last_attempt_at": datetime.now(timezone.utc).isoformat(),
                     "scope_competitions": COMPETITIONS, "scope_seasons": SEASONS,

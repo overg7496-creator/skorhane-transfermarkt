@@ -3955,12 +3955,13 @@ async function loadPitchPlayerCareer(my){
     : 'Transfermarkt sezon kaydı bulunamadı';
   renderPlayer();
 }
-const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v13.'+pitchClientTeamKey(name||'');
-const playerInfoCacheKey=name=>'skorhane.playerinfo.v6.'+pitchClientTeamKey(name||'');
-function readPlayerInfoCache(name){try{const raw=localStorage.getItem(playerInfoCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<30*86400e3&&x.data&&typeof x.data==='object'&&x.data.bio&&typeof x.data.bio==='object'?x.data:null}catch(_){return null}}
-function savePlayerInfoCache(name,data){try{if(data&&typeof data==='object'&&data.bio&&typeof data.bio==='object')localStorage.setItem(playerInfoCacheKey(name),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
-function readPlayerStatsCache(name){try{const raw=localStorage.getItem(playerStatsCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<7*86400e3&&x.data&&Array.isArray(x.data.seasons)?x.data:null}catch(_){return null}}
-function savePlayerStatsCache(name,data){try{if(data&&Array.isArray(data.seasons))localStorage.setItem(playerStatsCacheKey(name),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
+const playerCacheTmId=value=>String(value||'').replace(/\D/g,'');
+const playerStatsCacheKey=tmId=>'skorhane.playerstats.tm.v14.'+playerCacheTmId(tmId);
+const playerInfoCacheKey=tmId=>'skorhane.playerinfo.tm.v7.'+playerCacheTmId(tmId);
+function readPlayerInfoCache(tmId){try{const id=playerCacheTmId(tmId);if(!id)return null;const raw=localStorage.getItem(playerInfoCacheKey(id));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<60*60e3&&x.data&&typeof x.data==='object'&&x.data.bio&&typeof x.data.bio==='object'?x.data:null}catch(_){return null}}
+function savePlayerInfoCache(tmId,data){try{const id=playerCacheTmId(tmId);if(id&&data&&typeof data==='object'&&data.bio&&typeof data.bio==='object')localStorage.setItem(playerInfoCacheKey(id),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
+function readPlayerStatsCache(tmId){try{const id=playerCacheTmId(tmId);if(!id)return null;const raw=localStorage.getItem(playerStatsCacheKey(id));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<10*60e3&&x.data&&Array.isArray(x.data.seasons)?x.data:null}catch(_){return null}}
+function savePlayerStatsCache(tmId,data){try{const id=playerCacheTmId(tmId);if(id&&data&&Array.isArray(data.seasons))localStorage.setItem(playerStatsCacheKey(id),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
 function loadPitchPlayerRecent(my){
   if(!my||my!==cur||my.kind!=='player'||my.it.role==='coach')return;
   my.pitchRecentMatches=Array.isArray(my.stats&&my.stats.recentMatches)?my.stats.recentMatches:[];
@@ -3982,8 +3983,9 @@ async function loadPitchPlayerProfilePhoto(my){
 }
 function openPlayer(it){
   if(!it||!it.name)return;
-  const cachedLegacyInfo=it.role==='coach'?null:readPlayerInfoCache(it.name);
-  const cachedLegacyStats=it.role==='coach'?null:readPlayerStatsCache(it.name);
+  const initialTmId=playerCacheTmId(it.tm||it.transfermarktId||'');
+  const cachedLegacyInfo=it.role==='coach'?null:readPlayerInfoCache(initialTmId);
+  const cachedLegacyStats=it.role==='coach'?null:readPlayerStatsCache(initialTmId);
   const cachedRecent=Array.isArray(cachedLegacyStats&&cachedLegacyStats.recentMatches)?cachedLegacyStats.recentMatches:[];
   cur={
     kind:'player',prev:cur,it,info:cachedLegacyInfo,stats:cachedLegacyStats,
@@ -3999,11 +4001,13 @@ function openPlayer(it){
   const my=cur,qs='&slug='+encodeURIComponent(it.slug||slugOf(it.url||it.link)||'')+'&name='+encodeURIComponent(it.name)+'&tm='+encodeURIComponent(it.tm||it.transfermarktId||'')+'&tsdb='+encodeURIComponent(it.tsdb||it.tsdbPlayerId||'')+'&af='+encodeURIComponent(it.af||it.afPlayerId||'')+'&espn='+encodeURIComponent(it.espn||it.espnPlayerId||'')+'&team='+encodeURIComponent(it.team||it.teamName||'')+'&pos='+encodeURIComponent(it.pos||it.position||'')+'&wiki='+encodeURIComponent(it.wiki||'')+'&pitch='+encodeURIComponent(it.pitchId||'')+'&pitchCode='+encodeURIComponent(it.pitchCode||it.pitchLeagueCode||guessPitchCodeFromTeam(it.team||it.teamName||'')||'')+'&pitchYear='+encodeURIComponent(it.pitchYear||'')+'&photo='+encodeURIComponent((Array.isArray(it.photos)&&it.photos[0])||it.logo||it.photo||'')+(it.role==='coach'?'&role=coach':'');
   api('/player?part=all'+qs).then(j=>{
     if(cur!==my)return;
+    const resolvedTmId=playerCacheTmId(j.tmId||my.it.tm||my.it.transfermarktId||'');
+    if(resolvedTmId)my.it.tm=resolvedTmId;
     my.info=j;my.stats=j;my.infoLoaded=true;my.statsLoaded=true;my.err='';my.serr='';
     my.pitchRecentMatches=Array.isArray(j.recentMatches)?j.recentMatches:[];
     my.pitchRecentLoading=false;my.pitchRecentLoaded=true;
     my.pitchRecentError=my.pitchRecentMatches.length?'':'Supabase içinde bu oyuncuya bağlı maç detayı bulunamadı; maç puanı için bekleme yapılmadı.';
-    savePlayerInfoCache(it.name,j);savePlayerStatsCache(it.name,j);
+    savePlayerInfoCache(resolvedTmId,j);savePlayerStatsCache(resolvedTmId,j);
     if(Array.isArray(my.pitchCareerRows))mergePitchCareerIntoStats(my.stats,my.pitchCareerRows);
     renderPlayer();
     if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,j);

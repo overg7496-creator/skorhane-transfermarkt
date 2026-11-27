@@ -59,6 +59,56 @@ class LeagueStatisticsTests(unittest.TestCase):
         }
         self.assertEqual(league_stats.matching_targets(stat, [self.target]), [])
 
+    def test_explicit_competition_id_mismatch_never_falls_back_to_same_name(self):
+        stat = {
+            "seasonID": "2025/26",
+            "competitionId": "TR2",
+            "competitionName": "Süper Lig",
+            "club": {"id": "100", "name": "Galatasaray"},
+            "goals": 8,
+        }
+        self.assertEqual(league_stats.matching_targets(stat, [self.target]), [])
+
+    def test_numeric_provider_competition_id_matches_canonical_code_by_exact_name(self):
+        stat = {
+            "seasonID": "2025/26",
+            "competitionId": "26",
+            "competitionName": "Süper Lig",
+            "club": {"id": "100", "name": "Galatasaray"},
+            "goals": 8,
+        }
+        self.assertEqual(league_stats.matching_targets(stat, [self.target]), [self.target])
+        row = league_stats.map_stat_payloads("123", stat, [self.target])[0]
+        self.assertEqual(row["competition_id"], "TR1")
+
+    def test_alphanumeric_competition_id_mismatch_remains_strict(self):
+        stat = {
+            "seasonID": "2025/26",
+            "competitionId": "TR2",
+            "competitionName": "Süper Lig",
+            "club": {"id": "100", "name": "Galatasaray"},
+        }
+        self.assertEqual(league_stats.matching_targets(stat, [self.target]), [])
+
+    def test_explicit_club_id_mismatch_never_falls_back_to_same_name(self):
+        stat = {
+            "seasonID": "2025/26",
+            "competitionId": "TR1",
+            "competitionName": "Süper Lig",
+            "club": {"id": "200", "name": "Galatasaray"},
+            "goals": 8,
+        }
+        self.assertEqual(league_stats.matching_targets(stat, [self.target]), [])
+
+    def test_missing_ids_use_exact_normalized_name_fallback(self):
+        stat = {
+            "seasonID": "2025/26",
+            "competitionName": "SUPER LIG",
+            "club": "Galatasaray",
+            "goals": 8,
+        }
+        self.assertEqual(league_stats.matching_targets(stat, [self.target]), [self.target])
+
     def test_maps_supported_player_and_goalkeeper_metrics(self):
         stat = {
             "seasonID": "2025/26",
@@ -81,6 +131,8 @@ class LeagueStatisticsTests(unittest.TestCase):
         row = rows[0]
         self.assertEqual(row["tm_id"], "123")
         self.assertEqual(row["season_id"], "2025/26")
+        self.assertEqual(row["competition_id"], "TR1")
+        self.assertEqual(row["club_id"], "100")
         self.assertEqual(row["competition_name"], "Süper Lig")
         self.assertEqual(row["club_name"], "Galatasaray")
         self.assertEqual(row["goals"], 12)
@@ -89,6 +141,31 @@ class LeagueStatisticsTests(unittest.TestCase):
         self.assertEqual(row["clean_sheets"], 11)
         self.assertEqual(row["payload"]["totalPasses"], 1100)
         self.assertEqual(row["source"], "felipeall")
+
+    def test_identity_conflicts_leave_only_that_league_season_uncovered(self):
+        wrong_competition = {
+            "seasonID": "2025/26",
+            "competitionId": "TR2",
+            "competitionName": "Süper Lig",
+            "club": {"id": "100", "name": "Galatasaray"},
+        }
+        self.assertEqual(
+            league_stats.identity_conflict_scope_keys(wrong_competition, [self.target]),
+            {"TR1:2025"},
+        )
+        provider_id_namespace = {
+            "seasonID": "2025/26",
+            "competitionId": "26",
+            "competitionName": "Süper Lig",
+            "club": {"id": "100", "name": "Galatasaray"},
+        }
+        self.assertEqual(
+            league_stats.identity_conflict_scope_keys(provider_id_namespace, [self.target]),
+            set(),
+        )
+
+    def test_league_stats_checkpoint_scope_is_versioned_for_id_refetch(self):
+        self.assertTrue(league_stats.checkpoint_scope().startswith("v2_"))
 
     def test_leaderboard_views_and_team_summary_are_already_in_migration(self):
         migration = (ROOT / "database" / "002_team_seasons_and_leaderboards.sql").read_text(encoding="utf-8")
