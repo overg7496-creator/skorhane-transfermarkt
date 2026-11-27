@@ -500,9 +500,10 @@ class SyncHelperTests(unittest.TestCase):
             ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("max-parallel: 7", workflow)
-        self.assertIn("competition_id: [TR1, TR2, TR3A, TR3B, GB1, ES1, L1, IT1, FR1]", workflow)
+        self.assertIn("fromJSON(", workflow)
+        self.assertIn('["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]', workflow)
+        self.assertIn("format('[\"{0}\"]'", workflow)
         self.assertIn("TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}", workflow)
-        self.assertIn("competition_id == matrix.competition_id", workflow)
 
     def test_backfill_queue_is_resumable_and_uses_time_guard(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
