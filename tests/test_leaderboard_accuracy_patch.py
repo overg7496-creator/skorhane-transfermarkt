@@ -19,6 +19,7 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         cls.verify_sql = (ROOT / "database" / "verify_leaderboard_profile_read.sql").read_text(encoding="utf-8")
         cls.source_truth_sql = (ROOT / "database" / "verify_leaderboard_source_truth.sql").read_text(encoding="utf-8")
         cls.leaderboard_sql = (ROOT / "database" / "009_leaderboard_from_player_season_stats.sql").read_text(encoding="utf-8").lower()
+        cls.cache_sql = (ROOT / "database" / "010_indexed_league_season_cache.sql").read_text(encoding="utf-8").lower()
 
     def test_migration_007_has_valid_season_function_dollar_quotes(self):
         self.assertIn("as $$\n  select case", self.sql007)
@@ -76,14 +77,16 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn("tm_team_season_player_stats?select=tm_id", self.worker)
         self.assertIn("tmDbRowsPaged(env, rosterQuery", self.worker)
         self.assertIn("completed_scope_keys: [scopeKey]", self.worker)
-        self.assertIn("no_matching_league_rows !== true", self.worker)
+        self.assertIn("Number(row.payload.coverage_version) === 3", self.worker)
+        self.assertIn("completed_scope_keys: [scopeKey]", self.worker)
         self.assertIn("coverageComplete", self.worker)
         self.assertIn("hasSupabaseLeaderboardData", self.worker)
-        self.assertIn('goalLeadersAvailable = goalsR.status === "fulfilled" && goals.length > 0', self.worker)
-        self.assertIn('assistLeadersAvailable = assistsR.status === "fulfilled" && assists.length > 0', self.worker)
+        self.assertIn('goalLeadersAvailable = totalsR.status === "fulfilled" && goals.length > 0', self.worker)
+        self.assertIn('assistLeadersAvailable = totalsR.status === "fulfilled" && assists.length > 0', self.worker)
         self.assertIn('totalsR.status === "fulfilled" && totals.length > 0', self.worker)
-        self.assertIn("tmDbRowsPaged(env, goalsQuery", self.worker)
-        self.assertIn("tmDbRowsPaged(env, assistsQuery", self.worker)
+        self.assertIn("tmDbRowsPaged(env, totalsQuery", self.worker)
+        self.assertNotIn("tm_league_goal_leaders?select=", self.worker)
+        self.assertNotIn("tm_league_assist_leaders?select=", self.worker)
 
     def test_leaderboards_include_stats_without_requiring_a_player_squad_row(self):
         self.assertIn("from public.tm_player_season_stats s", self.leaderboard_sql)
@@ -100,7 +103,7 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
     def test_worker_cache_versions_are_bumped_and_copies_match(self):
         self.assertIn('"pf49:"', self.worker)
         self.assertIn("tm-player-profile-bundle:v3:", self.worker)
-        self.assertIn("tm-league-data:v4:", self.worker)
+        self.assertIn("tm-league-data:v5:", self.worker)
         self.assertEqual(self.worker, self.worker_copy)
         self.assertEqual(self.worker, self.requested_worker_copy)
         self.assertEqual(self.html, self.html_copy)
@@ -116,12 +119,31 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
     def test_league_sync_writes_canonical_ids_and_versions_checkpoints(self):
         self.assertIn('"competition_id": str(target.get("competition_id") or "")', self.league_sync)
         self.assertIn('"club_id": str(target.get("club_id") or "")', self.league_sync)
-        self.assertIn('return "v2_" + "-".join(COMPETITIONS)', self.league_sync)
-        self.assertIn('"coverage_version": 2', self.league_sync)
+        self.assertIn('return "v3_" + "-".join(COMPETITIONS)', self.league_sync)
+        self.assertIn('"coverage_version": 3', self.league_sync)
         self.assertIn("completed_scope_keys", self.league_sync)
+        self.assertIn("zero_stat_payload", self.league_sync)
+        self.assertIn("tm_upsert_season_stats_batch", self.league_sync)
+        self.assertIn("tm_refresh_player_league_season_totals_cache", self.league_sync)
         self.assertIn("unmatched_scope_keys", self.league_sync)
         self.assertIn("identity_conflict_scope_keys", self.league_sync)
         self.assertIn("competition_ids_share_namespace", self.league_sync)
+
+
+    def test_indexed_cache_migration_adds_bulk_upsert_and_player_refresh(self):
+        self.assertIn("create table if not exists public.tm_league_player_season_totals_cache", self.cache_sql)
+        self.assertIn("primary key (competition_id, season_id, tm_id)", self.cache_sql)
+        self.assertIn("create or replace function public.tm_upsert_season_stats_batch", self.cache_sql)
+        self.assertIn("create or replace function public.tm_refresh_player_league_season_totals_cache", self.cache_sql)
+        self.assertIn("excluded.payload#>>'{league_stats_sync,zero_fill}' = 'true'", self.cache_sql)
+        self.assertIn("grant select on public.tm_league_player_season_totals_cache to service_role", self.cache_sql)
+        self.assertIn("grant execute on function public.tm_refresh_player_league_season_totals_cache(text) to service_role", self.cache_sql)
+
+    def test_worker_reads_only_the_indexed_season_cache(self):
+        self.assertIn("tm_league_player_season_totals_cache?select=", self.worker)
+        self.assertNotIn("tm_league_player_season_totals?select=", self.worker)
+        self.assertIn('const goals = tmLeaderRows(totals, "goals")', self.worker)
+        self.assertIn('const assists = tmLeaderRows(totals, "assists")', self.worker)
 
     def test_profile_verification_is_compact_and_calls_profile_bundle_once(self):
         self.assertIn("completed_scope_keys", self.verify_sql)
