@@ -15,9 +15,9 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
     def test_migration_persists_provider_competition_and_club_ids(self):
         self.assertIn("add column if not exists competition_id text", self.sql)
         self.assertIn("add column if not exists club_id text", self.sql)
-        self.assertIn('"competitionid"', self.sql)
-        self.assertIn('"clubid"', self.sql)
-        self.assertIn("'competition_id':", self.sql)
+        self.assertIn("'competitionid'", self.sql)
+        self.assertIn("'clubid'", self.sql)
+        self.assertIn("p_row->>'competition_id'", self.sql)
 
     def test_leaderboard_join_normalizes_season_and_prefers_ids(self):
         self.assertIn("tm_leader_season_start_year(s.season_id)", self.sql)
@@ -70,8 +70,10 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
     def test_ingestion_persists_competition_and_club_ids_for_both_stat_feeds(self):
         self.assertIn('"competition_id": competition_id_for_stat', self.sync)
         self.assertIn('"club_id": club_id_for_stat', self.sync)
-        self.assertIn('"competition_id": competition, "competition_name": competition', self.sync)
-        self.assertIn('"club_id": club_id, "club_name": club', self.sync)
+        self.assertIn('"competition_id": competition_id,', self.sync)
+        self.assertIn('"competition_name": competition,', self.sync)
+        self.assertIn('"club_id": club_id,', self.sync)
+        self.assertIn('"club_name": club,', self.sync)
 
 
 if __name__ == "__main__":
