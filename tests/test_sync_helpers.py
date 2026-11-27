@@ -639,6 +639,8 @@ class SyncHelperTests(unittest.TestCase):
         self.assertEqual(worker, requested_copy)
         self.assertEqual(html, requested_html)
         self.assertIn('"pf47:"', worker)
+        self.assertIn("const bundleAppearanceRows", worker)
+        self.assertIn("const bundleAppearanceRows", requested_copy)
 
     def test_database_saves_goalkeeper_season_fields(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
