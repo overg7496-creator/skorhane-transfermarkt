@@ -69,6 +69,27 @@ class LeagueStatisticsTests(unittest.TestCase):
         }
         self.assertEqual(league_stats.matching_targets(stat, [self.target]), [])
 
+    def test_numeric_provider_competition_id_matches_canonical_code_by_exact_name(self):
+        stat = {
+            "seasonID": "2025/26",
+            "competitionId": "26",
+            "competitionName": "Süper Lig",
+            "club": {"id": "100", "name": "Galatasaray"},
+            "goals": 8,
+        }
+        self.assertEqual(league_stats.matching_targets(stat, [self.target]), [self.target])
+        row = league_stats.map_stat_payloads("123", stat, [self.target])[0]
+        self.assertEqual(row["competition_id"], "TR1")
+
+    def test_alphanumeric_competition_id_mismatch_remains_strict(self):
+        stat = {
+            "seasonID": "2025/26",
+            "competitionId": "TR2",
+            "competitionName": "Süper Lig",
+            "club": {"id": "100", "name": "Galatasaray"},
+        }
+        self.assertEqual(league_stats.matching_targets(stat, [self.target]), [])
+
     def test_explicit_club_id_mismatch_never_falls_back_to_same_name(self):
         stat = {
             "seasonID": "2025/26",
