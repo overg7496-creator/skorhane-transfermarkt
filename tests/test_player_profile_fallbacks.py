@@ -81,6 +81,11 @@ class PlayerProfileFallbackTests(unittest.TestCase):
                 self.assertIn(table, self.workflow)
         self.assertIn("BATCH_SUPABASE_VERIFY_OK", self.workflow)
 
+    def test_missing_data_is_saved_to_one_queue_even_without_dispatch_token(self):
+        self.assertIn('status: token ? "queued" : "pending-config"', self.worker)
+        self.assertIn('queueStatus === "pending-config" && !token', self.worker)
+        self.assertIn('GITHUB_ACTIONS_TOKEN tanımlı değil; eksik oyuncu tek kuyruğa kaydedildi.', self.worker)
+
     def test_html_uses_short_nonblocking_empty_states(self):
         self.assertIn("function playerNoDataMessage", self.html)
         self.assertIn("Eksik alanlar oyuncu başına tek yenileme kuyruğuna alındı", self.html)
