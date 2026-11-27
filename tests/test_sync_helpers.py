@@ -461,6 +461,7 @@ class SyncHelperTests(unittest.TestCase):
 
     def test_historical_seed_uses_checkpoints_and_small_batches(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "seed-player-appearances.yml").read_text(encoding="utf-8")
         self.assertIn("DCARIBOU_APPEARANCE_BATCH_SIZE", script)
         self.assertIn("appearances_player:", script)
         self.assertIn('run_dcaribou_crawler("players", [club]', script)
