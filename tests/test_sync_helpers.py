@@ -625,7 +625,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertNotIn("api('/player?part=stats'+qs)", html)
         self.assertNotIn("api('/pitch-player-recent?", html)
         self.assertNotIn("attempt===0?6000:12000", html)
-        self.assertIn("skorhane.playerstats.legacy.v11.", html)
+        self.assertIn("skorhane.playerstats.legacy.v12.", html)
         self.assertNotIn("Eksik Transfermarkt kayıtları yenileme kuyruğuna alındı", html)
         self.assertNotIn("profili kısa süre sonra yeniden aç", html)
 
@@ -897,7 +897,7 @@ class HistoryFallbackTests(unittest.TestCase):
         self.assertIn("loadPitchPlayerRecent(cur)", click_block)
         self.assertNotIn("api(", click_block)
         self.assertIn("my.stats.recentMatches", html)
-        self.assertIn("playerstats.legacy.v11.", html)
+        self.assertIn("playerstats.legacy.v12.", html)
         self.assertIn("playerinfo.v5.", html)
 
     def test_player_worker_history_tabs_are_supabase_only(self):
