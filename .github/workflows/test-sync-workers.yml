@@ -33,5 +33,15 @@ jobs:
           set -euo pipefail
           python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py sync/sync_league_statistics.py
           python -m unittest discover -s tests -v
+          python - <<'PY'
+from pathlib import Path
+source = Path("SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
+start = source.find("<script>")
+end = source.find("</script>", start + 8)
+if start < 0 or end < 0:
+    raise SystemExit("Ana HTML içindeki JavaScript bloğu bulunamadı.")
+Path("/tmp/skorhane-inline.js").write_text(source[start + 8:end], encoding="utf-8")
+PY
+          node --check /tmp/skorhane-inline.js
           node --check SkorHane-Worker.js
           cmp -s SkorHane-Worker.js SkorHane-Worker-kodu-kopyalanabilir.txt
