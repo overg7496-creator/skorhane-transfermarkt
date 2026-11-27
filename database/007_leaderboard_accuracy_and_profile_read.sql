@@ -41,9 +41,19 @@ returns integer
 language sql
 immutable
 parallel safe
-as $$
-  select nullif(substring(coalesce(p_season, '') from '((19|20)[0-9]{2})'), '')::integer;
-$$;
+as $
+  select case
+    when substring(coalesce(p_season, '') from '((19|20)[0-9]{2})') is not null
+      then substring(coalesce(p_season, '') from '((19|20)[0-9]{2})')::integer
+    when substring(coalesce(p_season, '') from '([0-9]{2})[[:space:]]*[/.-]') is not null
+      then case
+        when substring(coalesce(p_season, '') from '([0-9]{2})[[:space:]]*[/.-]')::integer >= 50
+          then 1900 + substring(coalesce(p_season, '') from '([0-9]{2})[[:space:]]*[/.-]')::integer
+        else 2000 + substring(coalesce(p_season, '') from '([0-9]{2})[[:space:]]*[/.-]')::integer
+      end
+    else null
+  end;
+$;
 
 create or replace function public.tm_leader_normalize_name(p_value text)
 returns text
