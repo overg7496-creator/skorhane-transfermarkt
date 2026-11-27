@@ -51,7 +51,6 @@ jobs:
     env:
       TM_DETAIL_SQUAD_SEEN_AFTER: ${{ github.event.inputs.seen_after }}
       TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ github.event.inputs.seen_before }}
-      TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}
       TM_DETAIL_PRESEED_ALL_HISTORY: "true"
     steps:
       - name: Checkout
