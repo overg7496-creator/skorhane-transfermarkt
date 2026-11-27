@@ -330,7 +330,7 @@ class SyncHelperTests(unittest.TestCase):
         }
         with patch.object(sync, "db_get", return_value=[]):
             due = sync.player_detail_refresh_plan("123", player)
-        self.assertEqual(due, {"profile", "market_value", "transfers", "stats", "injuries", "matches"})
+        self.assertEqual(due, {"profile", "market_value", "transfers", "stats", "injuries", "absences", "matches"})
 
     def test_post_repair_empty_provider_lists_are_accepted_when_fresh(self):
         from datetime import datetime, timezone
