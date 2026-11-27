@@ -472,6 +472,52 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("@6c1eb59a59349f6869155164808e17c617b0e80d", workflow)
 
 
+    def test_dcaribou_factory_rate_limit_patch_matches_real_upstream_line(self):
+        import tempfile
+        import types
+        from unittest.mock import patch
+
+        source_templates = (
+            (
+                "import os\nfrom crawlee import Request\n"
+                "def create_crawler(crawler_class=ParselCrawler):\n"
+                "    crawler_options = {'http_client': None}\n"
+                "    crawler = crawler_class(**crawler_options)\n"
+                "    return crawler\n",
+                "crawler_options['concurrency_settings']",
+            ),
+            (
+                "import os\nfrom crawlee import Request\n"
+                "def create_crawler():\n"
+                "    crawler = ParselCrawler()\n"
+                "    return crawler\n",
+                "ParselCrawler(concurrency_settings=",
+            ),
+        )
+
+        for upstream_source, expected in source_templates:
+            with self.subTest(factory=expected), tempfile.TemporaryDirectory() as directory:
+                common_path = Path(directory) / "common.py"
+                common_path.write_text(upstream_source, encoding="utf-8")
+                package = types.ModuleType("tfmkt")
+                package.__path__ = []
+                common = types.ModuleType("tfmkt.common")
+                common.__file__ = str(common_path)
+                package.common = common
+
+                with patch.dict(sys.modules, {"tfmkt": package, "tfmkt.common": common}):
+                    sync.patch_dcaribou_rate_limit()
+                    patched_source = common_path.read_text(encoding="utf-8")
+                    self.assertIn(expected, patched_source)
+                    self.assertIn("ConcurrencySettings(min_concurrency=1, max_concurrency=1", patched_source)
+                    self.assertIn("@crawler.pre_navigation_hook", patched_source)
+                    self.assertIn("await asyncio.sleep(random.uniform(1.5, 3.5))", patched_source)
+                    self.assertEqual(patched_source.count("_skorhane_rate_limit"), 1)
+
+                    # Re-running the patch must be idempotent.
+                    sync.patch_dcaribou_rate_limit()
+                    self.assertEqual(common_path.read_text(encoding="utf-8"), patched_source)
+
     def test_parse_money_eur_handles_european_and_grouped_numbers(self):
         self.assertEqual(sync.parse_money_eur("€2.500.000"), 2_500_000)
         self.assertEqual(sync.parse_money_eur("€3,5m"), 3_500_000)
