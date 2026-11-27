@@ -29,7 +29,7 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
 
     def test_leaderboards_rank_ties_and_group_once_per_player(self):
         self.assertIn("group by competition_id, season_id, tm_id", self.sql)
-        self.assertIn("rank() over", self.sql)
+        self.assertIn("row_number() over", self.sql)
         self.assertIn("where goals > 0", self.sql)
         self.assertIn("where assists > 0", self.sql)
 
@@ -54,7 +54,7 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
     def test_worker_profile_refresh_warning_respects_normalized_rows(self):
         self.assertIn("normalizedCoverage && normalizedCoverage[recordType]", self.worker)
         self.assertIn("player_market_values: bundleMarketValues.length > 0", self.worker)
-        self.assertIn("return { required: missing, stale, missing }", self.worker)
+        self.assertIn("return { required: missing && !hasNormalizedData, stale, missing }", self.worker)
 
     def test_html_uses_metric_specific_db_availability_before_fallback(self):
         self.assertIn("function tmLeagueMetricRows(my,metric)", self.html)
