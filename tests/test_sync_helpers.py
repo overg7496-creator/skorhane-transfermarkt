@@ -917,7 +917,10 @@ class HistoryFallbackTests(unittest.TestCase):
                 sync.history_checkpoint_key("2026", "123"),
             }
             self.assertFalse(sync.history_appearance_needs_refresh("2025", "123", completed))
-            self.assertTrue(sync.history_appearance_needs_refresh("2026", "123", completed))
+            self.assertFalse(sync.history_appearance_needs_refresh("2026", "123", completed))
+            self.assertTrue(sync.history_appearance_needs_refresh(
+                "2026", "123", completed, refresh_current_season=True
+            ))
             self.assertTrue(sync.history_appearance_needs_refresh("2026", "999", completed))
 
     def test_player_data_preseed_workflows_are_scheduled(self):
@@ -939,10 +942,49 @@ class HistoryFallbackTests(unittest.TestCase):
         self.assertIn("Start dedicated Felipe Transfermarkt API v5.0.0", workflow)
         self.assertIn("FELIPE_API_BASE: http://127.0.0.1:8000", workflow)
         self.assertIn("continue-on-error: true", workflow)
+        self.assertIn("TM_HISTORY_CONTINUATION_DEPTH", workflow)
+        self.assertIn("TM_HISTORY_REFRESH_CURRENT_SEASON", workflow)
         self.assertIn("Stop local Felipe API", workflow)
 
 
 
+
+
+    def test_seed_history_does_not_swallow_felipe_database_failure(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(sync, "_seed_dcaribou_history_scraper", side_effect=RuntimeError("records=0")),
+            patch.object(sync, "seed_felipe_history_fallback", side_effect=OSError("Connection reset by peer")),
+            self.assertRaisesRegex(RuntimeError, "tamamlanamadı"),
+        ):
+            sync.seed_dcaribou_history()
+
+    def test_failed_history_pairs_dispatch_checkpointed_continuation(self):
+        from unittest.mock import patch
+        import os
+
+        with (
+            patch.object(sync, "FELIPE_API_BASE", "http://127.0.0.1:8000"),
+            patch.object(sync, "DCARIBOU_COMPETITIONS", ["TR1"]),
+            patch.object(sync, "DCARIBOU_SEASONS", [2022]),
+            patch.object(sync, "TM_SEASON", 2026),
+            patch.object(sync, "load_supabase_history_roster", return_value=[{
+                "competition_id": "TR1", "competition_name": "Süper Lig",
+                "season_id": "2022", "tm_id": "123", "club_name": "Club A",
+            }]),
+            patch.object(sync, "load_felipe_history_checkpoints", return_value=set()),
+            patch.object(sync, "fetch_felipe_player_season_matches", side_effect=OSError("Connection reset by peer")),
+            patch.object(sync, "load_supabase_current_season_matches", return_value=[]),
+            patch.object(sync, "dispatch_refresh_details_continuation", return_value=True) as dispatch,
+            patch.dict(os.environ, {"TM_HISTORY_CONTINUATION_DEPTH": "0"}),
+        ):
+            self.assertEqual(sync.seed_felipe_history_fallback(), 0)
+
+        self.assertEqual(dispatch.call_args.kwargs["workflow_file"], "seed-player-appearances.yml")
+        inputs = dispatch.call_args.kwargs["inputs"]
+        self.assertEqual(inputs["continuation_depth"], "1")
+        self.assertEqual(inputs["refresh_current_season"], "false")
 
     def test_dcaribou_parser_accepts_single_competition_object(self):
         row = {
