@@ -4248,7 +4248,10 @@ async function tmPlayer(env, id) {
   const bundleTransfers = Array.isArray(bundle && bundle.transfers) ? bundle.transfers : [];
   const bundleMarketValues = Array.isArray(bundle && bundle.market_values) ? bundle.market_values : [];
   const bundleInjuries = Array.isArray(bundle && bundle.injuries) ? bundle.injuries : [];
+  const bundleAbsences = Array.isArray(bundle && bundle.absences) ? bundle.absences : [];
   const recentAppearanceRows = Array.isArray(bundle && bundle.recent_appearances) ? bundle.recent_appearances : [];
+  const bundleAppearanceRows = Array.isArray(bundle && bundle.appearances) ? bundle.appearances : [];
+  const appearanceRows = bundleAppearanceRows.length ? bundleAppearanceRows : recentAppearanceRows;
   if (!dbRow) return { ...out, err: "Transfermarkt oyuncusu henüz veritabanına senkronize edilmemiş" };
   const sourceByType = Object.fromEntries(sourceRecords.filter(item => item && item.record_type)
     .map(item => [String(item.record_type), item.payload || {}]));
@@ -4268,7 +4271,8 @@ async function tmPlayer(env, id) {
     stats_payload: chooseSnapshot("stats_payload", "player_stats", ["stats", "data", "items"]),
     transfers_payload: chooseSnapshot("transfers_payload", "player_transfers", ["transfers", "history", "items", "data"]),
     market_value_payload: chooseSnapshot("market_value_payload", "player_market_values", ["marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"]),
-    injuries_payload: chooseSnapshot("injuries_payload", "player_injuries", ["injuries", "data", "items"])
+    injuries_payload: chooseSnapshot("injuries_payload", "player_injuries", ["injuries", "data", "items"]),
+    absences_payload: chooseSnapshot("absences_payload", "player_absences", ["absences", "data", "items"])
   };
   // Player profiles are read-only: missing snapshots are prepared by scheduled sync workflows.
   // Opening a profile never dispatches a scraper or waits for an external provider.
@@ -4344,8 +4348,8 @@ async function tmPlayer(env, id) {
       games_missed: item.games_missed ?? payload.games_missed ?? payload.gamesMissed ?? payload.missedMatches
     };
   });
-  out.absences = listPayload(row.absences_payload || {}, ["absences", "data", "items"]);
-  const recentSourceRows = recentAppearanceRows.length ? recentAppearanceRows : rawCurrentMatches.filter(match => {
+  out.absences = bundleAbsences.length ? bundleAbsences : listPayload(row.absences_payload || {}, ["absences", "data", "items"]);
+  const recentSourceRows = appearanceRows.length ? appearanceRows : rawCurrentMatches.filter(match => {
     const playerData = match && match.player && typeof match.player === "object" ? match.player : match || {};
     const minutes = Number(pick(playerData, "minutesPlayed", "minutes_played", "minutes", "playedMinutes"));
     const status = String(pick(playerData, "playerStatus", "participation", "status") || "").toLowerCase();
@@ -4372,9 +4376,9 @@ async function tmPlayer(env, id) {
       rating, goals: numberOrNull(item && item.goals != null ? item.goals : pick(playerPayload, "goals", "playerGoals")),
       assists: numberOrNull(item && item.assists != null ? item.assists : pick(playerPayload, "assists", "playerAssists")),
       minutes: numberOrNull(item && item.minutes != null ? item.minutes : pick(playerPayload, "minutesPlayed", "minutes_played", "minutes", "playedMinutes")),
-      databaseSource: recentAppearanceRows.length ? "Supabase · tm_appearances" : "Supabase · current_season_payload"
+      databaseSource: appearanceRows.length ? "Supabase · tm_appearances" : "Supabase · current_season_payload"
     };
-  }).filter(item => item.date).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 13);
+  }).filter(item => item.date).sort((a, b) => String(b.date).localeCompare(String(a.date)));
   out.photo = row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "";
   const nationality = pick(b, "citizenship", "nationality", "nationalities");
   const nat = Array.isArray(nationality) ? nationality.join(", ") : nationality || "";
@@ -8149,7 +8153,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf46:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf47:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear, executionCtx);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
