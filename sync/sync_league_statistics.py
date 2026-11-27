@@ -526,6 +526,18 @@ def dispatch_continuation() -> bool:
         LOG.error("İstatistik devam çalışması başlatılamadı: %s", detail)
         return False
 
+def require_cache_schema_ready() -> None:
+    """Fail fast if the indexed read model migration has not been applied."""
+    try:
+        tm.rpc("tm_upsert_season_stats_batch", {"p_rows": []})
+        tm.db_get_all("tm_league_player_season_totals_cache?select=tm_id&limit=1")
+    except Exception as exc:
+        raise RuntimeError(
+            "Supabase lig istatistik cache şeması hazır değil. "
+            "Önce database/010_indexed_league_season_cache.sql migration'ını çalıştır."
+        ) from exc
+
+
 def run() -> int:
     if not tm.SUPABASE_URL or not tm.SUPABASE_SERVICE_ROLE_KEY:
         raise RuntimeError("SUPABASE_URL ve SUPABASE_SERVICE_ROLE_KEY tanımlı değil.")
@@ -535,6 +547,7 @@ def run() -> int:
         raise RuntimeError("TM_STATS_COMPETITIONS ve TM_STATS_SEASONS boş olamaz.")
     if any(not re.fullmatch(r"(?:19|20)\d{2}", season) for season in SEASONS):
         raise RuntimeError("Sezonlar 4 haneli başlangıç yılı olmalı; örnek: 2022,2023,2024,2025,2026.")
+    require_cache_schema_ready()
 
     run_record = None
     try:
