@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: skorhane-player-appearance-history
@@ -28,6 +29,15 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      FELIPE_API_BASE: http://127.0.0.1:8000
+      FELIPE_DELAY_MIN_SECONDS: "1.0"
+      FELIPE_DELAY_MAX_SECONDS: "1.5"
+      TM_MAX_HISTORY_MATCH_PAGES: "20"
+      FELIPE_HISTORY_MAX_PLAYER_SEASONS_PER_RUN: "1200"
+      FELIPE_HISTORY_MAX_RUNTIME_SECONDS: "19800"
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_REF_NAME: ${{ github.ref_name }}
       DCARIBOU_COMPETITIONS: ${{ inputs.competitions || 'TR1,GB1,ES1,L1,IT1,FR1' }}
       DCARIBOU_SEASONS: ${{ inputs.seasons || '2022,2023,2024,2025,2026' }}
       DCARIBOU_APPEARANCE_BATCH_SIZE: "25"
@@ -41,13 +51,56 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install historical Transfermarkt scraper
+      - name: Validate sync script
+        run: |
+          set -euo pipefail
+          python -m py_compile sync/sync_transfermarkt.py
+          python -m unittest discover -s tests -v
+
+      - name: Start dedicated Felipe Transfermarkt API v5.0.0
+        env:
+          RATE_LIMITING_ENABLE: "false"
+          TFMKT_MAX_CONCURRENCY: "1"
+          TFMKT_TIMEOUT_SECONDS: "30"
+          CACHE_TTL_SECONDS: "600"
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-warn-script-location uv
+          git clone --quiet --depth 1 --branch v5.0.0 https://github.com/felipeall/transfermarkt-api.git "$RUNNER_TEMP/transfermarkt-api"
+          cd "$RUNNER_TEMP/transfermarkt-api"
+          uv sync --extra server --no-dev
+          nohup uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/transfermarkt-api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/transfermarkt-api.pid"
+          ready=0
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:8000/health > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat "$RUNNER_TEMP/transfermarkt-api.log"
+            echo "Felipe API 90 saniye içinde başlamadı."
+            exit 1
+          fi
+          echo "Felipe API hazır; geçmiş maçlar /players/{id}/matches?season_id=... üzerinden alınacak."
+
+      - name: Install optional historical scraper
+        continue-on-error: true
         run: |
           python -m pip install --disable-pip-version-check --upgrade pip
-          python -m pip install "git+https://github.com/dcaribou/transfermarkt-scraper.git@6c1eb59a59349f6869155164808e17c617b0e80d"
+          python -m pip install "git+https://github.com/dcaribou/transfermarkt-scraper.git@6c1eb59a59349f6869155164808e17c617b0e80d" || {
+            echo "dcaribou kurulamadı; seed-history Felipe API ve Supabase yedek kaynağıyla devam edecek."
+            exit 0
+          }
 
-      - name: Validate sync script
-        run: python -m py_compile sync/sync_transfermarkt.py
-
-      - name: Seed historical player appearances in checkpointed batches
+      - name: Seed historical player appearances with API/Supabase fallback
         run: python sync/sync_transfermarkt.py seed-history
+
+      - name: Stop local Felipe API
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/transfermarkt-api.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/transfermarkt-api.pid")" 2>/dev/null || true
+          fi
