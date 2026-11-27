@@ -18,6 +18,13 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         cls.verify_sql = (ROOT / "database" / "verify_leaderboard_profile_read.sql").read_text(encoding="utf-8")
         cls.leaderboard_sql = (ROOT / "database" / "009_leaderboard_from_player_season_stats.sql").read_text(encoding="utf-8").lower()
 
+    def test_migration_008_is_self_contained_for_007_helpers(self):
+        self.assertIn("create or replace function public.tm_leader_season_start_year", self.sql)
+        self.assertIn("create or replace function public.tm_leader_normalize_name", self.sql)
+        self.assertIn("create or replace function public.tm_upsert_season_stat", self.sql)
+        self.assertIn("revoke all on function public.tm_upsert_season_stat(jsonb)", self.sql)
+        self.assertIn("grant execute on function public.tm_upsert_season_stat(jsonb) to service_role", self.sql)
+
     def test_migration_promotes_provider_ids_and_nested_sync_ids(self):
         self.assertIn("add column if not exists competition_id text", self.sql)
         self.assertIn("add column if not exists club_id text", self.sql)
