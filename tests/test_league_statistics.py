@@ -142,6 +142,28 @@ class LeagueStatisticsTests(unittest.TestCase):
         self.assertEqual(row["payload"]["totalPasses"], 1100)
         self.assertEqual(row["source"], "felipeall")
 
+    def test_identity_conflicts_leave_only_that_league_season_uncovered(self):
+        wrong_competition = {
+            "seasonID": "2025/26",
+            "competitionId": "TR2",
+            "competitionName": "Süper Lig",
+            "club": {"id": "100", "name": "Galatasaray"},
+        }
+        self.assertEqual(
+            league_stats.identity_conflict_scope_keys(wrong_competition, [self.target]),
+            {"TR1:2025"},
+        )
+        provider_id_namespace = {
+            "seasonID": "2025/26",
+            "competitionId": "26",
+            "competitionName": "Süper Lig",
+            "club": {"id": "100", "name": "Galatasaray"},
+        }
+        self.assertEqual(
+            league_stats.identity_conflict_scope_keys(provider_id_namespace, [self.target]),
+            set(),
+        )
+
     def test_league_stats_checkpoint_scope_is_versioned_for_id_refetch(self):
         self.assertTrue(league_stats.checkpoint_scope().startswith("v2_"))
 
