@@ -482,6 +482,22 @@ body.drawer-open{overflow:hidden}
 </div>
 
 <script>
+(()=>{
+  const fail=()=>{
+    const splash=document.getElementById('splash');
+    if(!splash||splash.dataset.startupFailureShown==='1')return;
+    splash.dataset.startupFailureShown='1';
+    const message=splash.querySelector('small');
+    if(message)message.textContent='Uygulama başlatılamadı. Sayfayı yenilemeyi dene.';
+    splash.classList.add('out');
+    setTimeout(()=>splash.remove(),500);
+  };
+  window.addEventListener('error',fail);
+  window.addEventListener('unhandledrejection',fail);
+  setTimeout(()=>{if(!window.__SKORHANE_READY__)fail()},12000);
+})();
+</script>
+<script>
 const $=s=>document.querySelector(s);
 const WORKER_URL='https://skor3.overg7496.workers.dev';
 const LIVE=['1H','2H','ET','BT','P','LIVE','INT','SUSP'], HT=['HT'], DONE=['FT','AET','PEN','AWD','WO'], NS=['NS','TBD'];
@@ -492,7 +508,8 @@ const LNAME={203:'Süper Lig',39:'Premier Lig',140:'La Liga',78:'Bundesliga',135
 const STL=[['tur.1','Süper Lig'],['tur.2','TFF 1. Lig'],['eng.1','Premier Lig'],['eng.2','Championship'],['esp.1','La Liga'],['ger.1','Bundesliga'],['ita.1','Serie A'],['fra.1','Ligue 1'],['ned.1','Eredivisie'],['por.1','Liga Portugal'],['uefa.champions','Şampiyonlar Ligi'],['uefa.europa','Avrupa Ligi'],['uefa.europa.conf','Konferans Ligi'],['usa.1','MLS'],['ksa.1','Suudi Pro Lig'],['bra.1','Brezilya Serie A'],['arg.1','Arjantin Ligi']];
 const rank=L=>{const i=PRIORITY.indexOf(L.id);return i<0?1000:i};
 
-const state={imp:false,loading:false,requesting:false,partial:0,date:new Date(),tab:'all',q:'',data:[],favs:new Set(JSON.parse(localStorage.favs||'[]').map(String)),prev:{},loadedAt:0};
+function loadSavedFavorites(){try{const saved=JSON.parse(localStorage.getItem('favs')||'[]');return Array.isArray(saved)?saved.map(String):[]}catch(_){return []}}
+const state={imp:false,loading:false,requesting:false,partial:0,date:new Date(),tab:'all',q:'',data:[],favs:new Set(loadSavedFavorites()),prev:{},loadedAt:0};
 const TRACKED_PICK_KEY='skorhane.iddaaPicks';
 let trackedPicks=[];try{const saved=JSON.parse(localStorage.getItem(TRACKED_PICK_KEY)||'[]');trackedPicks=Array.isArray(saved)?saved:[]}catch(_){}
 let oddsPickerMatch=null,oddsPickerData=null,oddsPickerLoading=false,oddsPickerError='',oddsPickerCategory='all',holdTimer=null,holdMatchId='',suppressMatchClickId='',suppressMatchClickUntil=0,suppressLongPressClickUntil=0,suppressLongPressClickPending=false,holdStartX=0,holdStartY=0,holdStartAt=0,holdPointerId=null,holdTouchId=null,holdRowEl=null,oddsPickerRequestId=0;
@@ -631,7 +648,7 @@ setTimeout(dismissSplash,15000);
 /* ---------- Sunucu isteği ---------- */
 async function api(path,timeoutOverride){
   // Sunucu yanıt vermezse arayüz sonsuza kadar "yükleniyor" kalmasın.
-  const ms=Number(timeoutOverride)>0?Number(timeoutOverride):(/^\/match\?/.test(path)?25000:30000);
+  const ms=Number(timeoutOverride)>0?Number(timeoutOverride):(/^\/match\?/.test(path)?25000:(/^\/fixtures\?/.test(path)?12000:30000));
   const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),ms);
   try{
     const r=await fetch(WORKER_URL+path,{cache:'no-store',signal:ctl.signal});
@@ -4083,7 +4100,7 @@ function playerHTML(it,j,loadingStats,tab,f){
     const marketValueText=String(bio['Piyasa Değeri']||'').trim();
     h+='<section class="player-bio-card player-market-value-card"><div class="player-summary-title"><b>Piyasa Değeri</b><small>Transfermarkt</small></div><div class="player-bio-grid"><div><small>Güncel değer</small><b>'+esc(marketValueText||'Henüz veri aktarılmadı')+'</b></div></div></section>';
     h+='<section class="player-form-card"><div class="player-summary-title"><b>Son 13 Maç Performansı</b><small>'+((rated.length)?'Ort. '+(rated.reduce((a,x)=>a+Number(x.rating),0)/rated.length).toFixed(1):'PitchAPI')+'</small></div>';
-    if(recent.length){h+='<div class="player-form-chart">'+recent.slice(0,13).reverse().map((match,index)=>{const value=match.rating==null?null:Number(match.rating),height=value==null?4:Math.max(8,Math.min(100,value*10));return `<div class="player-form-bar-wrap"><b>${value==null?'—':value.toFixed(1)}</b><span class="player-form-bar ${playerRatingBarClass(value)}" style="height:${height}%"></span><small>${index+1}</small></div>`}).join('')+'</div><div class="player-form-legend"><span>← Eski maç</span><span>Yeni maç →</span></div>';}else h+='<div class="empty">'+esc(cur.pitchRecentError||'Supabase'de maç puanı bulunan kayıt yok; puan beklenmeden mevcut veriler gösteriliyor.')+'</div>';
+    if(recent.length){h+='<div class="player-form-chart">'+recent.slice(0,13).reverse().map((match,index)=>{const value=match.rating==null?null:Number(match.rating),height=value==null?4:Math.max(8,Math.min(100,value*10));return `<div class="player-form-bar-wrap"><b>${value==null?'—':value.toFixed(1)}</b><span class="player-form-bar ${playerRatingBarClass(value)}" style="height:${height}%"></span><small>${index+1}</small></div>`}).join('')+'</div><div class="player-form-legend"><span>← Eski maç</span><span>Yeni maç →</span></div>';}else h+='<div class="empty">'+esc(cur.pitchRecentError||"Supabase'de maç puanı bulunan kayıt yok; puan beklenmeden mevcut veriler gösteriliyor.")+'</div>';
     h+='</section>';
     const last=recent.slice(0,3);h+='<section class="player-recent-card"><div class="player-summary-title"><b>Son Maçlar</b><button type="button" data-pt="maclar">Tümünü gör ›</button></div>';
     if(last.length)h+=last.map(match=>playerRecentMatchCard(match)).join('');else h+='<div class="empty">'+(cur.pitchRecentLoading?'Maçlar yükleniyor…':'Son maç kaydı bulunamadı.')+'</div>';
@@ -4468,6 +4485,7 @@ const languageObserver=new MutationObserver(records=>{for(const record of record
 languageObserver.observe(document.body,{subtree:true,childList:true,characterData:true});
 translateTree();
 renderDates();renderTabs();load();loadLeagueLogos();
+window.__SKORHANE_READY__=true;
 
 // Ana sayfa İddaa düğmesi yukarıda, ilk satırlarda document capture ile bağlandı.
 </script>
