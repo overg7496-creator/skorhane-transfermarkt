@@ -387,6 +387,38 @@ class SyncHelperTests(unittest.TestCase):
         self.assertNotIn("is_active=eq.true", query)
         self.assertNotIn("last_squad_seen_at=gte.", query)
 
+    def test_explicit_import_window_overrides_all_history_mode_and_includes_inactive_players(self):
+        from unittest.mock import patch
+
+        after = "2026-11-25T20:26:06Z"
+        before = "2026-11-25T21:00:04Z"
+        with (
+            patch.object(sync, "db_get", return_value=[]) as fetch,
+            patch.dict(os.environ, {"TM_DETAIL_PRESEED_ALL_HISTORY": "true"}),
+        ):
+            self.assertEqual(
+                sync.load_pending_player_detail_candidates(
+                    squad_seen_after=after, squad_seen_before=before
+                ),
+                [],
+            )
+        query = fetch.call_args.args[0]
+        self.assertIn("tm_detail_preseed_candidates", query)
+        self.assertIn("last_squad_seen_at.gte.2026-11-25T20", query)
+        self.assertIn("last_squad_seen_at.lt.2026-11-25T21", query)
+        self.assertNotIn("is_active=eq.true", query)
+
+    def test_detail_preseed_view_is_scoped_to_the_exact_nine_leagues_and_five_seasons(self):
+        migration = (ROOT / "database" / "011_detail_preseed_scope.sql").read_text(encoding="utf-8").lower()
+        for competition in ("tr1", "tr2", "tr3a", "tr3b", "gb1", "es1", "l1", "it1", "fr1"):
+            with self.subTest(competition=competition):
+                self.assertIn("'" + competition + "'", migration)
+        self.assertIn("tm_leader_season_start_year(q.season_id) between 2022 and 2026", migration)
+        self.assertNotIn("'tr4a'", migration)
+        self.assertNotIn("'tr4b'", migration)
+        self.assertNotIn("'tr4c'", migration)
+        self.assertNotIn("p.last_felipe_synced_at is null", migration)
+
     def test_imported_detail_continuation_preserves_explicit_window(self):
         from unittest.mock import patch
 
