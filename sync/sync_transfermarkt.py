@@ -339,6 +339,7 @@ DETAIL_ENDPOINTS = {
     "transfers": ("transfers_payload", "player_transfers", ("transfers", "history", "items", "data")),
     "stats": ("stats_payload", "player_stats", ("stats", "data", "items")),
     "injuries": ("injuries_payload", "player_injuries", ("injuries", "data", "items")),
+    "absences": ("absences_payload", "player_absences", ("absences", "data", "items")),
     "matches": ("current_season_payload", "current_season_matches", ("matches", "matchHistory", "data", "items")),
 }
 
