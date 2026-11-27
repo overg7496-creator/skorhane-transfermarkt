@@ -17,6 +17,7 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         cls.sync = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
         cls.league_sync = (ROOT / "sync" / "sync_league_statistics.py").read_text(encoding="utf-8")
         cls.verify_sql = (ROOT / "database" / "verify_leaderboard_profile_read.sql").read_text(encoding="utf-8")
+        cls.source_truth_sql = (ROOT / "database" / "verify_leaderboard_source_truth.sql").read_text(encoding="utf-8")
         cls.leaderboard_sql = (ROOT / "database" / "009_leaderboard_from_player_season_stats.sql").read_text(encoding="utf-8").lower()
 
     def test_migration_007_has_valid_season_function_dollar_quotes(self):
@@ -122,13 +123,22 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn("identity_conflict_scope_keys", self.league_sync)
         self.assertIn("competition_ids_share_namespace", self.league_sync)
 
-    def test_profile_and_leaderboard_verification_query_checks_scope_and_duplicates(self):
+    def test_profile_verification_is_compact_and_calls_profile_bundle_once(self):
         self.assertIn("completed_scope_keys", self.verify_sql)
-        self.assertIn("duplicate_player_groups", self.verify_sql)
-        self.assertIn("same_name_different_id_candidates", self.verify_sql)
         self.assertIn("tm_player_profile_bundle", self.verify_sql)
-        self.assertIn("'goals'", self.verify_sql)
-        self.assertIn("'assists'", self.verify_sql)
+        self.assertEqual(self.verify_sql.count("tm_player_profile_bundle("), 1)
+        self.assertLess(len(self.verify_sql.splitlines()), 100)
+        self.assertNotIn("same_name_different_id_candidates", self.verify_sql)
+
+    def test_source_truth_verification_scans_league_totals_once(self):
+        self.assertIn("scoped_totals as materialized", self.source_truth_sql.lower())
+        self.assertIn("from public.tm_league_player_season_totals", self.source_truth_sql.lower())
+        self.assertEqual(self.source_truth_sql.lower().count("from public.tm_league_player_season_totals"), 1)
+        self.assertIn("duplicate_player_groups", self.source_truth_sql)
+        self.assertIn("'goals'", self.source_truth_sql)
+        self.assertIn("'assists'", self.source_truth_sql)
+        self.assertIn("dense_rank() over", self.source_truth_sql.lower())
+        self.assertLess(len(self.source_truth_sql.splitlines()), 140)
 
 
 if __name__ == "__main__":
