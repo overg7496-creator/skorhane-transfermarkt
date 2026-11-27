@@ -253,6 +253,19 @@ def stat_club_id(row: dict[str, Any]) -> str:
                 return str(value).strip()
     return ""
 
+def competition_ids_share_namespace(left: str, right: str) -> bool:
+    """Compare canonical Transfermarkt codes together and numeric provider IDs together."""
+    if not left or not right:
+        return False
+    left_code = bool(re.fullmatch(r"[A-Z]{2,4}[0-9]+[A-Z]?", left, re.IGNORECASE))
+    right_code = bool(re.fullmatch(r"[A-Z]{2,4}[0-9]+[A-Z]?", right, re.IGNORECASE))
+    return (left_code and right_code) or (left.isdigit() and right.isdigit())
+
+def stat_ids_share_namespace(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return left.isdigit() == right.isdigit()
+
 def matching_targets(stat: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     season_value = text_value(stat, "season_id", "seasonId", "seasonID", "season")
     year = season_start_year(season_value)
@@ -268,7 +281,7 @@ def matching_targets(stat: dict[str, Any], targets: list[dict[str, Any]]) -> lis
             continue
         target_competition_id = str(target.get("competition_id") or "").strip()
         target_competition = norm(target.get("competition_name"))
-        if competition_id and target_competition_id:
+        if competition_id and target_competition_id and competition_ids_share_namespace(competition_id, target_competition_id):
             same_competition = competition_id == target_competition_id
         else:
             same_competition = bool(competition and target_competition and competition == target_competition)
@@ -276,7 +289,7 @@ def matching_targets(stat: dict[str, Any], targets: list[dict[str, Any]]) -> lis
             continue
         target_club_id = str(target.get("club_id") or "").strip()
         target_club = norm(target.get("club_name"))
-        if club_id and target_club_id:
+        if club_id and target_club_id and stat_ids_share_namespace(club_id, target_club_id):
             same_club = club_id == target_club_id
         else:
             same_club = bool(club and target_club and club == target_club)
