@@ -1,7 +1,6 @@
 -- SkorHane: leaderboard + player profile acceptance check.
--- Change the three values in params to the competition, season and player being tested.
--- Worker league codes map tur.1 -> TR1, eng.1 -> GB1, esp.1 -> ES1,
--- ger.1 -> L1, ita.1 -> IT1, fra.1 -> FR1.
+-- Edit these values for the competition, season and player you want to verify.
+-- Examples: TR1 / 2026, GB1 / 2026, ES1 / 2026, L1 / 2026, IT1 / 2026, FR1 / 2026.
 
 with params as (
   select
@@ -24,18 +23,18 @@ competition as (
 goal_counts as (
   select
     count(*)::integer as row_count,
-    count(distinct tm_id)::integer as players,
-    (count(*) - count(distinct tm_id))::integer as duplicate_rows,
-    coalesce(max(goals), 0)::integer as top_goals
+    count(distinct l.tm_id)::integer as distinct_players,
+    (count(*) - count(distinct l.tm_id))::integer as duplicate_rows,
+    coalesce(max(l.goals), 0)::integer as top_goals
   from public.tm_league_goal_leaders l
   join competition p using (competition_id, season_id)
 ),
 assist_counts as (
   select
     count(*)::integer as row_count,
-    count(distinct tm_id)::integer as players,
-    (count(*) - count(distinct tm_id))::integer as duplicate_rows,
-    coalesce(max(assists), 0)::integer as top_assists
+    count(distinct l.tm_id)::integer as distinct_players,
+    (count(*) - count(distinct l.tm_id))::integer as duplicate_rows,
+    coalesce(max(l.assists), 0)::integer as top_assists
   from public.tm_league_assist_leaders l
   join competition p using (competition_id, season_id)
 ),
@@ -51,7 +50,7 @@ select jsonb_pretty(jsonb_build_object(
     'player_tm_id', p.tm_id
   ),
   'roster', jsonb_build_object(
-    'players', (
+    'roster_players', (
       select count(distinct q.tm_id)::integer
       from public.tm_team_season_squads q
       where q.competition_id = p.competition_id
@@ -65,8 +64,8 @@ select jsonb_pretty(jsonb_build_object(
         and public.tm_leader_season_start_year(s.season_id) =
             public.tm_leader_season_start_year(p.season_id)
         and (
-          coalesce(s.appearances,0) > 0 or coalesce(s.goals,0) > 0
-          or coalesce(s.assists,0) > 0 or coalesce(s.minutes,0) > 0
+          coalesce(s.appearances, 0) > 0 or coalesce(s.goals, 0) > 0
+          or coalesce(s.assists, 0) > 0 or coalesce(s.minutes, 0) > 0
         )
     ),
     'raw_stat_rows_with_competition_id', (
@@ -83,68 +82,12 @@ select jsonb_pretty(jsonb_build_object(
             public.tm_leader_season_start_year(p.season_id)
         and (
           s.competition_id = p.competition_id
-          or (coalesce(s.competition_name,'') ~ '^[0-9]+
-    'joined_player_rows', (
-      select count(distinct s.tm_id)::integer
-      from public.tm_team_season_player_stats s
-      where s.competition_id = p.competition_id
-        and public.tm_leader_season_start_year(s.season_id) =
-            public.tm_leader_season_start_year(p.season_id)
-        and (
-          coalesce(s.appearances,0) > 0 or coalesce(s.goals,0) > 0
-          or coalesce(s.assists,0) > 0 or coalesce(s.minutes,0) > 0
-        )
-    )
-  ),
-  'goal_leaders', jsonb_build_object(
-    'rows', (select row_count from goal_counts),
-    'distinct_players', (select players from goal_counts),
-    'duplicate_rows', (select duplicate_rows from goal_counts),
-    'top_goals', (select top_goals from goal_counts),
-    'top_15', (
-      select coalesce(jsonb_agg(to_jsonb(x) order by x.leader_rank), '[]'::jsonb)
-      from (
-        select leader_rank, tm_id, player_name, club_name, goals, assists, appearances
-        from public.tm_league_goal_leaders l
-        where l.competition_id = p.competition_id and l.season_id = p.season_id
-        order by leader_rank, player_name
-        limit 15
-      ) x
-    )
-  ),
-  'assist_leaders', jsonb_build_object(
-    'rows', (select row_count from assist_counts),
-    'distinct_players', (select players from assist_counts),
-    'duplicate_rows', (select duplicate_rows from assist_counts),
-    'top_assists', (select top_assists from assist_counts),
-    'top_15', (
-      select coalesce(jsonb_agg(to_jsonb(x) order by x.leader_rank), '[]'::jsonb)
-      from (
-        select leader_rank, tm_id, player_name, club_name, goals, assists, appearances
-        from public.tm_league_assist_leaders l
-        where l.competition_id = p.competition_id and l.season_id = p.season_id
-        order by leader_rank, player_name
-        limit 15
-      ) x
-    )
-  ),
-  'target_player_profile', (
-    select jsonb_build_object(
-      'resolved_tm_id', b.data#>>'{player,tm_id}',
-      'name', b.data#>>'{player,name}',
-      'appearance_rows', jsonb_array_length(coalesce(b.data->'appearances','[]'::jsonb)),
-      'career_rows', jsonb_array_length(coalesce(b.data->'season_stats','[]'::jsonb)),
-      'transfer_rows', jsonb_array_length(coalesce(b.data->'transfers','[]'::jsonb)),
-      'market_value_rows', jsonb_array_length(coalesce(b.data->'market_values','[]'::jsonb)),
-      'injury_rows', jsonb_array_length(coalesce(b.data->'injuries','[]'::jsonb)),
-      'absence_rows', jsonb_array_length(coalesce(b.data->'absences','[]'::jsonb))
-    )
-    from profile b
-  )
-)) as verification;
- and s.competition_name = p.competition_id)
-          or public.tm_leader_normalize_name(s.competition_name) =
-             public.tm_leader_normalize_name(p.competition_name)
+          or s.competition_name = p.competition_id
+          or (
+            public.tm_leader_normalize_name(s.competition_name) <> ''
+            and public.tm_leader_normalize_name(s.competition_name) =
+                public.tm_leader_normalize_name(p.competition_name)
+          )
         )
     ),
     'roster_players_without_nonzero_stats', (
@@ -161,8 +104,8 @@ select jsonb_pretty(jsonb_build_object(
             and public.tm_leader_season_start_year(s.season_id) =
                 public.tm_leader_season_start_year(q.season_id)
             and (
-              coalesce(s.appearances,0) > 0 or coalesce(s.goals,0) > 0
-              or coalesce(s.assists,0) > 0 or coalesce(s.minutes,0) > 0
+              coalesce(s.appearances, 0) > 0 or coalesce(s.goals, 0) > 0
+              or coalesce(s.assists, 0) > 0 or coalesce(s.minutes, 0) > 0
             )
         )
     ),
@@ -173,14 +116,14 @@ select jsonb_pretty(jsonb_build_object(
         and public.tm_leader_season_start_year(s.season_id) =
             public.tm_leader_season_start_year(p.season_id)
         and (
-          coalesce(s.appearances,0) > 0 or coalesce(s.goals,0) > 0
-          or coalesce(s.assists,0) > 0 or coalesce(s.minutes,0) > 0
+          coalesce(s.appearances, 0) > 0 or coalesce(s.goals, 0) > 0
+          or coalesce(s.assists, 0) > 0 or coalesce(s.minutes, 0) > 0
         )
     )
   ),
   'goal_leaders', jsonb_build_object(
     'rows', (select row_count from goal_counts),
-    'distinct_players', (select players from goal_counts),
+    'distinct_players', (select distinct_players from goal_counts),
     'duplicate_rows', (select duplicate_rows from goal_counts),
     'top_goals', (select top_goals from goal_counts),
     'top_15', (
@@ -196,7 +139,7 @@ select jsonb_pretty(jsonb_build_object(
   ),
   'assist_leaders', jsonb_build_object(
     'rows', (select row_count from assist_counts),
-    'distinct_players', (select players from assist_counts),
+    'distinct_players', (select distinct_players from assist_counts),
     'duplicate_rows', (select duplicate_rows from assist_counts),
     'top_assists', (select top_assists from assist_counts),
     'top_15', (
@@ -214,13 +157,14 @@ select jsonb_pretty(jsonb_build_object(
     select jsonb_build_object(
       'resolved_tm_id', b.data#>>'{player,tm_id}',
       'name', b.data#>>'{player,name}',
-      'appearance_rows', jsonb_array_length(coalesce(b.data->'appearances','[]'::jsonb)),
-      'career_rows', jsonb_array_length(coalesce(b.data->'season_stats','[]'::jsonb)),
-      'transfer_rows', jsonb_array_length(coalesce(b.data->'transfers','[]'::jsonb)),
-      'market_value_rows', jsonb_array_length(coalesce(b.data->'market_values','[]'::jsonb)),
-      'injury_rows', jsonb_array_length(coalesce(b.data->'injuries','[]'::jsonb)),
-      'absence_rows', jsonb_array_length(coalesce(b.data->'absences','[]'::jsonb))
+      'appearance_rows', jsonb_array_length(coalesce(b.data->'appearances', '[]'::jsonb)),
+      'career_rows', jsonb_array_length(coalesce(b.data->'season_stats', '[]'::jsonb)),
+      'transfer_rows', jsonb_array_length(coalesce(b.data->'transfers', '[]'::jsonb)),
+      'market_value_rows', jsonb_array_length(coalesce(b.data->'market_values', '[]'::jsonb)),
+      'injury_rows', jsonb_array_length(coalesce(b.data->'injuries', '[]'::jsonb)),
+      'absence_rows', jsonb_array_length(coalesce(b.data->'absences', '[]'::jsonb))
     )
     from profile b
   )
-)) as verification;
+)) as verification
+from competition p;
