@@ -1493,6 +1493,59 @@ def patch_dcaribou_rate_limit() -> None:
         "dcaribou crawler güvenli ayarlandı: concurrency=1, max 18 istek/dk, jitter 1.5–3.5 sn"
     )
 
+def decode_dcaribou_records(stdout: str) -> list[dict[str, Any]]:
+    """Decode JSONL and the JSON array/object formats used by scraper CLI versions."""
+    records: list[dict[str, Any]] = []
+    list_keys = ("data", "results", "items", "competitions", "clubs", "players", "appearances")
+
+    def add_value(value: Any) -> None:
+        if isinstance(value, list):
+            records.extend(item for item in value if isinstance(item, dict))
+        elif isinstance(value, dict):
+            for key in list_keys:
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    records.extend(item for item in nested if isinstance(item, dict))
+                    return
+            if any(key in value for key in (
+                "href", "competition_name", "club_id", "clubId", "player_id",
+                "playerId", "game_id", "gameId", "appearance_id",
+            )):
+                records.append(value)
+
+    try:
+        add_value(json.loads(stdout))
+    except (json.JSONDecodeError, TypeError):
+        pass
+    if records:
+        return records
+    for line in stdout.splitlines():
+        candidate = line.strip()
+        if not candidate or candidate.startswith(("[", "]")):
+            continue
+        try:
+            add_value(json.loads(candidate))
+        except json.JSONDecodeError:
+            continue
+    if records:
+        return records
+    decoder = json.JSONDecoder()
+    position = 0
+    while position < len(stdout):
+        while position < len(stdout) and (stdout[position].isspace() or stdout[position] in ",;"):
+            position += 1
+        if position >= len(stdout):
+            break
+        try:
+            value, end = decoder.raw_decode(stdout, position)
+        except json.JSONDecodeError:
+            position += 1
+            continue
+        add_value(value)
+        position = end
+    return records
+
+
 def run_dcaribou_crawler(name: str, parents: list[dict[str, Any]] | None = None,
                          extra_args: list[str] | None = None) -> tuple[list[dict[str, Any]], bool]:
     """Run one dcaribou stage and preserve partial JSON output on interruption."""
@@ -1513,19 +1566,18 @@ def run_dcaribou_crawler(name: str, parents: list[dict[str, Any]] | None = None,
         stdout = raw_out.decode("utf-8", errors="replace") if isinstance(raw_out, bytes) else raw_out
         stderr = raw_err.decode("utf-8", errors="replace") if isinstance(raw_err, bytes) else raw_err
         LOG.error("dcaribou %s 4 saatlik aşama sınırına ulaştı; kısmi çıktı kaydedilecek ve checkpoint tamamlandı sayılmayacak.", name)
-    records: list[dict[str, Any]] = []
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            value = json.loads(line)
-            if isinstance(value, dict):
-                records.append(value)
-        except json.JSONDecodeError:
-            LOG.warning("dcaribou %s JSON dışı stdout satırı atlandı.", name)
+    records = decode_dcaribou_records(stdout)
+    if not records:
+        preview = [line.strip()[:350] for line in stdout.splitlines() if line.strip()][:6]
+        LOG.warning(
+            "dcaribou %s JSON çıktısı çözümlenemedi: stdout_lines=%s stdout_chars=%s stdout_preview=%s",
+            name, len(stdout.splitlines()), len(stdout),
+            json.dumps(preview, ensure_ascii=False),
+        )
+    else:
+        LOG.info("dcaribou %s çıktısı çözümlendi: %s JSON kayıt.", name, len(records))
     if stderr.strip():
-        LOG.warning("dcaribou %s: %s", name, stderr.strip()[-1600:])
+        LOG.warning("dcaribou %s stderr: %s", name, stderr.strip()[-2400:])
     return records, success
 
 def competition_codes(item: dict[str, Any]) -> set[str]:
@@ -1691,7 +1743,7 @@ def persist_dcaribou_appearances(appearances: list[dict[str, Any]]) -> int:
     return saved
 
 
-def seed_dcaribou_history() -> int:
+def _seed_dcaribou_history_scraper() -> int:
     """One-off historical seed with checkpoints; completed seasons are not crawled again."""
     try:
         import tfmkt  # type: ignore  # noqa: F401
