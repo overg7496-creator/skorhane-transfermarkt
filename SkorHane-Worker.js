@@ -3044,7 +3044,6 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
   const stale = plan.stale;
   const required = plan.required;
   if (!required) return { required: false, queued: false, configured: !!token };
-  if (!token) return { required: true, queued: false, configured: false, reason: "GITHUB_ACTIONS_TOKEN tanımlı değil" };
 
   const queueQuery = "tm_source_records?select=id,payload,fetched_at&source=eq.skorhane_worker&record_type=eq.player_detail_refresh&external_id=eq." +
     encodeURIComponent(playerId) + "&record_key=eq.details&limit=1";
@@ -3056,24 +3055,28 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
   const ageMs = Number.isFinite(fetchedAt) ? Date.now() - fetchedAt : Number.POSITIVE_INFINITY;
   const retryAt = Date.parse(queuePayloadExisting.retry_at || "");
   if (queueStatus === "blocked") {
-    return { required: true, queued: false, configured: true, state: "blocked",
+    return { required: true, queued: false, configured: !!token, state: "blocked",
       reason: queuePayloadExisting.last_error || "Bu oyuncunun yenilemesi kalıcı hata nedeniyle durduruldu." };
   }
   if (queueStatus === "retry" && Number.isFinite(retryAt) && retryAt > Date.now()) {
-    return { required: true, queued: true, configured: true, state: "retry-wait", retryAt: queuePayloadExisting.retry_at };
+    return { required: true, queued: true, configured: !!token, state: "retry-wait", retryAt: queuePayloadExisting.retry_at };
+  }
+  if (queueStatus === "pending-config" && !token && ageMs < 15 * 60000) {
+    return { required: true, queued: true, configured: false, state: "pending-config",
+      reason: "GITHUB_ACTIONS_TOKEN tanımlı değil; eksik oyuncu tek kuyruğa kaydedildi." };
   }
   if ((queueStatus === "queued" && ageMs < 15 * 60000) ||
       (queueStatus === "running" && ageMs < 45 * 60000)) {
-    return { required: true, queued: true, configured: true, state: "already-queued" };
+    return { required: true, queued: true, configured: !!token, state: "already-queued" };
   }
   if (queueStatus === "dispatch-failed" && ageMs < 2 * 60000) {
-    return { required: true, queued: false, configured: true, state: "dispatch-failed",
+    return { required: true, queued: false, configured: !!token, state: "dispatch-failed",
       reason: queuePayloadExisting.error || "GitHub Actions çalışması başlatılamadı." };
   }
 
   const now = new Date().toISOString();
   const queuePayload = {
-    status: "queued", player_id: String(playerId),
+    status: token ? "queued" : "pending-config", player_id: String(playerId),
     requested_at: now, reason: stale ? "stale-player-details" : "missing-player-fields"
   };
   const snapshot = {
@@ -3096,6 +3099,13 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
       if (raced.length) return { required: true, queued: true, configured: true, state: "concurrent-queue" };
       throw error;
     }
+  }
+
+  if (!token) {
+    return {
+      required: true, queued: true, configured: false, state: "pending-config",
+      reason: "GITHUB_ACTIONS_TOKEN tanımlı değil; eksik oyuncu tek kuyruğa kaydedildi."
+    };
   }
 
   try {
@@ -4377,9 +4387,9 @@ async function tmPlayer(env, id, executionCtx = null) {
   const refreshPlan = tmPlayerRefreshPlan(row, sourceRecords);
   let refreshState = {
     required: !!refreshPlan.required,
-    queued: !!(refreshPlan.required && env && env.GITHUB_ACTIONS_TOKEN),
+    queued: !!refreshPlan.required,
     configured: !!(env && env.GITHUB_ACTIONS_TOKEN),
-    state: refreshPlan.required ? ((env && env.GITHUB_ACTIONS_TOKEN) ? "queued" : "required") : "current",
+    state: refreshPlan.required ? ((env && env.GITHUB_ACTIONS_TOKEN) ? "queued" : "pending-config") : "current",
     reason: refreshPlan.required && !(env && env.GITHUB_ACTIONS_TOKEN) ? "GITHUB_ACTIONS_TOKEN tanımlı değil" : ""
   };
   if (refreshPlan.required) {
