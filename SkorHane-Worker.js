@@ -4117,21 +4117,25 @@ async function tmLeagueData(env, code, year) {
     "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) + "&order=tm_id.asc";
   // A non-empty leaders view is not proof of a complete list. Every player in
   // the selected league-season roster must have a v2 league-stats checkpoint.
+  const scopeKey = competitionId + ":" + season;
   const checkpointNeedle = encodeURIComponent(JSON.stringify({
     coverage_version: 2,
-    scope_competitions: [competitionId],
-    scope_seasons: [season],
-    status: "completed"
+    status: "completed",
+    completed_scope_keys: [scopeKey]
   }));
-  const checkpointQuery = "tm_source_records?select=external_id,payload&source=eq.felipeall&record_type=eq.league_stats_player_checkpoint" +
+  const checkpointQuery = "tm_source_records?select=external_id&source=eq.felipeall&record_type=eq.league_stats_player_checkpoint" +
     "&payload=cs." + checkpointNeedle + "&order=external_id.asc";
+  const rosterQuery = "tm_team_season_player_stats?select=tm_id&competition_id=eq." +
+    encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
+    "&order=tm_id.asc";
   const tableQuery = "tm_source_records?select=payload&source=eq.felipeall&record_type=eq.competition_table" +
     "&external_id=eq." + encodeURIComponent(competitionId) + "&record_key=eq." + encodeURIComponent(season) + "&limit=1";
-  const [statesR, goalsR, assistsR, totalsR, checkpointsR, tableR] = await Promise.allSettled([
+  const [statesR, goalsR, assistsR, totalsR, rosterR, checkpointsR, tableR] = await Promise.allSettled([
     tmDbRowsPaged(env, statesQuery, 1000, 40000),
     tmDbRowsPaged(env, goalsQuery, 1000, 10000),
     tmDbRowsPaged(env, assistsQuery, 1000, 10000),
     tmDbRowsPaged(env, totalsQuery, 1000, 10000),
+    tmDbRowsPaged(env, rosterQuery, 1000, 20000),
     tmDbRowsPaged(env, checkpointQuery, 1000, 20000),
     tmDbRows(env, tableQuery)
   ]);
@@ -4139,15 +4143,13 @@ async function tmLeagueData(env, code, year) {
   const goals = goalsR.status === "fulfilled" ? tmLeaderRows(goalsR.value, "goals") : [];
   const assists = assistsR.status === "fulfilled" ? tmLeaderRows(assistsR.value, "assists") : [];
   const totals = totalsR.status === "fulfilled" ? totalsR.value : [];
-  const expectedPlayerIds = [...new Set(totals.map(row => String(row && row.tm_id || "").trim()).filter(Boolean))];
+  const expectedPlayerIds = [...new Set((rosterR.status === "fulfilled" ? rosterR.value : [])
+    .map(row => String(row && row.tm_id || "").trim()).filter(Boolean))];
   const completedPlayerIds = new Set(checkpointsR.status === "fulfilled"
-    ? checkpointsR.value
-      .filter(row => row && row.payload && row.payload.status === "completed" &&
-        Number(row.payload.coverage_version) === 2 && row.payload.no_matching_league_rows !== true)
-      .map(row => String(row.external_id || "").trim()).filter(Boolean)
+    ? checkpointsR.value.map(row => String(row && row.external_id || "").trim()).filter(Boolean)
     : []);
   const completedPlayers = expectedPlayerIds.filter(id => completedPlayerIds.has(id)).length;
-  const coverageComplete = totalsR.status === "fulfilled" &&
+  const coverageComplete = rosterR.status === "fulfilled" &&
     checkpointsR.status === "fulfilled" &&
     expectedPlayerIds.length > 0 &&
     completedPlayers === expectedPlayerIds.length;
@@ -4180,6 +4182,7 @@ async function tmLeagueData(env, code, year) {
     errors: {
       goals: goalsR.status === "rejected" ? String(goalsR.reason && goalsR.reason.message || goalsR.reason) : "",
       assists: assistsR.status === "rejected" ? String(assistsR.reason && assistsR.reason.message || assistsR.reason) : "",
+      roster: rosterR.status === "rejected" ? String(rosterR.reason && rosterR.reason.message || rosterR.reason) : "",
       coverage: checkpointsR.status === "rejected" ? String(checkpointsR.reason && checkpointsR.reason.message || checkpointsR.reason) : ""
     }
   };
