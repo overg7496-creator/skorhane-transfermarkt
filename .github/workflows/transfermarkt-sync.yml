@@ -11,6 +11,7 @@ on:
           - refresh-player-missing
           - one-player-test
           - preseed-players
+          - seed-player-matches
         default: refresh-player-missing
       player_id:
         description: "Tek Transfermarkt oyuncu ID'si (ör. Victor Osimhen: 401923)"
@@ -20,6 +21,11 @@ on:
         description: "Ön doldurma için oyuncu ID listesi (virgül, boşluk veya noktalı virgül)"
         required: false
         type: string
+      seasons:
+        description: "Maç geçmişi için Felipe sezon ID'leri (ör. 2022,2023,2024,2025,2026)"
+        required: false
+        type: string
+        default: "2022,2023,2024,2025,2026"
 
 permissions:
   contents: read
@@ -36,6 +42,7 @@ jobs:
     env:
       TM_TEST_PLAYER_ID: ${{ github.event.inputs.player_id }}
       TM_PRESEED_PLAYER_IDS: ${{ github.event.inputs.player_ids }}
+      TM_PRESEED_SEASONS: ${{ github.event.inputs.seasons }}
       TM_PRESEED_MAX_PLAYERS: "20"
       FELIPE_API_BASE: http://127.0.0.1:8000
       HTTP_MAX_RETRIES: "4"
@@ -119,8 +126,20 @@ jobs:
           TM_PRESEED_MAX_PLAYERS: "20"
         run: python sync/sync_transfermarkt.py preseed-players --player-ids "$TM_PRESEED_PLAYER_IDS"
 
+      - name: Seed explicit player/season match history into tm_appearances
+        if: github.event.inputs.mode == 'seed-player-matches'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TM_PRESEED_PLAYER_IDS: ${{ github.event.inputs.player_ids }}
+          TM_PRESEED_SEASONS: ${{ github.event.inputs.seasons }}
+          TM_PRESEED_MAX_PLAYERS: "20"
+        run: |
+          set -euo pipefail
+          python sync/sync_transfermarkt.py seed-player-matches --player-ids "$TM_PRESEED_PLAYER_IDS" --seasons "$TM_PRESEED_SEASONS"
+
       - name: Verify selected player batch rows in Supabase
-        if: github.event.inputs.mode == 'preseed-players'
+        if: github.event.inputs.mode == 'preseed-players' || github.event.inputs.mode == 'seed-player-matches'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
