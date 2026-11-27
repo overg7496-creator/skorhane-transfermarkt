@@ -99,6 +99,41 @@ class LeagueStatisticsTests(unittest.TestCase):
             "goals": 8,
         }
         self.assertEqual(league_stats.matching_targets(stat, [self.target]), [])
+        self.assertEqual(
+            league_stats.identity_conflict_scope_keys(stat, [self.target]),
+            {"TR1:2025"},
+        )
+
+    def test_provider_club_id_without_name_still_flags_unknown_roster_stint(self):
+        stat = {
+            "seasonID": "2025/26",
+            "competitionId": "TR1",
+            "competitionName": "Süper Lig",
+            "clubId": "200",
+            "goals": 8,
+        }
+        self.assertEqual(
+            league_stats.identity_conflict_scope_keys(stat, [self.target]),
+            {"TR1:2025"},
+        )
+
+    def test_matching_one_of_multiple_club_stints_does_not_flag_the_other(self):
+        second_target = {
+            **self.target,
+            "club_id": "200",
+            "club_name": "Fenerbahçe",
+        }
+        stat = {
+            "seasonID": "2025/26",
+            "competitionId": "TR1",
+            "competitionName": "Süper Lig",
+            "clubId": "100",
+            "goals": 8,
+        }
+        self.assertEqual(
+            league_stats.identity_conflict_scope_keys(stat, [self.target, second_target]),
+            set(),
+        )
 
     def test_missing_ids_use_exact_normalized_name_fallback(self):
         stat = {
@@ -164,8 +199,30 @@ class LeagueStatisticsTests(unittest.TestCase):
             set(),
         )
 
-    def test_league_stats_checkpoint_scope_is_versioned_for_id_refetch(self):
-        self.assertTrue(league_stats.checkpoint_scope().startswith("v2_"))
+    def test_zero_stat_payload_creates_a_typed_zero_row_for_rostered_player(self):
+        row = league_stats.zero_stat_payload("123", self.target)
+        self.assertEqual(row["tm_id"], "123")
+        self.assertEqual(row["season_id"], "2025/26")
+        self.assertEqual(row["competition_id"], "TR1")
+        self.assertEqual(row["club_id"], "100")
+        for field in (
+            "appearances", "starts", "goals", "assists", "minutes",
+            "yellow_cards", "second_yellow_cards", "red_cards",
+            "goals_conceded", "clean_sheets",
+        ):
+            with self.subTest(field=field):
+                self.assertEqual(row[field], 0)
+        self.assertTrue(row["payload"]["league_stats_sync"]["zero_fill"])
+
+    def test_scope_defaults_to_exact_nine_leagues_and_last_five_seasons(self):
+        self.assertEqual(
+            league_stats.COMPETITIONS,
+            ["TR1", "TR2", "TR3A", "TR3B", "GB1", "ES1", "L1", "IT1", "FR1"],
+        )
+        self.assertEqual(league_stats.SEASONS, ["2022", "2023", "2024", "2025", "2026"])
+
+    def test_league_stats_checkpoint_scope_is_versioned_for_complete_zero_fill_refetch(self):
+        self.assertTrue(league_stats.checkpoint_scope().startswith("v3_"))
 
     def test_leaderboard_views_and_team_summary_are_already_in_migration(self):
         migration = (ROOT / "database" / "002_team_seasons_and_leaderboards.sql").read_text(encoding="utf-8")
