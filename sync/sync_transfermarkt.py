@@ -1529,66 +1529,49 @@ def run_dcaribou_crawler(name: str, parents: list[dict[str, Any]] | None = None,
     return records, success
 
 def competition_codes(item: dict[str, Any]) -> set[str]:
-    """Resolve Transfermarkt league codes from hrefs or the country's metadata.
-
-    dcaribou's competition crawler often exposes numeric competition URLs and
-    keeps the country code/name on the competition row instead of the URL.
-    The previous implementation only scanned URL/name text for e.g. TR1,
-    so valid first-tier rows were silently discarded.
-    """
+    """Extract exact Transfermarkt competition codes from the full nested row."""
     searchable: list[str] = []
-    for key in ("href", "competition_id", "id", "code", "competition_name"):
-        value = item.get(key)
-        if value is not None:
+
+    def collect(value: Any, depth: int = 0) -> None:
+        if depth > 4 or value is None:
+            return
+        if isinstance(value, dict):
+            for child in value.values():
+                collect(child, depth + 1)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                collect(child, depth + 1)
+        elif isinstance(value, (str, int, float)):
             searchable.append(str(value))
 
-    parent = item.get("parent")
-    if isinstance(parent, dict):
-        for key in ("country_code", "country_name", "country", "name"):
-            value = parent.get(key)
-            if value is not None:
-                searchable.append(str(value))
-    for key in ("country_code", "country_name"):
-        value = item.get(key)
-        if value is not None:
-            searchable.append(str(value))
-
+    collect(item)
     joined = " ".join(searchable).upper()
-    codes = set(re.findall(r"(?<![A-Z0-9])[A-Z]{1,5}\d{1,2}(?![A-Z0-9])", joined))
+    return set(re.findall(r"(?<![A-Z0-9])[A-Z]{1,5}\\d{1,2}(?![A-Z0-9])", joined))
 
-    def compact(value: str) -> str:
-        # Keep this normalization local so only country labels are normalized.
-        import unicodedata
-        return re.sub(
-            r"[^A-Z0-9]",
-            "",
-            unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii").upper(),
-        )
 
-    country_aliases = {
-        "TR1": {"TR", "TUR", "TURKEY", "TURKIYE"},
-        "GB1": {"GB", "GBR", "ENG", "UK", "UNITEDKINGDOM", "ENGLAND"},
-        "ES1": {"ES", "ESP", "SPAIN", "ESPANA"},
-        "L1": {"DE", "DEU", "GER", "GERMANY", "DEUTSCHLAND"},
-        "IT1": {"IT", "ITA", "ITALY", "ITALIA"},
-        "FR1": {"FR", "FRA", "FRANCE"},
-    }
-    country_values = [
-        str(item.get("country_code") or ""),
-        str(item.get("country_name") or ""),
-    ]
-    if isinstance(parent, dict):
-        country_values.extend([
-            str(parent.get("country_code") or ""),
-            str(parent.get("country_name") or ""),
-            str(parent.get("country") or ""),
-        ])
-    normalized_countries = {compact(value) for value in country_values if value}
-    for league_code, aliases in country_aliases.items():
-        if normalized_countries & aliases:
-            codes.add(league_code)
+def is_dcaribou_first_tier(item: dict[str, Any], wanted_codes: set[str]) -> bool:
+    """Accept canonical first_tier metadata or an unambiguous /wettbewerb/CODE URL.
 
-    return codes
+    Some scraper releases omit/rename competition_type. The URL path is the
+    authoritative discriminator: /wettbewerb/ is a league, while
+    /pokalwettbewerb/ is a cup and must never be treated as a league.
+    """
+    raw_type = safe_text(
+        item.get("competition_type"), item.get("competitionType"),
+        item.get("sub_type"), item.get("subType"),
+    ) or ""
+    normalized_type = re.sub(r"[^a-z]", "", raw_type.lower())
+    if normalized_type in {"firsttier", "firstdivision", "topdivision"}:
+        return True
+
+    href = safe_text(item.get("href"), item.get("url"), item.get("competition_url")) or ""
+    path = href.lower().split("?", 1)[0].rstrip("/")
+    if "/pokalwettbewerb/" in path or "/pokalwettbewerb" in path:
+        return False
+    if "/wettbewerb/" in path:
+        return bool(competition_codes(item) & wanted_codes)
+    return False
+
 
 
 def seed_checkpoint_payload(record_key: str) -> dict[str, Any]:
@@ -1683,11 +1666,36 @@ def seed_dcaribou_history() -> int:
     if not competitions_ok:
         raise RuntimeError("dcaribou yarışma kataloğu eksik geldi; checkpoint yazılmadı.")
     selected: list[tuple[str, dict[str, Any]]] = []
+    wanted_codes = set(DCARIBOU_COMPETITIONS)
+    first_tier_count = 0
+    code_match_count = 0
     for competition in competitions:
-        if competition.get("competition_type") != "first_tier":
-            continue
-        for code in sorted(competition_codes(competition) & set(DCARIBOU_COMPETITIONS)):
-            selected.append((code, competition))
+        if is_dcaribou_first_tier(competition, wanted_codes):
+            first_tier_count += 1
+            matched_codes = competition_codes(competition) & wanted_codes
+            if matched_codes:
+                code_match_count += 1
+                for code in sorted(matched_codes):
+                    selected.append((code, competition))
+    if not selected:
+        samples = [
+            {
+                "type": row.get("type"),
+                "competition_type": row.get("competition_type"),
+                "href": row.get("href"),
+                "competition_name": row.get("competition_name"),
+                "country_code": row.get("country_code"),
+                "country_name": row.get("country_name"),
+                "keys": sorted(row.keys()),
+            }
+            for row in competitions[:8]
+        ]
+        LOG.error(
+            "dcaribou yarışma kataloğu eşleşmedi: records=%d first_tier=%d code_matches=%d "
+            "wanted=%s sample=%s",
+            len(competitions), first_tier_count, code_match_count,
+            ",".join(DCARIBOU_COMPETITIONS), json.dumps(samples, ensure_ascii=False),
+        )
     # One competition may carry multiple identifiers in a malformed response; dedupe it.
     selected = list({(code, safe_text(comp.get("href"), comp.get("competition_name")) or code): (code, comp)
                      for code, comp in selected}.values())
