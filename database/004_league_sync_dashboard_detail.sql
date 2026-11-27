@@ -374,10 +374,11 @@ player_source_snapshots as (
     sum(case when r.record_type = 'player_absences'
       then public.tm_dashboard_payload_item_count(r.payload) else 0 end)::bigint as absence_snapshot_items
   from public.tm_source_records r
-  where r.record_type in (
-    'player_profile', 'player_market_values', 'player_transfers',
-    'player_injuries', 'player_absences'
-  )
+  where r.source = 'felipeall'
+    and r.record_type in (
+      'player_profile', 'player_market_values', 'player_transfers',
+      'player_injuries', 'player_absences'
+    )
     and nullif(r.external_id, '') is not null
   group by r.external_id
 ),
