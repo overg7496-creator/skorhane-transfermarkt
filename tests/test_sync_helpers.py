@@ -55,7 +55,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', worker)
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
-        self.assertIn('"pf46:"', worker)
+        self.assertIn('"pf47:"', worker)
         self.assertIn("function tmSupabaseBase(env)", worker)
         self.assertIn("SUPABASE_URL Project URL olmalı", worker)
         self.assertIn("function tmPlayerRefreshPlan(row, sourceRecords = [])", worker)
@@ -638,7 +638,7 @@ class SyncHelperTests(unittest.TestCase):
         requested_html = (ROOT / "SkorHane-HTML-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, requested_copy)
         self.assertEqual(html, requested_html)
-        self.assertIn('"pf46:"', worker)
+        self.assertIn('"pf47:"', worker)
 
     def test_database_saves_goalkeeper_season_fields(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
@@ -728,7 +728,7 @@ if __name__ == "__main__":
         self.assertNotIn("executionCtx.waitUntil(refreshPromise)", worker)
         self.assertNotIn("queueTmPlayerRefresh(", worker)
         self.assertIn('"preload-required"', worker)
-        self.assertIn('"pf46:"', worker)
+        self.assertIn('"pf47:"', worker)
         self.assertIn("const loading=false", html)
         self.assertIn("const freshStats=await api('/player?part=stats'+qs)", html)
         self.assertNotIn("const freshInfo=await api('/player?part=info'+qs)", html)
