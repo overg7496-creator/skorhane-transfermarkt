@@ -20,10 +20,10 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         cls.leaderboard_sql = (ROOT / "database" / "009_leaderboard_from_player_season_stats.sql").read_text(encoding="utf-8").lower()
 
     def test_migration_007_has_valid_season_function_dollar_quotes(self):
-        self.assertIn("as $\\n  select case", self.sql007)
-        self.assertIn("\\n$;", self.sql007)
-        self.assertNotIn("\\nas $\\n", self.sql007)
-        self.assertNotIn("\\n$;\\n", self.sql007)
+        self.assertIn("as $$\n  select case", self.sql007)
+        self.assertIn("\n$$;", self.sql007)
+        self.assertNotIn("\nas $\n", self.sql007)
+        self.assertNotIn("\n$;\n", self.sql007)
 
     def test_migration_008_is_self_contained_for_007_helpers(self):
         self.assertIn("create or replace function public.tm_leader_season_start_year", self.sql)
