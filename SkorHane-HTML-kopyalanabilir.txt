@@ -3924,8 +3924,8 @@ async function loadPitchPlayerCareer(my){
     : 'Transfermarkt sezon kaydı bulunamadı';
   renderPlayer();
 }
-const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v8.'+pitchClientTeamKey(name||'');
-const playerInfoCacheKey=name=>'skorhane.playerinfo.v2.'+pitchClientTeamKey(name||'');
+const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v9.'+pitchClientTeamKey(name||'');
+const playerInfoCacheKey=name=>'skorhane.playerinfo.v3.'+pitchClientTeamKey(name||'');
 function readPlayerInfoCache(name){try{const raw=localStorage.getItem(playerInfoCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<30*86400e3&&x.data&&typeof x.data==='object'&&x.data.bio&&typeof x.data.bio==='object'?x.data:null}catch(_){return null}}
 function savePlayerInfoCache(name,data){try{if(data&&typeof data==='object'&&data.bio&&typeof data.bio==='object')localStorage.setItem(playerInfoCacheKey(name),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
 function readPlayerStatsCache(name){try{const raw=localStorage.getItem(playerStatsCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<7*86400e3&&x.data&&Array.isArray(x.data.seasons)?x.data:null}catch(_){return null}}
@@ -4069,9 +4069,13 @@ const showStat=v=>v==null?'—':v;
 const sumRows=rows=>{const sum=k=>{const vals=rows.map(r=>statNum(r[k])).filter(v=>v!=null);return vals.length?vals.reduce((a,b)=>a+b,0):null};return {m:sum('m'),g:sum('g'),a:sum('a'),s11:sum('s11'),y:sum('y'),r:sum('r')}};
 function playerNoDataMessage(j,fallback){
   const state=String(j&&j.tmRefreshState||'').toLowerCase();
-  if(state==='blocked'||state==='retry')return 'Bu bölümde kayıt henüz yok. Veri kaynağı şu anda yeniden denenecek/engellendi; mevcut kayıtlar beklemeden gösteriliyor.';
-  if(j&&j.tmRefreshQueued)return 'Bu bölümde kayıt henüz yok. Eksik alanlar oyuncu başına tek yenileme kuyruğuna alındı; eldeki diğer veriler beklemeden gösteriliyor.';
-  if(j&&j.tmRefreshRequired)return 'Bu bölümde kayıt henüz yok. Yenileme yapılandırması tamamlandığında eksik alan tek kuyruğa alınacak; mevcut veriler gösterilmeye devam ediyor.';
+  const reason=String(j&&j.tmRefreshReason||'').trim();
+  if(state==='pending-config')return 'Bu bölümde kayıt henüz yok. GITHUB_ACTIONS_TOKEN tanımlı olmadığı için GitHub Actions başlatılmadı.';
+  if(state==='dispatch-failed')return 'Bu bölümde kayıt henüz yok. GitHub Actions başlatılamadı: '+(reason||'dispatch hatası')+'.';
+  if(state==='dispatching')return 'Bu bölümde kayıt henüz yok. GitHub Actions başlatma isteği gönderildi; kuyruğa kabul edildiği henüz doğrulanmadı.';
+  if(state==='blocked'||state==='retry'||state==='retry-wait')return 'Bu bölümde kayıt henüz yok. Yenileme şu anda beklemede veya engellendi.'+(reason?' '+reason:'');
+  if(state==='queued'||state==='already-queued'||state==='concurrent-queue'||state==='running'||(j&&j.tmRefreshQueued))return 'Bu bölümde kayıt henüz yok. GitHub Actions kuyruğuna kabul edildi; mevcut kayıtlar gösterilmeye devam ediyor.';
+  if(j&&j.tmRefreshRequired)return 'Bu bölümde kayıt henüz yok. Yenileme gerekiyor ancak başlatma durumu henüz doğrulanmadı.';
   return fallback;
 }
 function playerRecentMatchCard(match){
@@ -4223,8 +4227,10 @@ function renderPlayer(){
   if(!cur||cur.kind!=='player')return;
   $('#shTitle').textContent=trPlayerName(cur.it.name);
   const i=cur.info,t=cur.stats;
+  const chooseRows=(...values)=>{for(const value of values)if(Array.isArray(value)&&value.length)return value;for(const value of values)if(Array.isArray(value))return value;return [];};
+  const tmFallback=(t&&t.tm)||(i&&i.tm)||{};
   const photos=[cur.pitchPhoto,(i&&i.pitchPhoto),...((i&&i.profilePhotos)||[]),...((i&&i.player&&i.player.photos)||[]),...((t&&t.player&&t.player.photos)||[]),...(Array.isArray(cur.it.photos)?cur.it.photos:[]),cur.it.logo,cur.it.photo,cur.it.image,(i&&i.player&&i.player.logo),(t&&t.player&&t.player.logo)].filter((x,i,a)=>typeof x==='string'&&/^https:\/\//i.test(x)&&a.indexOf(x)===i);
-  const j={player:{name:(i&&i.player&&i.player.name)||cur.it.name,logo:photos[0]||'',photos},about:(i&&i.about)||'',aboutLang:i&&i.aboutLang,bio:Object.assign({},i&&i.bio,t&&t.bio),seasons:(t&&t.seasons)||[],national:(t&&t.national)||[],coach:(t&&t.coach)||[],transfers:(t&&t.transfers)||(i&&i.transfers)||[],injuries:(t&&t.injuries)||(i&&i.injuries)||[],marketValueHistory:(t&&Array.isArray(t.marketValueHistory)&&t.marketValueHistory.length?t.marketValueHistory:(i&&i.marketValueHistory)||[]),historyProviderAvailable:!!(t&&t.sources&&t.sources.transfermarkt&&!/hata|bulunamadı/i.test(String(t.sources.transfermarkt))),tmRefreshRequired:!!(t&&t.tmRefreshRequired),tmRefreshQueued:!!(t&&t.tmRefreshQueued),tmRefreshConfigured:t&&t.tmRefreshConfigured,tmRefreshReason:(t&&t.tmRefreshReason)||'',tmRefreshState:(t&&t.tmRefreshState)||'',tmRefreshRetryAt:(t&&t.tmRefreshRetryAt)||'',totals:(t&&t.totals)||null,careerOrder:(t&&t.careerOrder)||{},sources:Object.assign({},i&&i.sources,t&&t.sources)};
+  const j={player:{name:(i&&i.player&&i.player.name)||(t&&t.player&&t.player.name)||cur.it.name,logo:photos[0]||'',photos},about:(i&&i.about)||(t&&t.about)||'',aboutLang:(i&&i.aboutLang)||(t&&t.aboutLang),bio:Object.assign({},i&&i.bio,t&&t.bio),seasons:chooseRows(t&&t.seasons,i&&i.seasons,tmFallback.seasons),national:chooseRows(t&&t.national,i&&i.national,tmFallback.national),coach:chooseRows(t&&t.coach,i&&i.coach),transfers:chooseRows(t&&t.transfers,i&&i.transfers,tmFallback.transfers),injuries:chooseRows(t&&t.injuries,i&&i.injuries,tmFallback.injuries),marketValueHistory:chooseRows(t&&t.marketValueHistory,i&&i.marketValueHistory,tmFallback.marketValueHistory),recentMatches:chooseRows(t&&t.recentMatches,i&&i.recentMatches,tmFallback.recentMatches),historyProviderAvailable:!!((t&&t.sources&&t.sources.transfermarkt)||(i&&i.sources&&i.sources.transfermarkt)),tmRefreshRequired:!!((t&&t.tmRefreshRequired)||(i&&i.tmRefreshRequired)),tmRefreshQueued:!!((t&&t.tmRefreshQueued)||(i&&i.tmRefreshQueued)),tmRefreshConfigured:t&&t.tmRefreshConfigured!=null?t.tmRefreshConfigured:i&&i.tmRefreshConfigured,tmRefreshReason:(t&&t.tmRefreshReason)||(i&&i.tmRefreshReason)||'',tmRefreshState:(t&&t.tmRefreshState)||(i&&i.tmRefreshState)||'',tmRefreshRetryAt:(t&&t.tmRefreshRetryAt)||(i&&i.tmRefreshRetryAt)||'',totals:(t&&t.totals)||(i&&i.totals)||null,careerOrder:(t&&t.careerOrder)||(i&&i.careerOrder)||{},sources:Object.assign({},i&&i.sources,t&&t.sources)};
   // Transfermarkt yenilemesi arka planda yürür; tarihçe bölümleri loading satırında tutulmaz.
   const loading=false;
   let h=playerHTML(cur.it,j,loading,cur.tab,cur.f);
