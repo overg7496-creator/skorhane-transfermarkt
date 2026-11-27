@@ -128,6 +128,9 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn("unmatched_scope_keys", self.league_sync)
         self.assertIn("identity_conflict_scope_keys", self.league_sync)
         self.assertIn("competition_ids_share_namespace", self.league_sync)
+        self.assertIn("def require_cache_schema_ready", self.league_sync)
+        self.assertIn("tm_upsert_season_stats_batch", self.league_sync)
+        self.assertIn("database/010_indexed_league_season_cache.sql", self.league_sync)
 
 
     def test_indexed_cache_migration_adds_bulk_upsert_and_player_refresh(self):
