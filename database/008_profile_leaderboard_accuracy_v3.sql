@@ -1,11 +1,101 @@
 -- SkorHane v3: strict league/team identity, complete leaderboard readiness,
 -- and player profile rows that retain their source competition/team IDs.
--- Apply after 001-007 in Supabase SQL Editor. Safe to re-run.
+-- Apply after migrations 001-006. This file includes the helper functions and
+-- season-stat upsert RPC that were also introduced in 007, so it does not depend
+-- on 007 having been run. Safe to re-run with or without 007 already applied.
 begin;
 
 alter table public.tm_player_season_stats
   add column if not exists competition_id text,
   add column if not exists club_id text;
+
+-- Season labels are normalized to their starting calendar year.
+-- Examples: 2026, 2026/27 and 26/27 all resolve to 2026.
+create or replace function public.tm_leader_season_start_year(p_season text)
+returns integer
+language sql
+immutable
+parallel safe
+as $season_year$
+  select case
+    when substring(coalesce(p_season, '') from '((19|20)[0-9]{2})') is not null
+      then substring(coalesce(p_season, '') from '((19|20)[0-9]{2})')::integer
+    when substring(coalesce(p_season, '') from '([0-9]{2})[[:space:]]*[/.-]') is not null
+      then case
+        when substring(coalesce(p_season, '') from '([0-9]{2})[[:space:]]*[/.-]')::integer >= 50
+          then 1900 + substring(coalesce(p_season, '') from '([0-9]{2})[[:space:]]*[/.-]')::integer
+        else 2000 + substring(coalesce(p_season, '') from '([0-9]{2})[[:space:]]*[/.-]')::integer
+      end
+    else null
+  end;
+$season_year$;
+
+-- Turkish-aware name normalization used only as an identity fallback when IDs
+-- are absent; a non-null conflicting ID must never be bypassed by this helper.
+create or replace function public.tm_leader_normalize_name(p_value text)
+returns text
+language sql
+immutable
+parallel safe
+as $normalized_name$
+  select regexp_replace(
+    lower(translate(coalesce(p_value, ''), 'ıİğĞüÜşŞöÖçÇ', 'iigguussoocc')),
+    '[^a-z0-9]+',
+    '',
+    'g'
+  );
+$normalized_name$;
+
+-- Keep the normalized-stat ingestion RPC available even when migration 007
+-- has not been applied separately. Existing non-null IDs and stats are retained.
+create or replace function public.tm_upsert_season_stat(p_row jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $upsert_season_stat$
+begin
+  insert into public.tm_player_season_stats(
+    tm_id, season_id, competition_name, club_name, competition_id, club_id,
+    appearances, starts, goals, assists, minutes, yellow_cards, second_yellow_cards,
+    red_cards, goals_conceded, clean_sheets, payload, source
+  ) values (
+    p_row->>'tm_id',
+    p_row->>'season_id',
+    coalesce(p_row->>'competition_name',''),
+    coalesce(p_row->>'club_name',''),
+    nullif(p_row->>'competition_id',''),
+    nullif(p_row->>'club_id',''),
+    nullif(p_row->>'appearances','')::integer,
+    nullif(p_row->>'starts','')::integer,
+    nullif(p_row->>'goals','')::integer,
+    nullif(p_row->>'assists','')::integer,
+    nullif(p_row->>'minutes','')::integer,
+    nullif(p_row->>'yellow_cards','')::integer,
+    nullif(p_row->>'second_yellow_cards','')::integer,
+    nullif(p_row->>'red_cards','')::integer,
+    nullif(p_row->>'goals_conceded','')::integer,
+    nullif(p_row->>'clean_sheets','')::integer,
+    public.tm_clean_jsonb(p_row->'payload'),
+    coalesce(p_row->>'source','unknown')
+  )
+  on conflict (tm_id, season_id, competition_name, club_name) do update set
+    competition_id = coalesce(excluded.competition_id, tm_player_season_stats.competition_id),
+    club_id = coalesce(excluded.club_id, tm_player_season_stats.club_id),
+    appearances = coalesce(excluded.appearances, tm_player_season_stats.appearances),
+    starts = coalesce(excluded.starts, tm_player_season_stats.starts),
+    goals = coalesce(excluded.goals, tm_player_season_stats.goals),
+    assists = coalesce(excluded.assists, tm_player_season_stats.assists),
+    minutes = coalesce(excluded.minutes, tm_player_season_stats.minutes),
+    yellow_cards = coalesce(excluded.yellow_cards, tm_player_season_stats.yellow_cards),
+    second_yellow_cards = coalesce(excluded.second_yellow_cards, tm_player_season_stats.second_yellow_cards),
+    red_cards = coalesce(excluded.red_cards, tm_player_season_stats.red_cards),
+    goals_conceded = coalesce(excluded.goals_conceded, tm_player_season_stats.goals_conceded),
+    clean_sheets = coalesce(excluded.clean_sheets, tm_player_season_stats.clean_sheets),
+    payload = public.tm_merge_jsonb(tm_player_season_stats.payload, excluded.payload),
+    updated_at = now();
+end;
+$upsert_season_stat$;
 
 -- The v2 league-sync importer stored these IDs inside payload.league_stats_sync.
 -- Promote them into indexed columns without overwriting existing non-empty IDs.
@@ -445,6 +535,9 @@ as $$
 $$;
 
 
+
+revoke all on function public.tm_upsert_season_stat(jsonb) from public, anon, authenticated;
+grant execute on function public.tm_upsert_season_stat(jsonb) to service_role;
 
 revoke all on function public.tm_player_profile_bundle(text) from public, anon, authenticated;
 grant execute on function public.tm_player_profile_bundle(text) to service_role;
