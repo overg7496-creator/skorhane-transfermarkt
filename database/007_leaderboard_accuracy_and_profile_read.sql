@@ -127,6 +127,33 @@ $$;
 create or replace view public.tm_team_season_player_stats
 with (security_invoker = true)
 as
+with squad_rows as (
+  select
+    q.*,
+    public.tm_leader_season_start_year(q.season_id) as season_start_year
+  from public.tm_team_season_squads q
+),
+canonical_squads as (
+  -- One roster row for a player/team/competition/start-year, even when imports
+  -- used different season labels such as 2026, 2026/27 or 26/27.
+  select distinct on (competition_id, season_start_year, club_id, tm_id)
+    competition_id,
+    competition_name,
+    season_start_year::text as season_id,
+    club_id,
+    club_name,
+    tm_id,
+    player_name,
+    position,
+    photo_url,
+    shirt_number,
+    age,
+    nationality,
+    market_value_eur
+  from squad_rows
+  where season_start_year is not null
+  order by competition_id, season_start_year, club_id, tm_id, updated_at desc, id desc
+)
 select
   q.competition_id, q.competition_name, q.season_id, q.club_id, q.club_name,
   q.tm_id, q.player_name, q.position, q.photo_url, q.shirt_number, q.age,
@@ -141,7 +168,7 @@ select
   coalesce(stats.red_cards, 0)::bigint as red_cards,
   coalesce(stats.goals_conceded, 0)::bigint as goals_conceded,
   coalesce(stats.clean_sheets, 0)::bigint as clean_sheets
-from public.tm_team_season_squads q
+from canonical_squads q
 left join lateral (
   select
     max(s.appearances)::bigint as appearances,
