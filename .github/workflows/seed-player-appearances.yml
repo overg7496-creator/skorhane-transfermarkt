@@ -1,0 +1,53 @@
+name: SkorHane Oyuncu Maç Geçmişi Ön-Doldurma
+
+on:
+  workflow_dispatch:
+    inputs:
+      competitions:
+        description: "Transfermarkt lig kodları"
+        required: false
+        type: string
+        default: "TR1,GB1,ES1,L1,IT1,FR1"
+      seasons:
+        description: "Sezon başlangıç yılları"
+        required: false
+        type: string
+        default: "2022,2023,2024,2025,2026"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skorhane-player-appearance-history
+  cancel-in-progress: false
+
+jobs:
+  seed-player-appearances:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DCARIBOU_COMPETITIONS: ${{ inputs.competitions || 'TR1,GB1,ES1,L1,IT1,FR1' }}
+      DCARIBOU_SEASONS: ${{ inputs.seasons || '2022,2023,2024,2025,2026' }}
+      DCARIBOU_APPEARANCE_BATCH_SIZE: "25"
+      HTTP_TIMEOUT_SECONDS: "45"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install historical Transfermarkt scraper
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install "git+https://github.com/dcaribou/transfermarkt-scraper.git"
+
+      - name: Validate sync script
+        run: python -m py_compile sync/sync_transfermarkt.py
+
+      - name: Seed historical player appearances in checkpointed batches
+        run: python sync/sync_transfermarkt.py seed-history
