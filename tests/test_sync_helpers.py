@@ -794,7 +794,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("required: false", workflow)
         self.assertIn('TM_DETAIL_PRESEED_ALL_HISTORY: "true"', workflow)
-        self.assertIn('cron: "0 2 * * 0"', workflow)
+        self.assertIn('cron: "17 * * * *"', workflow)
         self.assertNotRegex(workflow, r"(?m)^\s+workflow_run:")
 
     def test_worker_does_not_invent_current_club_for_unattributed_stats(self):
