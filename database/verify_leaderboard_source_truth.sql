@@ -2,7 +2,6 @@
 -- Fast version: scopes the source view once, then performs small aggregations
 -- over the selected competition/season only.
 -- Change only these two values for another league/season.
-
 with params as (
   select
     'TR1'::text as competition_id,
