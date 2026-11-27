@@ -502,6 +502,10 @@ class SyncHelperTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("max-parallel: 9", workflow)
         self.assertNotIn("TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}", workflow.split("- name: Validate detail worker and tests", 1)[1].split("- name: Start dedicated Transfermarkt API", 1)[0])
+        validation_step = workflow.split("- name: Validate detail worker and tests", 1)[1].split("- name: Start dedicated Transfermarkt API", 1)[0]
+        self.assertNotIn("TM_DETAIL_PRESEED_ALL_HISTORY", validation_step)
+        self.assertNotIn("TM_DETAIL_SQUAD_SEEN_AFTER", validation_step)
+        self.assertNotIn("TM_DETAIL_SQUAD_SEEN_BEFORE", validation_step)
         self.assertIn("fromJSON(", workflow)
         self.assertIn('["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]', workflow)
         self.assertIn("format('[\"{0}\"]'", workflow)
