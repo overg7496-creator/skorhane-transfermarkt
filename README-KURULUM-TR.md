@@ -61,6 +61,7 @@ order by competition_id, season_id desc;
 ```
 
 İlk görünüm liglerin genel veri kapsamını; ikinci görünüm her lig/sezonun takım, oyuncu, piyasa değeri, sakatlık/transfer kapsamı, performans istatistikleri, gol/asist liderleri, puan tablosu ve kadro aktarım durumunu ayrı ayrı gösterir. Ayrıca `raw_stat_metric_coverage` JSON alanı, standartlaştırılmış alanların dışındaki kaynak istatistik metriklerini de dinamik olarak listeler; her metrik için kaç oyuncuda bulunduğunu, kaç kayıt içerdiğini ve sayısal toplamını verir.
+Tam 9 lig × 2022–2026 kapsamını tek tabloda kontrol etmek için aktarım bittikten sonra `database/verify_nine_league_five_season_coverage.sql` dosyasını çalıştır. Her lig/sezon için kadro, tamamlanan checkpoint, cache satırı ve eksik sayısını verir.
 
 Şema RLS'i etkinleştirir; tablolar `anon` ve `authenticated` rollerine kapalıdır. Yazma/okuma işlemlerinde yalnızca sunucu tarafı `service_role` anahtarı kullanılır. Bu anahtarı HTML'e veya tarayıcı JavaScript'ine asla koyma.
 
@@ -174,6 +175,7 @@ Depo Public olsa bile Supabase service-role anahtarı, GitHub PAT veya başka bi
 | `database/004_league_sync_dashboard_detail.sql` | Lig ve sezon bazında ayrıntılı veri kapsamı dashboard görünümleri |
 | `database/006_player_profile_full_history.sql` – `009_leaderboard_from_player_season_stats.sql` | Oyuncu geçmişi, güvenilir lig/sezon istatistik eşlemesi ve liderlik görünümleri |
 | `database/010_indexed_league_season_cache.sql` | Toplu sezon-istatistik UPSERT'i ve indeksli lig/sezon okuma cache'i |
+| `database/verify_nine_league_five_season_coverage.sql` | 9 lig × 5 sezon için 45 satırlık tamlık denetimi |
 | `SkorHane-Worker.js` | Canlı Cloudflare Worker |
 | `SkorHane-Worker-kodu-kopyalanabilir.txt` | Worker ile birebir kopya |
 | `SkorHane-HTML-kodu-kopyalanabilir.txt` | Oyuncu profil ekranı ve yenileme durumu UI'si |
