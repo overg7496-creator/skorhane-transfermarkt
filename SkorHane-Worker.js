@@ -4106,25 +4106,20 @@ async function tmLeagueData(env, code, year) {
     found:false, code, season:year, seasons:[], goals:[], assists:[], standings:[],
     goalLeadersAvailable:false, assistLeadersAvailable:false,
     hasSupabaseLeaderboardData:false,
-    leaderboardCoverage:{ complete:false, expectedPlayers:0, completedPlayers:0, missingPlayers:0 },
+    leaderboardCoverage:{ complete:false, expectedPlayers:0, completedPlayers:0, missingPlayers:0, version:3 },
     metricAvailability:{}
   };
   const season = String(year);
   const statesQuery = "tm_source_records?select=record_key,payload&source=eq.felipeall&record_type=eq.squad_sync_state&external_id=eq." +
     encodeURIComponent(competitionId) + "&order=record_key.desc";
-  const goalsQuery = "tm_league_goal_leaders?select=leader_rank,tm_id,player_name,photo_url,club_name,goals,assists,appearances,minutes" +
-    "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
-    "&order=leader_rank.asc,goals.desc,assists.desc,minutes.desc,player_name.asc";
-  const assistsQuery = "tm_league_assist_leaders?select=leader_rank,tm_id,player_name,photo_url,club_name,goals,assists,appearances,minutes" +
-    "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
-    "&order=leader_rank.asc,assists.desc,goals.desc,minutes.desc,player_name.asc";
-  const totalsQuery = "tm_league_player_season_totals?select=tm_id,player_name,photo_url,club_name,appearances,starts,goals,assists,minutes,yellow_cards,red_cards,goals_conceded,clean_sheets" +
+  const totalsQuery = "tm_league_player_season_totals_cache?select=tm_id,player_name,photo_url,club_name,appearances,starts,goals,assists,minutes,yellow_cards,second_yellow_cards,red_cards,goals_conceded,clean_sheets" +
     "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) + "&order=tm_id.asc";
 
-  // Checkpoints are diagnostics only; they never hide already-prepared Supabase rows.
+  // Coverage is per league-season scope; a checkpoint is only complete after
+  // provider rows or explicit zero rows have been persisted and indexed.
   const scopeKey = competitionId + ":" + season;
   const checkpointNeedle = encodeURIComponent(JSON.stringify({
-    coverage_version: 2,
+    coverage_version: 3,
     status: "completed",
     completed_scope_keys: [scopeKey]
   }));
@@ -4135,25 +4130,25 @@ async function tmLeagueData(env, code, year) {
     "&order=tm_id.asc";
   const tableQuery = "tm_source_records?select=payload&source=eq.felipeall&record_type=eq.competition_table" +
     "&external_id=eq." + encodeURIComponent(competitionId) + "&record_key=eq." + encodeURIComponent(season) + "&limit=1";
-  const [statesR, goalsR, assistsR, totalsR, rosterR, checkpointsR, tableR] = await Promise.allSettled([
+  const [statesR, totalsR, rosterR, checkpointsR, tableR] = await Promise.allSettled([
     tmDbRowsPaged(env, statesQuery, 1000, 40000),
-    tmDbRowsPaged(env, goalsQuery, 1000, 10000),
-    tmDbRowsPaged(env, assistsQuery, 1000, 10000),
-    tmDbRowsPaged(env, totalsQuery, 1000, 10000),
+    tmDbRowsPaged(env, totalsQuery, 1000, 20000),
     tmDbRowsPaged(env, rosterQuery, 1000, 20000),
     tmDbRowsPaged(env, checkpointQuery, 1000, 20000),
     tmDbRows(env, tableQuery)
   ]);
   const states = statesR.status === "fulfilled" ? statesR.value : [];
-  const goals = goalsR.status === "fulfilled" ? tmLeaderRows(goalsR.value, "goals") : [];
-  const assists = assistsR.status === "fulfilled" ? tmLeaderRows(assistsR.value, "assists") : [];
   const totals = totalsR.status === "fulfilled" ? totalsR.value : [];
+  const goals = tmLeaderRows(totals, "goals");
+  const assists = tmLeaderRows(totals, "assists");
   const expectedPlayerIds = [...new Set((rosterR.status === "fulfilled" ? rosterR.value : [])
     .map(row => String(row && row.tm_id || "").trim()).filter(Boolean))];
   const completedPlayerIds = new Set(checkpointsR.status === "fulfilled"
     ? checkpointsR.value
       .filter(row => row && row.payload && row.payload.status === "completed" &&
-        Number(row.payload.coverage_version) === 2 && row.payload.no_matching_league_rows !== true)
+        Number(row.payload.coverage_version) === 3 &&
+        Array.isArray(row.payload.completed_scope_keys) &&
+        row.payload.completed_scope_keys.includes(scopeKey))
       .map(row => String(row.external_id || "").trim()).filter(Boolean)
     : []);
   const completedPlayers = expectedPlayerIds.filter(id => completedPlayerIds.has(id)).length;
@@ -4166,7 +4161,7 @@ async function tmLeagueData(env, code, year) {
     expectedPlayers: expectedPlayerIds.length,
     completedPlayers,
     missingPlayers: Math.max(0, expectedPlayerIds.length - completedPlayers),
-    version: 2
+    version: 3
   };
   const metricFields = {
     appearances:"appearances", starts:"starts", minutes:"minutes", yellow:"yellow_cards",
@@ -4178,10 +4173,13 @@ async function tmLeagueData(env, code, year) {
   const metricAvailability = Object.fromEntries(Object.keys(leaders).map(key => [
     key, totalsR.status === "fulfilled" && totals.length > 0
   ]));
-  const hasSupabaseLeaderboardData = goals.length > 0 || assists.length > 0;
-  const goalLeadersAvailable = goalsR.status === "fulfilled" && goals.length > 0;
-  const assistLeadersAvailable = assistsR.status === "fulfilled" && assists.length > 0;
+  // Supabase is the single source, even for a season where all players have 0 goals.
+  const hasSupabaseLeaderboardData = totalsR.status === "fulfilled" && totals.length > 0;
+  const goalLeadersAvailable = totalsR.status === "fulfilled" && goals.length > 0;
+  const assistLeadersAvailable = totalsR.status === "fulfilled" && assists.length > 0;
   const tableRecord = tableR.status === "fulfilled" ? tableR.value[0] : null;
+  const totalsError = totalsR.status === "rejected"
+    ? String(totalsR.reason && totalsR.reason.message || totalsR.reason) : "";
   return {
     found: !!(hasSupabaseLeaderboardData || Object.values(metricAvailability).some(Boolean) || states.length || tableRecord),
     source: hasSupabaseLeaderboardData ? "Supabase" : "",
@@ -4192,16 +4190,14 @@ async function tmLeagueData(env, code, year) {
     standings:tmExtractTableRows(tableRecord && tableRecord.payload),
     syncState: states.find(row => String(row.record_key) === season)?.payload || null,
     errors: {
-      goals: goalsR.status === "rejected" ? String(goalsR.reason && goalsR.reason.message || goalsR.reason) : "",
-      assists: assistsR.status === "rejected" ? String(assistsR.reason && assistsR.reason.message || assistsR.reason) : "",
+      goals: totalsError,
+      assists: totalsError,
       roster: rosterR.status === "rejected" ? String(rosterR.reason && rosterR.reason.message || rosterR.reason) : "",
       coverage: checkpointsR.status === "rejected" ? String(checkpointsR.reason && checkpointsR.reason.message || checkpointsR.reason) : "",
-      totals: totalsR.status === "rejected" ? String(totalsR.reason && totalsR.reason.message || totalsR.reason) : ""
+      totals: totalsError
     }
   };
-}
-
-async function tmTeamData(env, code, year, teamName) {
+}async function tmTeamData(env, code, year, teamName) {
   const competitionId = tmCompetitionIdForCode(code);
   if (!competitionId || !String(teamName || "").trim()) return { found:false, roster:[], players:[], seasons:[] };
   const season = String(year), nameKey = teamSearchKey(teamName);
@@ -8773,7 +8769,7 @@ export default {
       } else if (p === "/tm-league-data") {
         const code = q.get("code") || "", year = Number(q.get("season")) || seasonStartYear();
         if (!/^[a-z0-9._-]+$/i.test(code) || !Number.isInteger(year) || year < 1900 || year > seasonStartYear() + 1) return json({ error: "Geçersiz Transfermarkt ligi veya sezon" }, 400);
-        res = await cached("tm-league-data:v4:" + code + ":" + year, async () => ({
+        res = await cached("tm-league-data:v5:" + code + ":" + year, async () => ({
           body: await tmLeagueData(env, code, year), ttl: 60
         }));
       } else if (p === "/tm-team-data") {
