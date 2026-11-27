@@ -4123,7 +4123,7 @@ async function tmLeagueData(env, code, year) {
     scope_seasons: [season],
     status: "completed"
   }));
-  const checkpointQuery = "tm_source_records?select=external_id&source=eq.felipeall&record_type=eq.league_stats_player_checkpoint" +
+  const checkpointQuery = "tm_source_records?select=external_id,payload&source=eq.felipeall&record_type=eq.league_stats_player_checkpoint" +
     "&payload=cs." + checkpointNeedle + "&order=external_id.asc";
   const tableQuery = "tm_source_records?select=payload&source=eq.felipeall&record_type=eq.competition_table" +
     "&external_id=eq." + encodeURIComponent(competitionId) + "&record_key=eq." + encodeURIComponent(season) + "&limit=1";
@@ -4141,7 +4141,10 @@ async function tmLeagueData(env, code, year) {
   const totals = totalsR.status === "fulfilled" ? totalsR.value : [];
   const expectedPlayerIds = [...new Set(totals.map(row => String(row && row.tm_id || "").trim()).filter(Boolean))];
   const completedPlayerIds = new Set(checkpointsR.status === "fulfilled"
-    ? checkpointsR.value.map(row => String(row && row.external_id || "").trim()).filter(Boolean)
+    ? checkpointsR.value
+      .filter(row => row && row.payload && row.payload.status === "completed" &&
+        Number(row.payload.coverage_version) === 2 && row.payload.no_matching_league_rows !== true)
+      .map(row => String(row.external_id || "").trim()).filter(Boolean)
     : []);
   const completedPlayers = expectedPlayerIds.filter(id => completedPlayerIds.has(id)).length;
   const coverageComplete = totalsR.status === "fulfilled" &&
