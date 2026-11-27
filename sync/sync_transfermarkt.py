@@ -1546,7 +1546,7 @@ def competition_codes(item: dict[str, Any]) -> set[str]:
 
     collect(item)
     joined = " ".join(searchable).upper()
-    return set(re.findall(r"(?<![A-Z0-9])[A-Z]{1,5}\\d{1,2}(?![A-Z0-9])", joined))
+    return set(re.findall(r"(?<![A-Z0-9])[A-Z]{1,5}\d{1,2}(?![A-Z0-9])", joined))
 
 
 def is_dcaribou_first_tier(item: dict[str, Any], wanted_codes: set[str]) -> bool:
