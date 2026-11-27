@@ -84,6 +84,14 @@ begin
     raise exception 'tm_replace_player_injuries: p_rows JSON array olmalı';
   end if;
 
+  -- An empty upstream response is not treated as proof that previous records vanished.
+  if jsonb_array_length(coalesce(p_rows, '[]'::jsonb)) = 0 then
+    select count(*)::integer into inserted_count
+    from public.tm_injuries
+    where tm_id = p_tm_id and source = coalesce(nullif(p_source, ''), 'felipeall');
+    return inserted_count;
+  end if;
+
   delete from public.tm_injuries
   where tm_id = p_tm_id and source = coalesce(nullif(p_source, ''), 'felipeall');
 
@@ -139,6 +147,7 @@ with payloads as (
   from public.tm_source_records r
   where r.record_type = 'player_injuries'
     and nullif(r.external_id, '') is not null
+    and exists (select 1 from public.tm_players p where p.tm_id = r.external_id)
 ),
 rows_to_insert as (
   select
