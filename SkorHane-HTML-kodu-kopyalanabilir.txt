@@ -4067,6 +4067,13 @@ function careerRows(se,nat,f){
 }
 const showStat=v=>v==null?'—':v;
 const sumRows=rows=>{const sum=k=>{const vals=rows.map(r=>statNum(r[k])).filter(v=>v!=null);return vals.length?vals.reduce((a,b)=>a+b,0):null};return {m:sum('m'),g:sum('g'),a:sum('a'),s11:sum('s11'),y:sum('y'),r:sum('r')}};
+function playerNoDataMessage(j,fallback){
+  const state=String(j&&j.tmRefreshState||'').toLowerCase();
+  if(state==='blocked'||state==='retry')return 'Bu bölümde kayıt henüz yok. Veri kaynağı şu anda yeniden denenecek/engellendi; mevcut kayıtlar beklemeden gösteriliyor.';
+  if(j&&j.tmRefreshQueued)return 'Bu bölümde kayıt henüz yok. Eksik alanlar oyuncu başına tek yenileme kuyruğuna alındı; eldeki diğer veriler beklemeden gösteriliyor.';
+  if(j&&j.tmRefreshRequired)return 'Bu bölümde kayıt henüz yok. Yenileme yapılandırması tamamlandığında eksik alan tek kuyruğa alınacak; mevcut veriler gösterilmeye devam ediyor.';
+  return fallback;
+}
 function playerRecentMatchCard(match){
   const home=match.home||{},away=match.away||{},date=match.date?new Date(match.date+'T12:00:00Z').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'}):'—';
   const sh=match.scoreHome,sa=match.scoreAway,known=sh!=null&&sa!=null,teamScore=match.isHome?sh:sa,oppScore=match.isHome?sa:sh;
@@ -4099,11 +4106,11 @@ function playerHTML(it,j,loadingStats,tab,f){
     h+='<section class="player-current-season-card"><div class="player-current-season-team">'+avatarT(teamLogo,teamName||'Takım')+'<span><b>'+esc(trTeam(teamName||'Güncel Takım'))+'</b><small>'+esc(cur.pitchRecentLeague||'Güncel Lig')+' · '+esc(seasonLabel)+'</small></span><span class="player-current-season-chevron">›</span></div><div class="player-summary-numbers">'+counts.map(([label,value])=>`<div><small>${label}</small><b>${value==null?'—':value}</b></div>`).join('')+'</div></section>';
     const marketValueText=String(bio['Piyasa Değeri']||'').trim();
     h+='<section class="player-bio-card player-market-value-card"><div class="player-summary-title"><b>Piyasa Değeri</b><small>Transfermarkt</small></div><div class="player-bio-grid"><div><small>Güncel değer</small><b>'+esc(marketValueText||'Henüz veri aktarılmadı')+'</b></div></div></section>';
-    h+='<section class="player-form-card"><div class="player-summary-title"><b>Son 13 Maç Performansı</b><small>'+((rated.length)?'Ort. '+(rated.reduce((a,x)=>a+Number(x.rating),0)/rated.length).toFixed(1):'PitchAPI')+'</small></div>';
-    if(recent.length){h+='<div class="player-form-chart">'+recent.slice(0,13).reverse().map((match,index)=>{const value=match.rating==null?null:Number(match.rating),height=value==null?4:Math.max(8,Math.min(100,value*10));return `<div class="player-form-bar-wrap"><b>${value==null?'—':value.toFixed(1)}</b><span class="player-form-bar ${playerRatingBarClass(value)}" style="height:${height}%"></span><small>${index+1}</small></div>`}).join('')+'</div><div class="player-form-legend"><span>← Eski maç</span><span>Yeni maç →</span></div>';}else h+='<div class="empty">'+esc(cur.pitchRecentError||"Supabase'de maç puanı bulunan kayıt yok; puan beklenmeden mevcut veriler gösteriliyor.")+'</div>';
+    h+='<section class="player-form-card"><div class="player-summary-title"><b>Son 13 Maç Performansı</b><small>'+((rated.length)?'Ort. '+(rated.reduce((a,x)=>a+Number(x.rating),0)/rated.length).toFixed(1):'Supabase')+'</small></div>';
+    if(recent.length){h+='<div class="player-form-chart">'+recent.slice(0,13).reverse().map((match,index)=>{const value=match.rating==null?null:Number(match.rating),height=value==null?4:Math.max(8,Math.min(100,value*10));return `<div class="player-form-bar-wrap"><b>${value==null?'—':value.toFixed(1)}</b><span class="player-form-bar ${playerRatingBarClass(value)}" style="height:${height}%"></span><small>${index+1}</small></div>`}).join('')+'</div><div class="player-form-legend"><span>← Eski maç</span><span>Yeni maç →</span></div>';}else h+='<div class="empty">'+esc(playerNoDataMessage(j,cur.pitchRecentError||"Bu oyuncu için maç kaydı bulunamadı."))+'</div>';
     h+='</section>';
     const last=recent.slice(0,3);h+='<section class="player-recent-card"><div class="player-summary-title"><b>Son Maçlar</b><button type="button" data-pt="maclar">Tümünü gör ›</button></div>';
-    if(last.length)h+=last.map(match=>playerRecentMatchCard(match)).join('');else h+='<div class="empty">'+(cur.pitchRecentLoading?'Maçlar yükleniyor…':'Son maç kaydı bulunamadı.')+'</div>';
+    if(last.length)h+=last.map(match=>playerRecentMatchCard(match)).join('');else h+='<div class="empty">'+esc(playerNoDataMessage(j,'Son maç kaydı bulunamadı.'))+'</div>';
     h+='</section>';
     const keys=PROF_KEYS.filter(k=>bio[k]!==''&&bio[k]!=null);
     if(keys.length)h+='<section class="player-bio-card"><div class="player-summary-title"><b>Oyuncu Bilgileri</b></div><div class="player-bio-grid">'+keys.map(k=>`<div><small>${esc(k)}</small><b>${esc(k==='Uyruk'?String(bio[k]).split(/,\s*/).map(trC).join(', '):k==='Mevki'?trVal('position',bio[k]):k==='Şu Anki Takım'?trTeam(bio[k]):bio[k])}</b></div>`).join('')+'</div></section>';
@@ -4119,18 +4126,18 @@ function playerHTML(it,j,loadingStats,tab,f){
       if(rated.length<filteredRecent.length)h+='<div class="pitch-source-note">Maç kayıtları Supabase’den gösteriliyor. Puanı kayıtlı olmayan maçlarda puan alanı boş bırakıldı.</div>';
       const groups=new Map();for(const match of filteredRecent){const key=(match.leagueCode||'')+'|'+(match.league||'Diğer');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(match)}
       for(const [key,matches] of groups){const parts=key.split('|'),leagueCode=parts[0],league=parts.slice(1).join('|');const leagueLogo=LEAGUE_PNGS[leagueCode]||LEAGUE_LOGOS[leagueCode]||'';h+='<div class="player-match-league-title">'+avatarT(leagueLogo,league)+'<b>'+esc(league)+'</b></div><div class="player-match-list">'+matches.map(match=>playerRecentMatchCard(match)).join('')+'</div>'}
-    }else h+='<div class="empty">'+esc(recent.length?'Seçilen müsabakada maç kaydı bulunamadı.':cur.pitchRecentError||'Supabase içinde son maç satırı bulunamadı; PitchAPI beklemesi yapılmadı.')+'</div>';
+    }else h+='<div class="empty">'+esc(recent.length?'Seçilen müsabakada maç kaydı bulunamadı.':playerNoDataMessage(j,cur.pitchRecentError||'Supabase içinde son maç kaydı bulunamadı.'))+'</div>';
   }else if(tab==='sakatliklar'&&!coach){
     const injuries=Array.isArray(j.injuries)?j.injuries:[];
     h+='<section class="player-history-section"><div class="player-summary-title"><b>Sakatlık Geçmişi</b><small>Transfermarkt kayıtları</small></div>';
     if(injuries.length)h+=injuries.map(x=>`<article class="player-history-row"><span class="player-history-mark injury-mark">+</span><div><b>${esc(x.injury||x.reason||x.type||'Sakatlık kaydı')}</b><small>${esc([x.from_date||x.start||'',x.until_date?'– '+x.until_date:(x.end?'– '+x.end:''),x.season?'Sezon '+x.season:'',x.days!=null?x.days+' gün':'',x.games_missed!=null?x.games_missed+' maç kaçırdı':''].filter(Boolean).join(' '))}</small></div></article>`).join('');
-    else h+='<div class="empty">'+(loadingStats?'Sakatlık kayıtları yükleniyor…':j.historyProviderAvailable?'Bu oyuncu için sakatlık kaydı bulunamadı.':'Sakatlık geçmişi sağlayıcısı yapılandırılmamış veya veri sunmamış.')+'</div>';
+    else h+='<div class="empty">'+esc(playerNoDataMessage(j,j.historyProviderAvailable?'Bu oyuncu için doğrulanmış sakatlık kaydı bulunamadı.':'Sakatlık kaydı henüz alınmadı.'))+'</div>';
     h+='</section>';
   }else if(tab==='transferler'&&!coach){
     const transfers=Array.isArray(j.transfers)?j.transfers:[];
     h+='<section class="player-history-section"><div class="player-summary-title"><b>Transfer Geçmişi</b><small>Transfermarkt kayıtları</small></div>';
     if(transfers.length)h+=transfers.map(x=>`<article class="player-history-row transfer-history-row"><span class="player-history-mark transfer-mark">⇄</span><div class="player-transfer-route"><b>${esc(trTeam(x.from||'Bilinmeyen takım'))}</b><span>→</span><b>${esc(trTeam(x.to||'Bilinmeyen takım'))}</b><small>${esc(x.date||'Tarih yok')} · ${esc(x.kind||'Detay belirtilmemiş')}${x.fee?' · '+esc(x.fee):''}</small></div></article>`).join('');
-    else h+='<div class="empty">'+(loadingStats?'Transfer geçmişi yükleniyor…':j.historyProviderAvailable?'Bu oyuncu için transfer kaydı bulunamadı.':'Transfer geçmişi sağlayıcısı yapılandırılmamış veya veri sunmamış.')+'</div>';
+    else h+='<div class="empty">'+esc(playerNoDataMessage(j,j.historyProviderAvailable?'Bu oyuncu için doğrulanmış transfer kaydı bulunamadı.':'Transfer kaydı henüz alınmadı.'))+'</div>';
     h+='</section>';
   }else if(tab==='piyasa'&&!coach){
     const history=Array.isArray(j.marketValueHistory)?j.marketValueHistory:[];
@@ -4153,7 +4160,7 @@ function playerHTML(it,j,loadingStats,tab,f){
       const age=x.age!=null?' · '+x.age+' yaş':'';
       return '<article class="player-history-row"><span class="player-history-mark transfer-mark">€</span><div><b>'+esc(formatMarketValue(value))+'</b><small>'+esc([date,clubLabel].filter(Boolean).join(' · ')+age)+'</small></div></article>';
     }).join('');
-    else h+='<div class="empty">'+(loadingStats?'Piyasa değeri geçmişi yükleniyor…':j.historyProviderAvailable?'Bu oyuncu için piyasa değeri geçmişi bulunamadı.':'Piyasa değeri geçmişi sağlayıcısı veri sunmadı.')+'</div>';
+    else h+='<div class="empty">'+esc(playerNoDataMessage(j,j.historyProviderAvailable?'Bu oyuncu için doğrulanmış piyasa değeri geçmişi bulunamadı.':'Piyasa değeri geçmişi henüz alınmadı.'))+'</div>';
     h+='</section>';
   }else if(tab==='profil'){
     const must=coach?['Doğum Tarihi','Yaş','Şu Anki Takım']:PROF_MUST;
@@ -4179,10 +4186,8 @@ function playerHTML(it,j,loadingStats,tab,f){
     if(pitchRows.length)pitchRows.forEach(add);else if(Array.isArray(j.seasons)&&j.seasons.length)j.seasons.forEach(r=>add({'Sezon':r['Sezon']||r.season||r.s,'Takım':r['Takım']||r.team||r.t,'Takım Logosu':r['Takım Logosu']||r.logo||r.teamLogo,'Maç':r['Maç']??r.matches??r.m,'Gol':r['Gol']??r.goals??r.g,'Asist':r['Asist']??r.assists??r.a,'İlk 11':r['İlk 11']??r.starts??r.s11,'Toplam Dakika':r['Toplam Dakika']??r.minutes}));else careerRows(se,nat,'toplam').forEach(r=>add({'Sezon':r.s,'Takım':r.t,'Takım Logosu':r.logo,'Maç':r.m,'Gol':r.g,'Asist':r.a,'İlk 11':r.s11,'Toplam Dakika':r.minutes}));
     const rows=[...grouped.values()].sort((a,b)=>(careerSeasonYear(b.season)||0)-(careerSeasonYear(a.season)||0)||String(a.team).localeCompare(String(b.team),'tr'));
     h+='<div class="player-career-reference-list">';
-    if(cur.pitchCareerLoading)h+='<div class="player-career-loading">Transfermarkt kariyer verileri yükleniyor…</div>';
     if(rows.length)h+=rows.map(row=>{const avg=row.ratingMatches?(row.ratingTotal/row.ratingMatches).toFixed(2):'—';return `<article class="player-career-season-card"><div class="player-career-season-head"><span class="player-career-season">${esc(row.season)}</span><span class="player-career-team">${avatarT(careerLogoCandidates(row),row.team)}<b>${esc(trTeam(row.team))}</b></span><span class="player-career-average"><b>${row.minutesKnown?row.minutes.toLocaleString('tr-TR'):'—'}</b><small>Toplam dakika</small></span></div><div class="player-career-season-stats"><div><small>Maç</small><b>${row.matches}</b></div><div><small>Gol</small><b>${row.goals}</b></div><div><small>Asist</small><b>${row.assists}</b></div><div><small>İlk 11</small><b>${row.starts}</b></div></div></article>`}).join('');
-    else if(loadingStats)h+='<div class="empty">Kariyer sezonları yükleniyor…</div>';
-    else h+='<div class="empty">Bu oyuncu için Transfermarkt sezon kayıtları henüz bulunamadı.</div>';
+    else h+='<div class="empty">'+esc(playerNoDataMessage(j,'Bu oyuncu için sezon bazlı kariyer kaydı bulunamadı.'))+'</div>';
     if(cur.pitchCareerError&&cur.pitchCareerLoaded)h+='<div class="pnote">'+esc(cur.pitchCareerError)+'</div>';
     h+='</div>';
   }
