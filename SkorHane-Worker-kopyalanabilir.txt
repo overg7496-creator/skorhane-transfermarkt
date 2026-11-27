@@ -4074,7 +4074,7 @@ function tmLeaderRows(rows, metric) {
     const old = unique.get(playerId);
     if (!old) {
       unique.set(playerId, {
-        rank: Number(row.leader_rank) || 0, playerId, player,
+        playerId, player,
         logo: String(row.photo_url || ""), team: String(row.club_name || ""),
         value, appearances: Number(row.appearances) || 0,
         assists: Number(row.assists) || 0, goals: Number(row.goals) || 0,
@@ -4090,17 +4090,22 @@ function tmLeaderRows(rows, metric) {
     if (!old.logo && row.photo_url) old.logo = String(row.photo_url);
     if (row.club_name && !old.team.includes(String(row.club_name))) old.team = [old.team, String(row.club_name)].filter(Boolean).join(" / ");
   }
-  return [...unique.values()]
-    .sort((a,b) => b.value-a.value ||
-      (metric === "goals" ? b.assists-a.assists : metric === "assists" ? b.goals-a.goals : 0) ||
-      b.minutes-a.minutes || a.player.localeCompare(b.player, "tr"))
-    .map((row,index) => ({...row, rank:row.rank || index+1}));
+  const sorted = [...unique.values()].sort((a,b) => b.value-a.value ||
+    (metric === "goals" ? b.assists-a.assists : metric === "assists" ? b.goals-a.goals : 0) ||
+    b.minutes-a.minutes || a.player.localeCompare(b.player, "tr"));
+  let rank = 0, previousValue = null;
+  return sorted.map(row => {
+    if (previousValue === null || row.value !== previousValue) rank += 1;
+    previousValue = row.value;
+    return { ...row, rank };
+  });
 }
 async function tmLeagueData(env, code, year) {
   const competitionId = tmCompetitionIdForCode(code);
   if (!competitionId) return {
     found:false, code, season:year, seasons:[], goals:[], assists:[], standings:[],
     goalLeadersAvailable:false, assistLeadersAvailable:false,
+    hasSupabaseLeaderboardData:false,
     leaderboardCoverage:{ complete:false, expectedPlayers:0, completedPlayers:0, missingPlayers:0 },
     metricAvailability:{}
   };
@@ -4109,14 +4114,14 @@ async function tmLeagueData(env, code, year) {
     encodeURIComponent(competitionId) + "&order=record_key.desc";
   const goalsQuery = "tm_league_goal_leaders?select=leader_rank,tm_id,player_name,photo_url,club_name,goals,assists,appearances,minutes" +
     "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
-    "&order=leader_rank.asc";
+    "&order=leader_rank.asc,goals.desc,assists.desc,minutes.desc,player_name.asc";
   const assistsQuery = "tm_league_assist_leaders?select=leader_rank,tm_id,player_name,photo_url,club_name,goals,assists,appearances,minutes" +
     "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
-    "&order=leader_rank.asc";
+    "&order=leader_rank.asc,assists.desc,goals.desc,minutes.desc,player_name.asc";
   const totalsQuery = "tm_league_player_season_totals?select=tm_id,player_name,photo_url,club_name,appearances,starts,goals,assists,minutes,yellow_cards,red_cards,goals_conceded,clean_sheets" +
     "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) + "&order=tm_id.asc";
-  // A non-empty leaders view is not proof of a complete list. Every player in
-  // the selected league-season roster must have a v2 league-stats checkpoint.
+
+  // Checkpoints are diagnostics only; they never hide already-prepared Supabase rows.
   const scopeKey = competitionId + ":" + season;
   const checkpointNeedle = encodeURIComponent(JSON.stringify({
     coverage_version: 2,
@@ -4125,7 +4130,7 @@ async function tmLeagueData(env, code, year) {
   }));
   const checkpointQuery = "tm_source_records?select=external_id,payload&source=eq.felipeall&record_type=eq.league_stats_player_checkpoint" +
     "&payload=cs." + checkpointNeedle + "&order=external_id.asc";
-  const rosterQuery = "tm_team_season_player_stats?select=tm_id&competition_id=eq." +
+  const rosterQuery = "tm_team_season_squads?select=tm_id&competition_id=eq." +
     encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
     "&order=tm_id.asc";
   const tableQuery = "tm_source_records?select=payload&source=eq.felipeall&record_type=eq.competition_table" +
@@ -4170,15 +4175,17 @@ async function tmLeagueData(env, code, year) {
   const leaders = Object.fromEntries(Object.entries(metricFields).map(([key, field]) => [
     key, tmLeaderRows(totals, field)
   ]));
-  // An empty list is complete only when the player-by-player sync coverage is complete.
   const metricAvailability = Object.fromEntries(Object.keys(leaders).map(key => [
-    key, coverageComplete && totalsR.status === "fulfilled"
+    key, totalsR.status === "fulfilled" && totals.length > 0
   ]));
+  const hasSupabaseLeaderboardData = goals.length > 0 || assists.length > 0;
+  const goalLeadersAvailable = goalsR.status === "fulfilled" && goals.length > 0;
+  const assistLeadersAvailable = assistsR.status === "fulfilled" && assists.length > 0;
   const tableRecord = tableR.status === "fulfilled" ? tableR.value[0] : null;
-  const goalLeadersAvailable = coverageComplete && goalsR.status === "fulfilled";
-  const assistLeadersAvailable = coverageComplete && assistsR.status === "fulfilled";
   return {
-    found: !!(goalLeadersAvailable || assistLeadersAvailable || Object.values(metricAvailability).some(Boolean) || states.length || tableRecord),
+    found: !!(hasSupabaseLeaderboardData || Object.values(metricAvailability).some(Boolean) || states.length || tableRecord),
+    source: hasSupabaseLeaderboardData ? "Supabase" : "",
+    hasSupabaseLeaderboardData,
     goalLeadersAvailable, assistLeadersAvailable, metricAvailability, leaderboardCoverage,
     code: competitionId, requestedCode:code, season:Number(season),
     seasons:tmSeasonRows(states), goals, assists, leaders,
@@ -4188,7 +4195,8 @@ async function tmLeagueData(env, code, year) {
       goals: goalsR.status === "rejected" ? String(goalsR.reason && goalsR.reason.message || goalsR.reason) : "",
       assists: assistsR.status === "rejected" ? String(assistsR.reason && assistsR.reason.message || assistsR.reason) : "",
       roster: rosterR.status === "rejected" ? String(rosterR.reason && rosterR.reason.message || rosterR.reason) : "",
-      coverage: checkpointsR.status === "rejected" ? String(checkpointsR.reason && checkpointsR.reason.message || checkpointsR.reason) : ""
+      coverage: checkpointsR.status === "rejected" ? String(checkpointsR.reason && checkpointsR.reason.message || checkpointsR.reason) : "",
+      totals: totalsR.status === "rejected" ? String(totalsR.reason && totalsR.reason.message || totalsR.reason) : ""
     }
   };
 }
@@ -8765,7 +8773,7 @@ export default {
       } else if (p === "/tm-league-data") {
         const code = q.get("code") || "", year = Number(q.get("season")) || seasonStartYear();
         if (!/^[a-z0-9._-]+$/i.test(code) || !Number.isInteger(year) || year < 1900 || year > seasonStartYear() + 1) return json({ error: "Geçersiz Transfermarkt ligi veya sezon" }, 400);
-        res = await cached("tm-league-data:v3:" + code + ":" + year, async () => ({
+        res = await cached("tm-league-data:v4:" + code + ":" + year, async () => ({
           body: await tmLeagueData(env, code, year), ttl: 60
         }));
       } else if (p === "/tm-team-data") {

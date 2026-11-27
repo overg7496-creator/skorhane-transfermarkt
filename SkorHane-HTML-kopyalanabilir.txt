@@ -3107,6 +3107,11 @@ function renderSt(){
 function tmLeagueMetricRows(my,metric){
   const db=my&&my.tmLeagueData;
   if(!db)return null;
+  // Supabase owns both krallık lists as soon as at least one Supabase row exists.
+  if(db.hasSupabaseLeaderboardData===true){
+    if(metric==='goals')return Array.isArray(db.goals)?db.goals:[];
+    if(metric==='assists')return Array.isArray(db.assists)?db.assists:[];
+  }
   if(metric==='goals')return db.goalLeadersAvailable&&Array.isArray(db.goals)?db.goals:null;
   if(metric==='assists')return db.assistLeadersAvailable&&Array.isArray(db.assists)?db.assists:null;
   const rows=db.leaders&&db.leaders[metric];
@@ -3114,9 +3119,18 @@ function tmLeagueMetricRows(my,metric){
 }
 function loadLeagueData(my){
   const season=Number(my.season)||currentTeamSeason(),qs='code='+encodeURIComponent(my.code)+'&season='+encodeURIComponent(season);
+  my.tmLeagueData=null;
+  my.tmLeagueDataLoaded=false;
+  my.tmLeagueDataLoading=true;
+  my.pitchLoaded=false;
+  my.pitchLoading=false;
+  my.pitchError='';
   api('/tm-league-data?'+qs).then(db=>{
-    if(cur!==my||Number(my.season)!==season||!db)return;
+    if(cur!==my||Number(my.season)!==season)return;
+    if(!db)throw new Error('Supabase lig istatistiği boş yanıt verdi.');
     my.tmLeagueData=db;
+    my.tmLeagueDataLoaded=true;
+    my.tmLeagueDataLoading=false;
     my.seasons=db.seasons&&db.seasons.length?db.seasons:my.seasons||[];
     my.data=my.data||{code:my.code,name:my.name,season,seasons:my.seasons,goals:[],assists:[],fixtures:[],tables:[],errors:{}};
     const goalRows=tmLeagueMetricRows(my,'goals'),assistRows=tmLeagueMetricRows(my,'assists');
@@ -3126,11 +3140,26 @@ function loadLeagueData(my){
     my.data.errors=my.data.errors||{};
     if(goalRows!==null)my.data.errors.goals='';
     if(assistRows!==null)my.data.errors.assists='';
-    my.pitchLoaded=goalRows!==null&&assistRows!==null;
-    if(my.pitchLoaded){my.pitchLoading=false;my.pitchError='';}
+    if(db.hasSupabaseLeaderboardData===true){
+      my.pitchLoaded=true;
+      my.pitchLoading=false;
+      my.pitchError='';
+      my.pitchGoals=null;
+      my.pitchAssists=null;
+    }else{
+      my.pitchLoaded=false;
+      my.pitchLoading=false;
+    }
     renderLeague();
-    if(!my.pitchLoaded)loadPitchLeaders(my);
-  }).catch(()=>{});
+    if(db.hasSupabaseLeaderboardData!==true)loadPitchLeaders(my);
+  }).catch(error=>{
+    if(cur!==my||Number(my.season)!==season)return;
+    my.tmLeagueDataLoaded=true;
+    my.tmLeagueDataLoading=false;
+    my.tmLeagueDataError=error&&error.message||String(error);
+    renderLeague();
+    loadPitchLeaders(my);
+  });
   api('/league?'+qs).then(j=>{if(cur===my&&Number(my.season)===season){
     const db=my.tmLeagueData,local=my.data||{};
     const goalRows=tmLeagueMetricRows(my,'goals'),assistRows=tmLeagueMetricRows(my,'assists');
@@ -3170,7 +3199,17 @@ function mergePitchLeaderRows(map,rows){
 function pitchLeaderRows(map){return [...map.values()].map(r=>({playerId:r.playerId,player:r.player,logo:r.logo,team:[...r.teams].join(' / '),value:r.value,source:'PitchAPI'})).sort((a,b)=>b.value-a.value||String(a.player).localeCompare(String(b.player),'tr')).map((r,i)=>({...r,rank:i+1}))}
 async function loadPitchLeaders(my){
   if(!my||!my.data||my.pitchLoading||my.pitchLoaded)return;
+  // Wait for the selected Supabase league-season read before querying PitchAPI.
+  if(my.tmLeagueDataLoaded!==true)return;
   const dbGoals=tmLeagueMetricRows(my,'goals'),dbAssists=tmLeagueMetricRows(my,'assists');
+  if(my.tmLeagueData&&my.tmLeagueData.hasSupabaseLeaderboardData===true){
+    my.data.goals=dbGoals||[];
+    my.data.assists=dbAssists||[];
+    my.pitchLoaded=true;
+    my.pitchLoading=false;
+    my.pitchError='';
+    return;
+  }
   if(dbGoals!==null&&dbAssists!==null){my.data.goals=dbGoals;my.data.assists=dbAssists;my.pitchLoaded=true;return;}
   my.pitchLoading=true;my.pitchError='';my.pitchProgress='Sezon maçları hazırlanıyor…';
   my.pitchGoals=new Map();my.pitchAssists=new Map();
@@ -3221,6 +3260,7 @@ function pitchMetricRowsFromMap(map,metric){
 }
 async function loadPitchStatLeaders(my,metric){
   if(!my||!my.data||!metric)return;
+  if(my.tmLeagueDataLoaded!==true)return;
   const dbRows=tmLeagueMetricRows(my,metric);
   if(dbRows!==null){my.pitchMetricRowsByKey=my.pitchMetricRowsByKey||{};my.pitchMetricRowsByKey[metric]=dbRows;my.pitchMetricLoadedByKey=my.pitchMetricLoadedByKey||{};my.pitchMetricLoadedByKey[metric]=true;return;}
   if(metric==='goals'||metric==='assists'){loadPitchLeaders(my);return;}
@@ -3345,7 +3385,7 @@ async function loadPitchWeekTeam(my,weekKey){
   catch(error){if(cur===my&&my.pitchWeekTeamRequest===request)my.pitchWeekTeamError=error&&error.message||String(error)}
   finally{if(cur===my&&my.pitchWeekTeamRequest===request){my.pitchWeekTeamLoading=false;renderLeague()}}
 }
-function leaguePlayerCard(r,i,metric,year,code){const v=metric==='rating'?Number(r.value||0).toFixed(2):Number(r.value||0);return `<div class="league-feature-row league-player-rank-row" data-player-profile="${esc(r.player)}" data-player-team="${esc(r.team||'')}" data-pitch-id="${esc(r.playerId||'')}" data-pitch-code="${esc(code||'')}" data-pitch-year="${esc(year||'')}"><span class="rank">${i+1}</span>${avatar(r.logo,r.player)}<span><b>${esc(trPlayerName(r.player))}</b>${r.team?`<small>${esc(trTeam(r.team))}</small>`:''}</span><strong>${esc(v)}</strong></div>`}
+function leaguePlayerCard(r,i,metric,year,code){const v=metric==='rating'?Number(r.value||0).toFixed(2):Number(r.value||0);return `<div class="league-feature-row league-player-rank-row" data-player-profile="${esc(r.player)}" data-player-team="${esc(r.team||'')}" data-pitch-id="${esc(r.playerId||'')}" data-pitch-code="${esc(code||'')}" data-pitch-year="${esc(year||'')}"><span class="rank">${r.rank||i+1}</span>${avatar(r.logo,r.player)}<span><b>${esc(trPlayerName(r.player))}</b>${r.team?`<small>${esc(trTeam(r.team))}</small>`:''}</span><strong>${esc(v)}</strong></div>`}
 function renderLeague(){
   if(!cur||cur.kind!=='league')return;
   const d=cur.data,name=(d&&d.name)||cur.name;$('#shTitle').textContent=name;
@@ -3409,7 +3449,7 @@ function renderLeague(){
       const dbGoals=tmLeagueMetricRows(cur,'goals'),dbAssists=tmLeagueMetricRows(cur,'assists');
       const goals=dbGoals!==null?dbGoals:(cur.pitchLoaded?(d.goals||[]):cur.pitchGoals?pitchLeaderRows(cur.pitchGoals):[]);
       const assists=dbAssists!==null?dbAssists:(cur.pitchLoaded?(d.assists||[]):cur.pitchAssists?pitchLeaderRows(cur.pitchAssists):[]);
-      const loadingMessage='<div class="empty">PitchAPI maç olayları ve oyuncu istatistikleri taranıyor…</div>';
+      const loadingMessage='<div class="empty">Lig ve sezon krallık kayıtları yükleniyor…</div>';
       const goalBlock=goals.length?leaderList(goals,'goals',d.errors&&d.errors.goals,cur.code,cur.season):cur.pitchLoading?loadingMessage:'<div class="empty">'+esc(cur.pitchError||'Gol istatistiği bulunamadı.')+'</div>';
       const assistBlock=assists.length?leaderList(assists,'assists',d.errors&&d.errors.assists,cur.code,cur.season):cur.pitchLoading?loadingMessage:'<div class="empty">'+esc(cur.pitchError||'Asist istatistiği bulunamadı.')+'</div>';
       body='<div class="league-best-player-grid"><section class="league-best-player-card"><h3>Gol krallığı</h3>'+goalBlock+'</section><section class="league-best-player-card"><h3>Asist krallığı</h3>'+assistBlock+'</section></div>';

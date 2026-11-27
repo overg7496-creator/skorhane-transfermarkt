@@ -16,6 +16,7 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         cls.sync = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
         cls.league_sync = (ROOT / "sync" / "sync_league_statistics.py").read_text(encoding="utf-8")
         cls.verify_sql = (ROOT / "database" / "verify_leaderboard_profile_read.sql").read_text(encoding="utf-8")
+        cls.leaderboard_sql = (ROOT / "database" / "009_leaderboard_from_player_season_stats.sql").read_text(encoding="utf-8").lower()
 
     def test_migration_promotes_provider_ids_and_nested_sync_ids(self):
         self.assertIn("add column if not exists competition_id text", self.sql)
@@ -62,16 +63,29 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn("completed_scope_keys: [scopeKey]", self.worker)
         self.assertIn("no_matching_league_rows !== true", self.worker)
         self.assertIn("coverageComplete", self.worker)
-        self.assertIn('goalLeadersAvailable = coverageComplete && goalsR.status === "fulfilled"', self.worker)
-        self.assertIn('assistLeadersAvailable = coverageComplete && assistsR.status === "fulfilled"', self.worker)
-        self.assertIn('coverageComplete && totalsR.status === "fulfilled"', self.worker)
+        self.assertIn("hasSupabaseLeaderboardData", self.worker)
+        self.assertIn('goalLeadersAvailable = goalsR.status === "fulfilled" && goals.length > 0', self.worker)
+        self.assertIn('assistLeadersAvailable = assistsR.status === "fulfilled" && assists.length > 0', self.worker)
+        self.assertIn('totalsR.status === "fulfilled" && totals.length > 0', self.worker)
         self.assertIn("tmDbRowsPaged(env, goalsQuery", self.worker)
         self.assertIn("tmDbRowsPaged(env, assistsQuery", self.worker)
+
+    def test_leaderboards_include_stats_without_requiring_a_player_squad_row(self):
+        self.assertIn("from public.tm_player_season_stats s", self.leaderboard_sql)
+        self.assertIn("left join lateral", self.leaderboard_sql)
+        self.assertIn("tm_team_season_squads q", self.leaderboard_sql)
+        self.assertIn("having count(distinct q.competition_id) = 1", self.leaderboard_sql)
+        self.assertIn("select distinct on (", self.leaderboard_sql)
+        self.assertIn("dense_rank() over", self.leaderboard_sql)
+        self.assertNotIn("from public.tm_team_season_player_stats", self.leaderboard_sql)
+        self.assertIn("hasSupabaseLeaderboardData", self.worker)
+        self.assertIn("if(my.tmLeagueDataLoaded!==true)return;", self.html)
+        self.assertIn("my.tmLeagueData.hasSupabaseLeaderboardData===true", self.html)
 
     def test_worker_cache_versions_are_bumped_and_copies_match(self):
         self.assertIn('"pf49:"', self.worker)
         self.assertIn("tm-player-profile-bundle:v3:", self.worker)
-        self.assertIn("tm-league-data:v3:", self.worker)
+        self.assertIn("tm-league-data:v4:", self.worker)
         self.assertEqual(self.worker, self.worker_copy)
         self.assertEqual(self.worker, self.requested_worker_copy)
         self.assertEqual(self.html, self.html_copy)
