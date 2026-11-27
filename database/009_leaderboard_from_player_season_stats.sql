@@ -1,5 +1,6 @@
 -- SkorHane: build league-season player totals directly from normalized player stats.
--- Apply after 007 and the repaired 008 migration. This migration is re-runnable.
+-- Apply after the repaired 008 migration. Migration 008 provides the helper functions;
+-- migration 007 is optional and may already have been applied. This migration is re-runnable.
 -- Unlike the old read model, player inclusion never depends on a matching squad row.
 begin;
 
