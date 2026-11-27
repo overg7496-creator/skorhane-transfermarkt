@@ -217,6 +217,7 @@ class SquadSyncTests(unittest.TestCase):
             patch.object(squads, "require_config"),
             patch.object(squads, "TM_LEAGUES", ["TR1"]),
             patch.object(squads, "TM_SEASON", "2026"),
+            patch.object(squads, "TM_SEASONS", ["2026"]),
             patch.object(squads, "api_get", side_effect=[
                 competition, profile_a, club_a, profile_b, club_b
             ]) as api,
@@ -247,6 +248,7 @@ class SquadSyncTests(unittest.TestCase):
             patch.object(squads, "require_config"),
             patch.object(squads, "TM_LEAGUES", ["TR1"]),
             patch.object(squads, "TM_SEASON", "2026"),
+            patch.object(squads, "TM_SEASONS", ["2026"]),
             patch.object(squads, "api_get", side_effect=[
                 competition, {"id": "10", "name": "Club A"}, {"id": "10", "players": []}
             ]),
@@ -275,6 +277,7 @@ class SquadSyncTests(unittest.TestCase):
             patch.object(squads, "require_config"),
             patch.object(squads, "TM_LEAGUES", ["TR1"]),
             patch.object(squads, "TM_SEASON", "2026"),
+            patch.object(squads, "TM_SEASONS", ["2026"]),
             patch.object(squads, "api_get", return_value=competition) as api,
             patch.object(squads, "load_league_state", return_value={
                 "sync_date": today,
