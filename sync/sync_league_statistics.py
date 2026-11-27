@@ -654,13 +654,13 @@ def run() -> int:
                 if index == 1 or index % 25 == 0:
                     LOG.info(
                         "İlerleme %s/%s oyuncu; %s satır yazıldı (%s sıfır satır).",
-                        index, len(pending), len(rows_to_save), len(zero_filled_scope_keys),
+                        index, len(pending), len(rows_to_save), zero_filled_row_count,
                     )
             except Exception as exc:
                 attempts = int(old_state.get("attempts") or 0) + 1
                 status = "retryable_failed" if attempts < MAX_FAILURE_ATTEMPTS else "failed"
                 save_checkpoint(player_id, scope, {
-                    "status": status, "coverage_version": 2, "attempts": attempts,
+                    "status": status, "coverage_version": 3, "attempts": attempts,
                     "last_error": tm.safe_error_for_log(exc),
                     "last_attempt_at": datetime.now(timezone.utc).isoformat(),
                     "scope_competitions": COMPETITIONS, "scope_seasons": SEASONS,
