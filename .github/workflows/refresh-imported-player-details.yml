@@ -2,7 +2,7 @@ name: SkorHane Yeni Kadro Oyuncu Detayları
 
 on:
   schedule:
-    - cron: "0 2 * * 0"
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       seen_after:
@@ -36,6 +36,7 @@ permissions:
   actions: write
 
 # The matrix runs all nine league partitions at the same time, one dedicated worker per league.
+# An hourly sweep retries due players after temporary failures or interrupted runs.
 jobs:
   refresh-player-details:
     strategy:
@@ -99,7 +100,7 @@ jobs:
           TM_MAX_PLAYERS_PER_RUN: "80"
           TM_DETAIL_PRESEED_ALL_HISTORY: "true"
           TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}
-          TM_DETAIL_MAX_RUNTIME_SECONDS: "16200"
+          TM_DETAIL_MAX_RUNTIME_SECONDS: "14400"
           TM_DETAIL_CONTINUATION_WORKFLOW: refresh-imported-player-details.yml
           FELIPE_DELAY_MIN_SECONDS: "8.0"
           FELIPE_DELAY_MAX_SECONDS: "9.5"
