@@ -195,18 +195,39 @@ stable
 security definer
 set search_path = public
 as $$
-  with season_rows as (
+  with target_player as (
+    select p.*
+    from public.tm_players p
+    where p.tm_id = p_tm_id
+       or (
+         regexp_replace(p.tm_id, '[^0-9]', '', 'g') <> ''
+         and regexp_replace(p.tm_id, '[^0-9]', '', 'g') =
+             regexp_replace(coalesce(p_tm_id, ''), '[^0-9]', '', 'g')
+         and (
+           select count(*)
+           from public.tm_players candidate
+           where regexp_replace(candidate.tm_id, '[^0-9]', '', 'g') =
+                 regexp_replace(coalesce(p_tm_id, ''), '[^0-9]', '', 'g')
+         ) = 1
+       )
+    order by (p.tm_id = p_tm_id) desc
+    limit 1
+  ),
+  target_id as (
+    select tm_id from target_player
+  ),
+  season_rows as (
     select s.tm_id, s.season_id, s.competition_name, s.club_name,
       s.appearances, s.starts, s.goals, s.assists, s.minutes,
       s.yellow_cards, s.second_yellow_cards, s.red_cards, s.goals_conceded, s.clean_sheets
     from public.tm_player_season_stats s
-    where s.tm_id = p_tm_id
+    where s.tm_id = (select tm_id from target_id)
     union all
     select h.tm_id, h.season_id, h.competition_name, h.club_name,
       h.appearances, h.starts, h.goals, h.assists, h.minutes,
       h.yellow_cards, null::integer, h.red_cards, null::integer, null::integer
     from public.tm_appearance_season_totals h
-    where h.tm_id = p_tm_id
+    where h.tm_id = (select tm_id from target_id)
       and not exists (
         select 1 from public.tm_player_season_stats s
         where s.tm_id = h.tm_id and s.season_id = h.season_id
@@ -220,15 +241,15 @@ as $$
       a.opponent_name, a.goals, a.assists, a.minutes, a.payload, a.updated_at,
       coalesce(nullif(a.game_id, ''), a.source_record_key) as match_key
     from public.tm_appearances a
-    where a.tm_id = p_tm_id and a.played_at is not null
+    where a.tm_id = (select tm_id from target_id) and a.played_at is not null
     order by coalesce(nullif(a.game_id, ''), a.source_record_key), a.updated_at desc, a.id desc
   )
   select jsonb_build_object(
-    'player', (select to_jsonb(p) from public.tm_players p where p.tm_id = p_tm_id limit 1),
+    'player', (select to_jsonb(p) from target_player p),
     'source_records', coalesce((
       select jsonb_agg(jsonb_build_object('record_type', r.record_type, 'payload', r.payload, 'fetched_at', r.fetched_at) order by r.fetched_at desc)
       from public.tm_source_records r
-      where r.source = 'felipeall' and r.external_id = p_tm_id
+      where r.source = 'felipeall' and r.external_id = (select tm_id from target_id)
         and (
           (r.record_key = '' and r.record_type in (
             'player_profile','player_stats','player_transfers','player_market_values',
@@ -243,11 +264,11 @@ as $$
     ), '[]'::jsonb),
     'transfers', coalesce((
       select jsonb_agg(to_jsonb(t) order by t.transfer_date desc, t.id desc)
-      from public.tm_transfers t where t.tm_id = p_tm_id
+      from public.tm_transfers t where t.tm_id = (select tm_id from target_id)
     ), '[]'::jsonb),
     'market_values', coalesce((
       select jsonb_agg(to_jsonb(v) order by v.valuation_date desc, v.id desc)
-      from public.tm_market_values v where v.tm_id = p_tm_id
+      from public.tm_market_values v where v.tm_id = (select tm_id from target_id)
     ), '[]'::jsonb),
     'injuries', coalesce((
       select jsonb_agg(jsonb_build_object(
@@ -255,7 +276,7 @@ as $$
         'season', i.season, 'days', i.days, 'games_missed', i.games_missed,
         'payload', i.payload
       ) order by i.from_date desc nulls last, i.id desc)
-      from public.tm_injuries i where i.tm_id = p_tm_id
+      from public.tm_injuries i where i.tm_id = (select tm_id from target_id)
     ), '[]'::jsonb),
     'recent_appearances', coalesce((
       select jsonb_agg(to_jsonb(a) - 'updated_at' - 'match_key' order by a.played_at desc, a.id desc)
@@ -271,10 +292,38 @@ stable
 security definer
 set search_path = public
 as $$
+  with target_player as (
+    select p.*
+    from public.tm_players p
+    where p.tm_id = p_tm_id
+       or (
+         regexp_replace(p.tm_id, '[^0-9]', '', 'g') <> ''
+         and regexp_replace(p.tm_id, '[^0-9]', '', 'g') =
+             regexp_replace(coalesce(p_tm_id, ''), '[^0-9]', '', 'g')
+         and (
+           select count(*)
+           from public.tm_players candidate
+           where regexp_replace(candidate.tm_id, '[^0-9]', '', 'g') =
+                 regexp_replace(coalesce(p_tm_id, ''), '[^0-9]', '', 'g')
+         ) = 1
+       )
+    order by (p.tm_id = p_tm_id) desc
+    limit 1
+  ),
+  target_id as (
+    select tm_id from target_player
+  )
   select jsonb_build_object(
     'requested_tm_id', p_tm_id,
+    'resolved_tm_id', (select tm_id from target_id),
     'exact_player_rows', (
       select count(*) from public.tm_players p where p.tm_id = p_tm_id
+    ),
+    'normalized_candidate_match_count', (
+      select count(*) from public.tm_players p
+      where regexp_replace(p.tm_id, '[^0-9]', '', 'g') <> ''
+        and regexp_replace(p.tm_id, '[^0-9]', '', 'g') =
+            regexp_replace(coalesce(p_tm_id, ''), '[^0-9]', '', 'g')
     ),
     'numeric_id_format_matches', coalesce((
       select jsonb_agg(p.tm_id order by p.tm_id)
@@ -284,22 +333,23 @@ as $$
         and p.tm_id <> p_tm_id
     ), '[]'::jsonb),
     'appearances_rows', (
-      select count(*) from public.tm_appearances a where a.tm_id = p_tm_id
+      select count(*) from public.tm_appearances a where a.tm_id = (select tm_id from target_id)
     ),
     'appearances_with_date_rows', (
-      select count(*) from public.tm_appearances a where a.tm_id = p_tm_id and a.played_at is not null
+      select count(*) from public.tm_appearances a
+      where a.tm_id = (select tm_id from target_id) and a.played_at is not null
     ),
     'season_stats_rows', (
-      select count(*) from public.tm_player_season_stats s where s.tm_id = p_tm_id
+      select count(*) from public.tm_player_season_stats s where s.tm_id = (select tm_id from target_id)
     ),
     'market_value_rows', (
-      select count(*) from public.tm_market_values v where v.tm_id = p_tm_id
+      select count(*) from public.tm_market_values v where v.tm_id = (select tm_id from target_id)
     ),
     'transfer_rows', (
-      select count(*) from public.tm_transfers t where t.tm_id = p_tm_id
+      select count(*) from public.tm_transfers t where t.tm_id = (select tm_id from target_id)
     ),
     'injury_rows', (
-      select count(*) from public.tm_injuries i where i.tm_id = p_tm_id
+      select count(*) from public.tm_injuries i where i.tm_id = (select tm_id from target_id)
     ),
     'raw_payload_counts', coalesce((
       select jsonb_build_object(
@@ -311,14 +361,14 @@ as $$
         'transfers_payload', jsonb_array_length(public.tm_extract_json_array(p.transfers_payload, array['transfers','history','items','data'])),
         'injuries_payload', jsonb_array_length(public.tm_extract_json_array(p.injuries_payload, array['injuries','data','items','injuryHistory']))
       )
-      from public.tm_players p where p.tm_id = p_tm_id limit 1
+      from target_player p
     ), '{}'::jsonb),
     'source_records', coalesce((
       select jsonb_object_agg(x.record_type, x.rows)
       from (
         select r.record_type, count(*)::integer as rows
         from public.tm_source_records r
-        where r.external_id = p_tm_id
+        where r.external_id = (select tm_id from target_id)
           and r.record_type in (
             'player_stats','player_transfers','player_market_values','player_injuries',
             'player_profile','current_season_matches'
@@ -327,7 +377,7 @@ as $$
       ) x
     ), '{}'::jsonb),
     'last_felipe_synced_at', (
-      select p.last_felipe_synced_at from public.tm_players p where p.tm_id = p_tm_id limit 1
+      select p.last_felipe_synced_at from target_player p
     )
   );
 $$;
