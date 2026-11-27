@@ -871,6 +871,7 @@ class HistoryFallbackTests(unittest.TestCase):
             patch.object(sync, "FELIPE_API_BASE", "http://127.0.0.1:8000"),
             patch.object(sync, "DCARIBOU_COMPETITIONS", ["TR1"]),
             patch.object(sync, "DCARIBOU_SEASONS", [2022]),
+            patch.object(sync, "TM_SEASON", 2022),
             patch.object(sync, "load_supabase_history_roster", return_value=[{
                 "competition_id": "TR1", "competition_name": "Süper Lig",
                 "season_id": "2022", "tm_id": "123", "club_name": "Club A",
