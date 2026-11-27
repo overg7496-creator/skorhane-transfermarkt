@@ -2422,7 +2422,7 @@ def parse_preseed_player_ids(raw: str | None) -> list[str]:
 
 
 def sync_preseed_players(raw_player_ids: str | None) -> int:
-    """Pre-fetch missing/stale Transfermarkt details for an explicit player ID list."""
+    """Force-refresh full Felipe player details for an explicit ID list; never call dcaribou."""
     player_ids = parse_preseed_player_ids(raw_player_ids)
     if not player_ids:
         raise RuntimeError(
@@ -2449,7 +2449,7 @@ def sync_preseed_players(raw_player_ids: str | None) -> int:
             index, len(player_ids), player_name, player_id,
         )
         sync_started = datetime.now(timezone.utc) - timedelta(seconds=5)
-        sync_felipeall(only_player=player_id, missing_only=True)
+        sync_felipeall(only_player=player_id, missing_only=False)
         latest = db_get(
             f"tm_players?select=last_felipe_synced_at&tm_id=eq.{quote(player_id)}&limit=1"
         )
