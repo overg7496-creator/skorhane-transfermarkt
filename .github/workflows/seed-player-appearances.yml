@@ -15,6 +15,16 @@ on:
         required: false
         type: string
         default: "2022,2023,2024,2025,2026"
+      continuation_depth:
+        description: "Otomatik devam zincirinin güvenlik sayacı; elle değiştirmeyin."
+        required: false
+        type: string
+        default: "0"
+      refresh_current_season:
+        description: "Yalnızca planlı haftalık güncellemede açık olmalı."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -42,6 +52,9 @@ jobs:
       GITHUB_REF_NAME: ${{ github.ref_name }}
       DCARIBOU_COMPETITIONS: ${{ github.event.inputs.competitions || 'TR1,GB1,ES1,L1,IT1,FR1' }}
       DCARIBOU_SEASONS: ${{ github.event.inputs.seasons || '2022,2023,2024,2025,2026' }}
+      TM_HISTORY_CONTINUATION_DEPTH: ${{ github.event.inputs.continuation_depth || '0' }}
+      TM_HISTORY_MAX_CONTINUATIONS: "20"
+      TM_HISTORY_REFRESH_CURRENT_SEASON: ${{ github.event_name == 'schedule' || github.event.inputs.refresh_current_season == 'true' }}
       DCARIBOU_APPEARANCE_BATCH_SIZE: "25"
       HTTP_TIMEOUT_SECONDS: "45"
     steps:
