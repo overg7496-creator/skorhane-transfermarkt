@@ -55,7 +55,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', worker)
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
-        self.assertIn('"pf43:"', worker)
+        self.assertIn('"pf44:"', worker)
         self.assertIn("function tmSupabaseBase(env)", worker)
         self.assertIn("SUPABASE_URL Project URL olmalı", worker)
         self.assertIn("function tmPlayerRefreshPlan(row, sourceRecords = [])", worker)
@@ -323,7 +323,7 @@ class SyncHelperTests(unittest.TestCase):
         }
         with patch.object(sync, "db_get", return_value=[]):
             due = sync.player_detail_refresh_plan("123", player)
-        self.assertEqual(due, {"profile", "market_value", "transfers", "stats", "injuries"})
+        self.assertEqual(due, {"profile", "market_value", "transfers", "stats", "injuries", "matches"})
 
     def test_post_repair_empty_provider_lists_are_accepted_when_fresh(self):
         from datetime import datetime, timezone
@@ -335,9 +335,17 @@ class SyncHelperTests(unittest.TestCase):
             "transfers_payload": {"transfers": []},
             "market_value_payload": {"marketValueHistory": []},
             "injuries_payload": {"injuries": []},
+            "current_season_payload": {"matches": []},
         }
         now = datetime.now(timezone.utc).isoformat()
-        records = [{"record_type": item[1], "fetched_at": now} for item in sync.DETAIL_ENDPOINTS.values()]
+        records = [
+            {
+                "record_type": item[1],
+                "record_key": str(sync.TM_SEASON) if item[1] == "current_season_matches" else "",
+                "fetched_at": now,
+            }
+            for item in sync.DETAIL_ENDPOINTS.values()
+        ]
         with patch.object(sync, "db_get", return_value=records):
             due = sync.player_detail_refresh_plan("123", player)
         self.assertEqual(due, set())
@@ -613,7 +621,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertNotIn("api('/player?part=stats'+qs)", html)
         self.assertNotIn("api('/pitch-player-recent?", html)
         self.assertNotIn("attempt===0?6000:12000", html)
-        self.assertIn("skorhane.playerstats.legacy.v8.", html)
+        self.assertIn("skorhane.playerstats.legacy.v9.", html)
         self.assertNotIn("Eksik Transfermarkt kayıtları yenileme kuyruğuna alındı", html)
         self.assertNotIn("profili kısa süre sonra yeniden aç", html)
 
@@ -626,7 +634,7 @@ class SyncHelperTests(unittest.TestCase):
         requested_html = (ROOT / "SkorHane-HTML-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, requested_copy)
         self.assertEqual(html, requested_html)
-        self.assertIn('"pf43:"', worker)
+        self.assertIn('"pf44:"', worker)
 
     def test_database_saves_goalkeeper_season_fields(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
@@ -707,7 +715,7 @@ if __name__ == "__main__":
         html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, worker_copy)
         self.assertIn("executionCtx.waitUntil(refreshPromise)", worker)
-        self.assertIn('"pf43:"', worker)
+        self.assertIn('"pf44:"', worker)
         self.assertIn("const loading=false", html)
         self.assertIn("const freshStats=await api('/player?part=stats'+qs)", html)
         self.assertNotIn("const freshInfo=await api('/player?part=info'+qs)", html)
@@ -717,6 +725,40 @@ if __name__ == "__main__":
         self.assertIn("preseed-players", workflow)
         self.assertIn("player_ids:", workflow)
         self.assertIn('python sync/sync_transfermarkt.py preseed-players --player-ids "$TM_PRESEED_PLAYER_IDS"', workflow)
+
+
+    def test_targeted_player_match_seeder_parses_seasons_and_persists_rows(self):
+        from unittest.mock import patch
+
+        self.assertEqual(sync.parse_player_match_seasons("2024, 2025;2024"), ["2024", "2025"])
+        with self.assertRaisesRegex(RuntimeError, "Geçersiz sezon"):
+            sync.parse_player_match_seasons("2025,abc")
+        match = {"gameId": "m1", "date": "2025-08-01T12:00:00Z"}
+        with (
+            patch.object(sync, "db_get", return_value=[{"tm_id": "401923", "name": "Victor Osimhen"}]),
+            patch.object(sync, "fetch_felipe_player_season_matches", return_value=[match]) as fetch,
+            patch.object(sync, "persist_felipe_history_appearances", return_value=1) as persist,
+            patch.object(sync, "source_record_snapshot") as snapshot,
+        ):
+            saved = sync.sync_player_match_history("401923", "2025,2026")
+        self.assertEqual(saved, 2)
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(persist.call_count, 2)
+        self.assertEqual(snapshot.call_count, 2)
+        self.assertEqual(fetch.call_args_list[0].args, ("401923", "2025"))
+        self.assertEqual(fetch.call_args_list[1].args, ("401923", "2026"))
+
+    def test_detail_refresh_plan_includes_current_season_matches(self):
+        from unittest.mock import patch
+
+        player = {
+            "profile_payload": {"id": "401923", "name": "Victor Osimhen"},
+            "current_season_payload": {"matches": []},
+        }
+        with patch.object(sync, "db_get", return_value=[]):
+            due = sync.player_detail_refresh_plan("401923", player)
+        self.assertIn("matches", due)
+        self.assertIn("matches", sync.DETAIL_ENDPOINTS)
 
 
 class HistoryFallbackTests(unittest.TestCase):
