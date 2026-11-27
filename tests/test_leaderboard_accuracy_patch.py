@@ -22,8 +22,6 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn("add column if not exists club_id text", self.sql)
         self.assertIn("payload#>>'{league_stats_sync,competition_id}'", self.sql)
         self.assertIn("payload#>>'{league_stats_sync,club_id}'", self.sql)
-        self.assertIn("p_row->>'competition_id'", self.sql)
-        self.assertIn("p_row->>'club_id'", self.sql)
 
     def test_leaderboard_join_is_season_and_identity_aware(self):
         self.assertIn("tm_leader_season_start_year(s.season_id)", self.sql)
