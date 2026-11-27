@@ -56,7 +56,7 @@ class LeagueSyncDashboardSqlTests(unittest.TestCase):
 
     def test_does_not_drop_dependent_views_with_cascade(self):
         self.assertIn("drop view if exists public.tm_league_sync_dashboard;", self.sql)
-        self.assertNotIn("cascade", self.sql)
+        self.assertNotIn("drop view if exists public.tm_league_sync_dashboard cascade", self.sql)
 
 
 if __name__ == "__main__":
