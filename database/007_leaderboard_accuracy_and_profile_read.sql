@@ -151,24 +151,18 @@ left join lateral (
     and (
       (nullif(s.competition_id, '') is not null and s.competition_id = q.competition_id)
       or (
-        nullif(s.competition_id, '') is null
-        and (
-          (coalesce(s.competition_name, '') ~ '^[0-9]+$' and s.competition_name = q.competition_id)
-          or public.tm_leader_normalize_name(s.competition_name) =
-             public.tm_leader_normalize_name(q.competition_name)
-        )
+        (coalesce(s.competition_name, '') ~ '^[0-9]+$' and s.competition_name = q.competition_id)
+        or public.tm_leader_normalize_name(s.competition_name) =
+           public.tm_leader_normalize_name(q.competition_name)
       )
     )
     and (
       (nullif(s.club_id, '') is not null and s.club_id = q.club_id)
       or (
-        nullif(s.club_id, '') is null
-        and (
-          (coalesce(s.club_name, '') ~ '^[0-9]+$' and s.club_name = q.club_id)
-          or s.club_name = 'Kulüp #' || q.club_id
-          or public.tm_leader_normalize_name(s.club_name) =
-             public.tm_leader_normalize_name(q.club_name)
-        )
+        (coalesce(s.club_name, '') ~ '^[0-9]+$' and s.club_name = q.club_id)
+        or s.club_name = 'Kulüp #' || q.club_id
+        or public.tm_leader_normalize_name(s.club_name) =
+           public.tm_leader_normalize_name(q.club_name)
       )
     )
 ) stats on true;
@@ -202,9 +196,9 @@ create or replace view public.tm_league_goal_leaders
 with (security_invoker = true)
 as
 select
-  rank() over (
+  row_number() over (
     partition by competition_id, season_id
-    order by goals desc
+    order by goals desc, assists desc, minutes desc, player_name
   )::integer as leader_rank,
   *
 from public.tm_league_player_season_totals
@@ -214,9 +208,9 @@ create or replace view public.tm_league_assist_leaders
 with (security_invoker = true)
 as
 select
-  rank() over (
+  row_number() over (
     partition by competition_id, season_id
-    order by assists desc
+    order by assists desc, goals desc, minutes desc, player_name
   )::integer as leader_rank,
   *
 from public.tm_league_player_season_totals
