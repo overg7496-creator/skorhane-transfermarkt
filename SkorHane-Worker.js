@@ -2931,6 +2931,23 @@ async function tmDbRows(env, query) {
   return Array.isArray(rows) ? rows : [];
 }
 
+async function tmDbRpc(env, functionName, payload) {
+  const base = tmSupabaseBase(env);
+  const key = String(env && env.SUPABASE_SERVICE_ROLE_KEY || "");
+  if (!base || !key) throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY yapılandırılmadı");
+  const response = await fetch(base + "/rest/v1/rpc/" + encodeURIComponent(functionName), {
+    method: "POST",
+    headers: { apikey: key, Authorization: "Bearer " + key, Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 500);
+    throw new Error("Supabase RPC " + functionName + " HTTP " + response.status + ": " + (detail || "response body empty"));
+  }
+  return await response.json();
+}
+
 async function tmDbWrite(env, path, method, payload) {
   const base = tmSupabaseBase(env);
   const key = String(env && env.SUPABASE_SERVICE_ROLE_KEY || "");
@@ -4306,16 +4323,16 @@ async function tmPlayerSummary(env, id, fallback = {}) {
 }
 
 async function tmPlayer(env, id, executionCtx = null) {
-  const out = { photo: "", bio: {}, seasons: [], transfers: [], marketValueHistory: [], injuries: [], absences: [] };
+  const out = { photo: "", bio: {}, seasons: [], transfers: [], marketValueHistory: [], injuries: [], absences: [], recentMatches: [] };
   const playerId = String(id || "").replace(/\D/g, "");
   if (!playerId) return { ...out, err: "geçersiz Transfermarkt oyuncu kimliği" };
-  const playerFields = "tm_id,name,team_name,position,photo_url,profile_payload,stats_payload,current_season_payload,transfers_payload,market_value_payload,injuries_payload,absences_payload,current_market_value_eur,current_market_value_text,last_felipe_synced_at";
-  const [rows, sourceRecords] = await Promise.all([
-    tmDbRows(env, "tm_players?select=" + playerFields + "&tm_id=eq." + encodeURIComponent(playerId) + "&limit=1"),
-    tmDbRows(env, "tm_source_records?select=record_type,payload,fetched_at&source=eq.felipeall&external_id=eq." +
-      encodeURIComponent(playerId) + "&record_key=eq.&limit=10").catch(() => [])
-  ]);
-  const dbRow = rows[0];
+  const bundle = await tmDbRpc(env, "tm_player_profile_bundle", { p_tm_id: playerId });
+  const dbRow = bundle && bundle.player;
+  const sourceRecords = Array.isArray(bundle && bundle.source_records) ? bundle.source_records : [];
+  const bundleSeasonRows = Array.isArray(bundle && bundle.season_stats) ? bundle.season_stats : [];
+  const bundleTransfers = Array.isArray(bundle && bundle.transfers) ? bundle.transfers : [];
+  const bundleMarketValues = Array.isArray(bundle && bundle.market_values) ? bundle.market_values : [];
+  const recentAppearanceRows = Array.isArray(bundle && bundle.recent_appearances) ? bundle.recent_appearances : [];
   if (!dbRow) return { ...out, err: "Transfermarkt oyuncusu henüz veritabanına senkronize edilmemiş" };
   const sourceByType = Object.fromEntries(sourceRecords.filter(item => item && item.record_type)
     .map(item => [String(item.record_type), item.payload || {}]));
@@ -4361,36 +4378,9 @@ async function tmPlayer(env, id, executionCtx = null) {
   const b = profileRaw.player || profileRaw.data || profileRaw.profile || profileRaw;
   const statsRaw = row.stats_payload || {};
   let statsRows = Array.isArray(statsRaw) ? statsRaw : (statsRaw.stats || statsRaw.data || statsRaw.items || []);
-  let transferRows = [], marketRows = [];
-  // Merge two DB-backed sources: felipeall's active-season totals and
-  // dcaribou's one-time historical appearance aggregates. Do not let the
-  // presence of current-season rows hide the older seasons.
-  try {
-    const selectStats = "select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,second_yellow_cards,red_cards,goals_conceded,clean_sheets&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc&limit=1000";
-    const selectHistoryStats = "select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,red_cards&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc&limit=1000";
-    const [dbStats, historyStats, transferResult, marketResult] = await Promise.all([
-      tmDbRows(env, "tm_player_season_stats?" + selectStats),
-      tmDbRows(env, "tm_appearance_season_totals?" + selectHistoryStats),
-      tmDbRows(env, "tm_transfers?select=transfer_date,from_club,to_club,transfer_type,fee_text,fee_eur&tm_id=eq." + encodeURIComponent(playerId) + "&order=transfer_date.desc&limit=100").catch(() => []),
-      tmDbRows(env, "tm_market_values?select=valuation_date,value_eur,display_value,club_name&tm_id=eq." + encodeURIComponent(playerId) + "&order=valuation_date.desc&limit=100").catch(() => [])
-    ]);
-    transferRows = transferResult;
-    marketRows = marketResult;
-    const normalizeRows = rows => rows.map(x => ({
-      seasonID: x.season_id, competitionName: x.competition_name, clubName: x.club_name,
-      appearances: x.appearances, starts: x.starts, goals: x.goals, assists: x.assists,
-      minutes: x.minutes, yellowCards: x.yellow_cards, secondYellowCards: x.second_yellow_cards,
-      redCards: x.red_cards, goalsConceded: x.goals_conceded, cleanSheets: x.clean_sheets
-    }));
-    const currentRows = normalizeRows(dbStats);
-    const statKey = x => [x.seasonID || "", x.competitionName || "", x.clubName || ""].join("|");
-    const currentKeys = new Set(currentRows.map(statKey));
-    // Prefer Transfermarkt season totals for matching season/competition/club
-    // keys; use historical match aggregates only where no current row exists.
-    const historyOnly = normalizeRows(historyStats).filter(x => !currentKeys.has(statKey(x)));
-    const normalized = [...currentRows, ...historyOnly];
-    if (normalized.length) statsRows = normalized;
-  } catch (_) {}
+  let transferRows = bundleTransfers;
+  let marketRows = bundleMarketValues;
+  if (bundleSeasonRows.length) statsRows = bundleSeasonRows;
   // refreshState is already known; the background queue continues after the response.
   out.refreshRequired = !!refreshState.required;
   out.refreshQueued = !!refreshState.queued;
@@ -4431,6 +4421,26 @@ async function tmPlayer(env, id, executionCtx = null) {
   out.marketValueHistory = marketRows;
   out.injuries = listPayload(row.injuries_payload || {}, ["injuries", "data", "items"]).map(item => ({ ...item, injury: item.injury || item.reason || item.type || item.description || item.injuryType || "", from_date: item.from_date || item.fromDate || item.from || item.startDate || item.start || "", until_date: item.until_date || item.untilDate || item.until || item.endDate || item.end || "", season: item.season || item.seasonName || item.season_id || "", days: item.days ?? item.daysMissed ?? item.durationDays, games_missed: item.games_missed ?? item.gamesMissed ?? item.missedMatches }));
   out.absences = listPayload(row.absences_payload || {}, ["absences", "data", "items"]);
+  out.recentMatches = recentAppearanceRows.map(item => {
+    const payload = item && item.payload && typeof item.payload === "object" ? item.payload : {};
+    const playerPayload = payload.player && typeof payload.player === "object" ? payload.player : payload;
+    const club = String(item && item.club_name || payload.club_name || payload.team_name || payload.teamName || "");
+    const opponent = String(item && item.opponent_name || payload.opponent_name || payload.opponentName || payload.opponent || "");
+    const ratingRaw = pick(playerPayload, "rating", "playerRating", "player_rating", "averageRating", "average_rating");
+    const rating = ratingRaw === "" || ratingRaw == null || !Number.isFinite(Number(ratingRaw)) ? null : Number(ratingRaw);
+    const numberOrNull = value => value == null || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
+    return {
+      id: String(item && (item.game_id || item.id) || payload.game_id || payload.match_id || ""),
+      date: String(item && item.played_at || payload.played_at || payload.date || ""),
+      home: { name: club || "Takım bilgisi yok", logo: String(payload.club_logo || payload.team_logo || "") },
+      away: { name: opponent || "Rakip bilgisi yok", logo: String(payload.opponent_logo || "") },
+      scoreHome: null, scoreAway: null, isHome: null,
+      league: String(item && item.competition_name || payload.competition_name || payload.league || "Maç"),
+      leagueCode: String(payload.competition_code || payload.league_code || ""),
+      rating, goals: numberOrNull(item && item.goals), assists: numberOrNull(item && item.assists),
+      minutes: numberOrNull(item && item.minutes), databaseSource: "Supabase"
+    };
+  });
   out.photo = row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "";
   const nationality = pick(b, "citizenship", "nationality", "nationalities");
   const nat = Array.isArray(nationality) ? nationality.join(", ") : nationality || "";
@@ -4500,24 +4510,7 @@ async function tmPlayer(env, id, executionCtx = null) {
     }
     out.seasons = [...mp.values()];
   }
-  if (!out.seasons.length) {
-    try {
-      const history = await tmDbRows(env, "tm_appearance_season_totals?select=season_id,competition_name,club_name,appearances,starts,goals,assists,minutes,yellow_cards,red_cards&tm_id=eq." + encodeURIComponent(playerId) + "&order=season_id.desc");
-      out.seasons = history.map(x => ({
-        "Sezon": x.season_id || "",
-        "Takım": x.club_name || "",
-        "Maç": x.appearances == null ? 0 : Number(x.appearances),
-        "Gol": x.goals == null ? 0 : Number(x.goals),
-        "Asist": x.assists == null ? null : Number(x.assists),
-        "İlk 11": x.starts == null ? null : Number(x.starts),
-        "Toplam Dakika": x.minutes == null ? null : Number(x.minutes),
-        "Sarı Kart": x.yellow_cards == null ? null : Number(x.yellow_cards),
-        "Kırmızı Kart": x.red_cards == null ? null : Number(x.red_cards),
-        cats: emptyCats()
-      }));
-      for (const item of out.seasons) addCat(item.cats, "Maç geçmişi", item["Maç"], item["Gol"], item["Asist"], item["İlk 11"], item["Sarı Kart"], item["Kırmızı Kart"]);
-    } catch (_) {}
-  }
+
   return out;
 }
 async function tsdbPlayer(id) {
@@ -4885,7 +4878,7 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     return {date,from,to,kind:endLoan?'Kiralıktan dönüş':loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
   }).filter(x=>x.from||x.to||x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const transfers=tmTransfers;
-  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], tmRefreshRequired: !!(out.tm && out.tm.refreshRequired), tmRefreshQueued: !!(out.tm && out.tm.refreshQueued), tmRefreshConfigured: out.tm ? !!out.tm.refreshConfigured : null, tmRefreshReason: out.tm && out.tm.refreshReason || "", tmRefreshState: out.tm && out.tm.refreshState || "", tmRefreshRetryAt: out.tm && out.tm.refreshRetryAt || "", sources: st, stats: null };
+  return { part: part || "all", role: coach ? "coach" : "player", player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], recentMatches: out.tm && out.tm.recentMatches || [], tmRefreshRequired: !!(out.tm && out.tm.refreshRequired), tmRefreshQueued: !!(out.tm && out.tm.refreshQueued), tmRefreshConfigured: out.tm ? !!out.tm.refreshConfigured : null, tmRefreshReason: out.tm && out.tm.refreshReason || "", tmRefreshState: out.tm && out.tm.refreshState || "", tmRefreshRetryAt: out.tm && out.tm.refreshRetryAt || "", sources: st, stats: null };
 }
 
 // ---------- PitchAPI: seçilen oyuncunun erişilebilir geçmiş sezonlarını maç maç birleştir ----------
