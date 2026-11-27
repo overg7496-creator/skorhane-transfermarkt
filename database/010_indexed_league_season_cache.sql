@@ -11,6 +11,10 @@ create index if not exists tm_team_season_squads_competition_season_cache_idx
 create index if not exists tm_team_season_squads_player_season_cache_idx
   on public.tm_team_season_squads (tm_id, season_id, competition_id, club_id);
 
+create index if not exists tm_source_records_league_stats_checkpoint_scope_v3_idx
+  on public.tm_source_records (record_key, external_id)
+  where source = 'felipeall' and record_type = 'league_stats_player_checkpoint';
+
 create table if not exists public.tm_league_player_season_totals_cache (
   competition_id text not null,
   competition_name text not null default '',
