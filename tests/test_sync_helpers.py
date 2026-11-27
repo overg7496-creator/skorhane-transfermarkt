@@ -52,7 +52,7 @@ class SyncHelperTests(unittest.TestCase):
         copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, copy)
         self.assertIn('const repairCutoff = Date.parse("2026-11-26T12:00:00Z")', worker)
-        self.assertIn("tm_source_records?select=record_type,payload,fetched_at", worker)
+        self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', worker)
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
         self.assertIn('"pf42:"', worker)
@@ -75,11 +75,17 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("if (!wantStats) tasks.push", worker)
         self.assertIn("if (wantInfo && coach)", worker)
         self.assertIn("else if (!coach && wantStats)", worker)
-        self.assertIn("playerFields = \"tm_id,name,team_name,position,photo_url,profile_payload", worker)
+        self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', worker)
+        self.assertIn("bundleSeasonRows", worker)
+        self.assertIn("bundleTransfers", worker)
+        self.assertIn("bundleMarketValues", worker)
+        self.assertIn("recentAppearanceRows", worker)
         self.assertIn("readPlayerInfoCache", html)
         self.assertIn("savePlayerInfoCache(it.name,j)", html)
         self.assertIn("infoLoaded:!!cachedLegacyInfo", html)
-        self.assertIn("transferResult, marketResult", worker)
+        self.assertIn("api('/player?part=all'+qs)", html)
+        self.assertNotIn("api('/player?part=info'+qs)", html)
+        self.assertNotIn("api('/player?part=stats'+qs)", html)
 
     def test_single_player_workflow_uses_short_local_delay_and_dependency_cache(self):
         workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
@@ -526,12 +532,13 @@ class SyncHelperTests(unittest.TestCase):
 
     def test_transfermarkt_ui_silently_refreshes_all_player_sections_in_place(self):
         html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
-        self.assertIn("function scheduleTmRefreshProbe", html)
-        self.assertIn("const freshStats=await api('/player?part=stats'+qs)", html)
-        self.assertIn("my.stats=freshStats", html)
-        self.assertNotIn("const freshInfo=await api('/player?part=info'+qs)", html)
-        self.assertNotIn("my.info=freshInfo", html)
-        self.assertIn("attempt===0?6000:12000", html)
+        self.assertNotIn("function scheduleTmRefreshProbe", html)
+        self.assertIn("api('/player?part=all'+qs)", html)
+        self.assertIn("my.info=j;my.stats=j", html)
+        self.assertNotIn("api('/player?part=info'+qs)", html)
+        self.assertNotIn("api('/player?part=stats'+qs)", html)
+        self.assertNotIn("api('/pitch-player-recent?", html)
+        self.assertNotIn("attempt===0?6000:12000", html)
         self.assertIn("skorhane.playerstats.legacy.v7.", html)
         self.assertNotIn("Eksik Transfermarkt kayıtları yenileme kuyruğuna alındı", html)
         self.assertNotIn("profili kısa süre sonra yeniden aç", html)
@@ -563,8 +570,11 @@ class SyncHelperTests(unittest.TestCase):
 
     def test_worker_uses_valid_columns_for_historical_season_view(self):
         worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
-        self.assertIn("tm_appearance_season_totals?\" + selectHistoryStats", worker)
-        self.assertIn("goals_conceded,clean_sheets&tm_id=eq.", worker)
+        migration = (ROOT / "database" / "003_player_profile_bundle.sql").read_text(encoding="utf-8")
+        self.assertIn("from public.tm_appearance_season_totals h", migration)
+        self.assertIn("s.goals_conceded, s.clean_sheets", migration)
+        self.assertIn("'recent_appearances'", migration)
+        self.assertIn("limit 13", migration)
 if __name__ == "__main__":
     unittest.main()
 
