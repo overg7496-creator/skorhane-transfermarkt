@@ -84,12 +84,13 @@ class PlayerProfileFallbackTests(unittest.TestCase):
                 self.assertIn(table, self.workflow)
         self.assertIn("BATCH_SUPABASE_VERIFY_OK", self.workflow)
 
-    def test_missing_data_is_saved_to_one_queue_even_without_dispatch_token(self):
-        self.assertIn('status: token ? "dispatching" : "pending-config"', self.worker)
-        self.assertIn('queueStatus === "pending-config" && !token', self.worker)
-        self.assertIn('GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı.', self.worker)
-        self.assertIn('response.status !== 204', self.worker)
-        self.assertIn('state: "dispatch-failed"', self.worker)
+    def test_player_profile_is_read_only_and_uses_the_supabase_bundle(self):
+        player = self.worker.split("async function tmPlayer(env, id)", 1)[1].split("async function tsdbPlayer", 1)[0]
+        self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', self.worker)
+        self.assertIn('state: refreshPlan.required ? "preload-required" : "current"', player)
+        self.assertNotIn("queueTmPlayerRefresh(", self.worker)
+        self.assertNotIn("tmDbWrite(", self.worker)
+        self.assertNotIn("await fetch(", player)
 
     def test_html_uses_short_nonblocking_empty_states(self):
         self.assertIn("function playerNoDataMessage", self.html)
@@ -107,9 +108,11 @@ class PlayerProfileFallbackTests(unittest.TestCase):
             self.workflow,
         )
 
-    def test_player_data_response_does_not_wait_for_team_logo_lookups(self):
-        self.assertIn("executionCtx.waitUntil(careerLogoTask)", self.worker)
-        self.assertNotIn("await attachCareerTeamLogos(env, [...sp.seasons", self.worker)
+    def test_player_data_response_does_not_fetch_supplemental_career_logos(self):
+        profile = self.worker.split("async function playerFull(", 1)[1].split("// ---------- PitchAPI:", 1)[0]
+        self.assertNotIn("const careerLogoTask", profile)
+        self.assertNotIn("attachCareerTeamLogos(env, [...sp.seasons", profile)
+        self.assertIn("const sp = splitSeasons(rows);", profile)
 
 
 if __name__ == "__main__":
