@@ -496,11 +496,12 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("partition by lm.tm_id", migration)
         self.assertIn("where rm.worker_rank = 1", migration)
 
-    def test_league_detail_workflow_runs_seven_of_nine_matrix_workers(self):
+    def test_league_detail_workflow_runs_all_nine_matrix_workers(self):
         workflow = (
             ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("max-parallel: 7", workflow)
+        self.assertIn("max-parallel: 9", workflow)
+        self.assertNotIn("TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}", workflow.split("- name: Validate detail worker and tests", 1)[1].split("- name: Start dedicated Transfermarkt API", 1)[0])
         self.assertIn("fromJSON(", workflow)
         self.assertIn('["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]', workflow)
         self.assertIn("format('[\"{0}\"]'", workflow)
