@@ -1,0 +1,115 @@
+name: SkorHane — Lig ve Sezon Oyuncu/Takım İstatistikleri
+
+on:
+  workflow_dispatch:
+    inputs:
+      competitions:
+        description: "Dokuz lig kodu: Türkiye (TR1, TR2, TR3A, TR3B) + İngiltere, İspanya, Almanya, İtalya, Fransa"
+        required: true
+        type: string
+        default: "TR1,TR2,TR3A,TR3B,GB1,ES1,L1,IT1,FR1"
+      seasons:
+        description: "Sezon başlangıç yılları; her sezon ayrı ayrı işlenir."
+        required: true
+        type: string
+        default: "2022,2023,2024,2025,2026"
+      force_refresh:
+        description: "Tamamlanmış oyuncu istatistiklerini de yeniden çek."
+        required: false
+        type: boolean
+        default: false
+      continue_count:
+        description: "Otomatik devam sayacı. Elle başlatırken 0 bırak."
+        required: false
+        type: string
+        default: "0"
+  workflow_run:
+    workflows:
+      - "SkorHane — Lig, Kadro ve Geçmiş Sezon Ön-Doldurma"
+    types:
+      - completed
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: skorhane-league-season-statistics
+  cancel-in-progress: false
+
+jobs:
+  sync-league-statistics:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      FELIPE_API_BASE: http://127.0.0.1:8000
+      TM_STATS_COMPETITIONS: ${{ github.event.inputs.competitions || 'TR1,TR2,TR3A,TR3B,GB1,ES1,L1,IT1,FR1' }}
+      TM_STATS_SEASONS: ${{ github.event.inputs.seasons || '2022,2023,2024,2025,2026' }}
+      TM_STATS_FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
+      TM_STATS_CONTINUE_COUNT: ${{ github.event.inputs.continue_count || '0' }}
+      TM_STATS_MAX_PLAYER_REQUESTS_PER_RUN: "1200"
+      TM_STATS_MAX_RUNTIME_SECONDS: "19800"
+      TM_STATS_MAX_FAILURE_ATTEMPTS: "3"
+      FELIPE_DELAY_MIN_SECONDS: "1.0"
+      FELIPE_DELAY_MAX_SECONDS: "1.5"
+      HTTP_MAX_RETRIES: "4"
+      HTTP_TIMEOUT_SECONDS: "45"
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_REF_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate league statistics worker and tests
+        run: |
+          set -euo pipefail
+          python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py sync/sync_league_statistics.py
+          python -m unittest discover -s tests -v
+
+      - name: Start dedicated Felipe Transfermarkt API v5.0.0
+        env:
+          RATE_LIMITING_ENABLE: "false"
+          TFMKT_MAX_CONCURRENCY: "1"
+          TFMKT_TIMEOUT_SECONDS: "30"
+          CACHE_TTL_SECONDS: "600"
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-warn-script-location uv
+          git clone --quiet --depth 1 --branch v5.0.0 https://github.com/felipeall/transfermarkt-api.git "$RUNNER_TEMP/transfermarkt-api"
+          cd "$RUNNER_TEMP/transfermarkt-api"
+          uv sync --extra server --no-dev
+          nohup uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/transfermarkt-api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/transfermarkt-api.pid"
+          ready=0
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:8000/health > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat "$RUNNER_TEMP/transfermarkt-api.log"
+            echo "Felipe API 90 saniye içinde başlamadı."
+            exit 1
+          fi
+          echo "Felipe API hazır; oyuncu sezon istatistikleri seri ve gecikmeli alınacak."
+
+      - name: Import season-by-season player and team statistics
+        run: python sync/sync_league_statistics.py
+
+      - name: Stop local Felipe API
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/transfermarkt-api.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/transfermarkt-api.pid")" 2>/dev/null || true
+          fi
