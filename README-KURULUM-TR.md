@@ -40,9 +40,24 @@ Cloudflare Worker (skor3)
 ## 1. Supabase kurulumu
 
 1. Supabase projesinin SQL Editor bölümünü aç.
-2. `database/001_transfermarkt_schema.sql` dosyasının tamamını çalıştır. Dosya mevcut tabloları koruyarak eksik `goals_conceded` ve `clean_sheets` kolonlarını `ADD COLUMN IF NOT EXISTS` ile ekler.
-3. Aşağıdaki tabloların oluştuğunu doğrula: `tm_players`, `tm_player_season_stats`, `tm_transfers`, `tm_market_values`, `tm_appearances`, `tm_source_records`, `tm_sync_runs`.
-4. `tm_appearance_season_totals` görünümünün sorgulanabildiğini kontrol et.
+2. `database/001_transfermarkt_schema.sql` dosyasının tamamını çalıştır. Dosya tabloları, güvenli UPSERT fonksiyonlarını ve RLS ayarlarını oluşturur.
+3. `database/002_team_seasons_and_leaderboards.sql` dosyasını çalıştır. Bu migration lig/sezon kadro bağlantılarını, takım/oyuncu sezon toplamlarını, gol krallığı ve asist lideri görünümlerini oluşturur.
+4. `database/003_player_profile_bundle.sql` dosyasını çalıştır. Oyuncu profilinin geçmiş verilerini tek sorguda getiren RPC'yi oluşturur.
+5. `database/004_league_sync_dashboard_detail.sql` dosyasını çalıştır. Bu dosya `tm_league_sync_dashboard` görünümünü ayrıntılı veri kapsamı raporuyla yeniler ve sezon bazında `tm_league_sync_dashboard_seasons` görünümünü oluşturur. Yalnızca raporlama görünümleri/fonksiyonu oluşturulur; oyuncu, kadro, transfer, değer veya istatistik kayıtları silinmez.
+6. Tabloların oluştuğunu doğrula: `tm_players`, `tm_player_season_stats`, `tm_transfers`, `tm_market_values`, `tm_appearances`, `tm_source_records`, `tm_sync_runs`, `tm_team_season_squads`.
+7. İki dashboard görünümünü kontrol et:
+
+```sql
+select *
+from public.tm_league_sync_dashboard
+order by competition_id;
+
+select *
+from public.tm_league_sync_dashboard_seasons
+order by competition_id, season_id desc;
+```
+
+İlk görünüm liglerin genel veri kapsamını; ikinci görünüm her lig/sezonun takım, oyuncu, piyasa değeri, sakatlık/transfer kapsamı, performans istatistikleri, gol/asist liderleri, puan tablosu ve kadro aktarım durumunu ayrı ayrı gösterir.
 
 Şema RLS'i etkinleştirir; tablolar `anon` ve `authenticated` rollerine kapalıdır. Yazma/okuma işlemlerinde yalnızca sunucu tarafı `service_role` anahtarı kullanılır. Bu anahtarı HTML'e veya tarayıcı JavaScript'ine asla koyma.
 
@@ -151,6 +166,9 @@ Depo Public olsa bile Supabase service-role anahtarı, GitHub PAT veya başka bi
 | `.github/workflows/import-missing-leagues.yml` | Manuel eksik lig/kadro aktarımı |
 | `.github/workflows/validate-detail-queues.yml` / `test-sync-workers.yml` | Manuel test ve kuyruk kontrolü |
 | `database/001_transfermarkt_schema.sql` | Tablolar, güvenli merge RPC'leri, RLS ve ek sezon kolonları |
+| `database/002_team_seasons_and_leaderboards.sql` | Lig/sezon kadroları, takım sezon özetleri, gol ve asist liderleri |
+| `database/003_player_profile_bundle.sql` | Oyuncu profili için birleşik geçmiş veri RPC'si |
+| `database/004_league_sync_dashboard_detail.sql` | Lig ve sezon bazında ayrıntılı veri kapsamı dashboard görünümleri |
 | `SkorHane-Worker.js` | Canlı Cloudflare Worker |
 | `SkorHane-Worker-kodu-kopyalanabilir.txt` | Worker ile birebir kopya |
 | `SkorHane-HTML-kodu-kopyalanabilir.txt` | Oyuncu profil ekranı ve yenileme durumu UI'si |
