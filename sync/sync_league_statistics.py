@@ -363,6 +363,54 @@ def map_stat_payloads(tm_id: str, stat: dict[str, Any], targets: list[dict[str, 
             mapped.append(row)
     return mapped
 
+def target_identity_key(target: dict[str, Any]) -> str:
+    club_id = str(target.get("club_id") or "").strip()
+    club_key = "id:" + club_id if club_id else "name:" + norm(target.get("club_name"))
+    return f"{target.get('competition_id')}:{target.get('season_id')}:{club_key}"
+
+
+def target_scope_key(target: dict[str, Any]) -> str:
+    return f"{target.get('competition_id')}:{target.get('season_id')}"
+
+
+def zero_stat_payload(tm_id: str, target: dict[str, Any]) -> dict[str, Any]:
+    """Represent a rostered player with no league appearance as explicit zero stats."""
+    season_id = stat_season_id(target.get("season_id"), str(target.get("season_id") or ""))
+    competition_id = str(target.get("competition_id") or "")
+    club_id = str(target.get("club_id") or "")
+    competition_name = str(target.get("competition_name") or competition_id)
+    club_name = str(target.get("club_name") or ("Kulüp #" + club_id if club_id else ""))
+    return {
+        "tm_id": str(tm_id),
+        "season_id": season_id,
+        "competition_id": competition_id,
+        "club_id": club_id,
+        "competition_name": competition_name,
+        "club_name": club_name,
+        "appearances": 0,
+        "starts": 0,
+        "goals": 0,
+        "assists": 0,
+        "minutes": 0,
+        "yellow_cards": 0,
+        "second_yellow_cards": 0,
+        "red_cards": 0,
+        "goals_conceded": 0,
+        "clean_sheets": 0,
+        "payload": {
+            "league_stats_sync": {
+                "competition_id": competition_id,
+                "season_id": str(target.get("season_id") or ""),
+                "club_id": club_id,
+                "zero_fill": True,
+                "source_response_complete": True,
+                "matched_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+        "source": "felipeall",
+    }
+
+
 def fetch_player_stats(tm_id: str) -> list[dict[str, Any]]:
     payload = tm.json_request(
         f"{FELIPE_API_BASE}/players/{quote(tm_id, safe='')}/stats",
@@ -375,9 +423,10 @@ def fetch_player_stats(tm_id: str) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 def checkpoint_scope() -> str:
-    # v2 forces a one-time refetch after league/team IDs became first-class columns.
-    # Old v1 checkpoints must not label rows written without typed IDs as complete.
-    return "v2_" + "-".join(COMPETITIONS) + "_" + "-".join(SEASONS)
+    # v3 forces a one-time refetch so every roster player receives an explicit
+    # league/season row (including a safe zero row when the complete stats response
+    # contains no appearance record for that club stint).
+    return "v3_" + "-".join(COMPETITIONS) + "_" + "-".join(SEASONS)
 
 def load_checkpoints(scope: str) -> dict[str, dict[str, Any]]:
     query = (
@@ -470,7 +519,7 @@ def run() -> int:
     run_id = run_record.get("id") if isinstance(run_record, dict) else None
 
     started = time.monotonic()
-    totals = {"players_fetched": 0, "stat_rows_saved": 0, "no_stats": 0, "failed": 0, "roster_players": 0}
+    totals = {"players_fetched": 0, "stat_rows_saved": 0, "zero_rows_filled": 0, "no_stats": 0, "failed": 0, "roster_players": 0}
     try:
         targets = build_player_targets()
         totals["roster_players"] = len(targets)
@@ -500,45 +549,86 @@ def run() -> int:
             old_state = checkpoints.get(player_id, {})
             try:
                 stat_rows = fetch_player_stats(player_id)
-                saved = 0
-                matched_scope_keys: set[str] = set()
                 unmatched_scope_keys: set[str] = set()
+                mapped_by_identity: dict[str, dict[str, Any]] = {}
+                matched_scope_keys: set[str] = set()
                 for stat in stat_rows:
                     unmatched_scope_keys.update(identity_conflict_scope_keys(stat, targets[player_id]))
                     for payload in map_stat_payloads(player_id, stat, targets[player_id]):
-                        tm.rpc("tm_upsert_season_stat", {"p_row": payload})
-                        saved += 1
+                        identity = target_identity_key({
+                            "competition_id": payload["competition_id"],
+                            "season_id": str(season_start_year(payload["season_id"]) or payload["season_id"]),
+                            "club_id": payload["club_id"],
+                            "club_name": payload["club_name"],
+                        })
+                        # The provider normally returns one aggregate per identity.
+                        # Keep the most recent row if an upstream response repeats it.
+                        mapped_by_identity[identity] = payload
                         matched_scope_keys.add(
-                            f"{payload['competition_id']}:{payload['season_id']}"
+                            f"{payload['competition_id']}:{season_start_year(payload['season_id']) or payload['season_id']}"
                         )
+
+                # The stats endpoint is a complete per-player season/competition/
+                # club response. Rostered stints absent from that response mean
+                # zero league appearances; persist those zeros instead of leaving
+                # the player invisible in the season read model.
+                zero_filled_scope_keys: set[str] = set()
+                for target in targets[player_id]:
+                    scope_key = target_scope_key(target)
+                    if scope_key in unmatched_scope_keys:
+                        continue
+                    identity = target_identity_key(target)
+                    if identity not in mapped_by_identity:
+                        mapped_by_identity[identity] = zero_stat_payload(player_id, target)
+                        zero_filled_scope_keys.add(scope_key)
+
+                rows_to_save = list(mapped_by_identity.values())
+                if rows_to_save:
+                    tm.rpc("tm_upsert_season_stats_batch", {"p_rows": rows_to_save})
+                    # The cache refresh is player-scoped and runs after every
+                    # source row is committed; league pages read this indexed table.
+                    tm.rpc("tm_refresh_player_league_season_totals_cache", {"p_tm_id": str(player_id)})
+
                 expected_scope_keys = {
-                    f"{target['competition_id']}:{target['season_id']}"
-                    for target in targets[player_id]
+                    target_scope_key(target) for target in targets[player_id]
                 }
-                # A successful player-stats response is complete for a target
-                # scope even when it contains no row for that club/season.
-                # But an explicit same-namespace ID conflict must stay incomplete.
                 completed_scope_keys = sorted(expected_scope_keys - unmatched_scope_keys)
+                incomplete = bool(unmatched_scope_keys)
+                attempts = int(old_state.get("attempts") or 0) + (1 if incomplete else 0)
+                checkpoint_status = (
+                    "retryable_failed" if incomplete and attempts < MAX_FAILURE_ATTEMPTS
+                    else "failed" if incomplete
+                    else "completed"
+                )
                 now = datetime.now(timezone.utc).isoformat()
                 save_checkpoint(player_id, scope, {
-                    "status": "completed", "coverage_version": 2,
-                    "attempts": int(old_state.get("attempts") or 0),
-                    "stats_rows_seen": len(stat_rows), "stats_rows_saved": saved,
+                    "status": checkpoint_status, "coverage_version": 3,
+                    "attempts": attempts,
+                    "stats_rows_seen": len(stat_rows),
+                    "stats_rows_saved": len(rows_to_save),
+                    "provider_stat_rows_saved": len(mapped_by_identity) - len(zero_filled_scope_keys),
                     "matched_scope_keys": sorted(matched_scope_keys),
+                    "zero_filled_scope_keys": sorted(zero_filled_scope_keys),
                     "completed_scope_keys": completed_scope_keys,
                     "unmatched_scope_keys": sorted(unmatched_scope_keys),
-                    "no_matching_league_rows": len(stat_rows) > 0 and saved == 0,
+                    "no_matching_league_rows": False,
                     "scope_competitions": COMPETITIONS, "scope_seasons": SEASONS,
                     "completed_at": now, "source": "felipeall",
                 })
-                checkpoints[player_id] = {"status": "completed"}
+                checkpoints[player_id] = {
+                    "status": checkpoint_status, "attempts": attempts,
+                    "completed_scope_keys": completed_scope_keys,
+                }
                 totals["players_fetched"] += 1
-                totals["stat_rows_saved"] += saved
-                if not stat_rows or saved == 0:
+                totals["stat_rows_saved"] += len(rows_to_save)
+                totals["zero_rows_filled"] += len(zero_filled_scope_keys)
+                if not stat_rows:
                     totals["no_stats"] += 1
                 if index == 1 or index % 25 == 0:
-                    LOG.info("İlerleme %s/%s oyuncu; bu oyuncudan %s sezon/kulüp istatistik satırı yazıldı.",
-                             index, len(pending), saved)
+                    LOG.info(
+                        "İlerleme %s/%s oyuncu; %s satır yazıldı (%s sıfır satır).",
+                        index, len(pending), len(rows_to_save), len(zero_filled_scope_keys),
+                    )
             except Exception as exc:
                 attempts = int(old_state.get("attempts") or 0) + 1
                 status = "retryable_failed" if attempts < MAX_FAILURE_ATTEMPTS else "failed"
@@ -564,8 +654,8 @@ def run() -> int:
         remaining = len(retryable)
         elapsed = round(time.monotonic() - started, 2)
         LOG.info(
-            "İstatistik aktarım özeti: oyuncu isteği=%s, kaydedilen sezon/kulüp satırı=%s, istatistiği bulunmayan/eşleşmeyen=%s, hatalı=%s, kalan=%s, süre=%ss.",
-            processed, totals["stat_rows_saved"], totals["no_stats"], totals["failed"], remaining, elapsed,
+            "İstatistik aktarım özeti: oyuncu isteği=%s, kaydedilen satır=%s, sıfır satır=%s, boş istatistik yanıtı=%s, hatalı=%s, kalan=%s, süre=%ss.",
+            processed, totals["stat_rows_saved"], totals["zero_rows_filled"], totals["no_stats"], totals["failed"], remaining, elapsed,
         )
         update_run(run_id, {
             "status": "succeeded", "finished_at": datetime.now(timezone.utc).isoformat(),
