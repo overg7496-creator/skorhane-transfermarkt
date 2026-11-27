@@ -3018,7 +3018,8 @@ function tmPlayerRefreshPlan(row, sourceRecords = []) {
     ["stats_payload", ["stats", "data", "items"], "player_stats", true],
     ["transfers_payload", ["transfers", "history", "items", "data"], "player_transfers", true],
     ["market_value_payload", ["marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"], "player_market_values", true],
-    ["injuries_payload", ["injuries", "data", "items"], "player_injuries", true]
+    ["injuries_payload", ["injuries", "data", "items"], "player_injuries", true],
+    ["current_season_payload", ["matches", "matchHistory", "data", "items"], "current_season_matches", true]
   ];
   const syncAt = Date.parse(row && row.last_felipe_synced_at || "");
   const stale = !Number.isFinite(syncAt) || Date.now() - syncAt > 7 * 86400000;
@@ -3059,15 +3060,21 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
       reason: queuePayloadExisting.last_error || "Bu oyuncunun yenilemesi kalıcı hata nedeniyle durduruldu." };
   }
   if (queueStatus === "retry" && Number.isFinite(retryAt) && retryAt > Date.now()) {
-    return { required: true, queued: true, configured: !!token, state: "retry-wait", retryAt: queuePayloadExisting.retry_at };
+    return { required: true, queued: false, configured: !!token, state: "retry-wait", retryAt: queuePayloadExisting.retry_at,
+      reason: queuePayloadExisting.last_error || "Yeniden deneme zamanı bekleniyor." };
   }
   if (queueStatus === "pending-config" && !token && ageMs < 15 * 60000) {
-    return { required: true, queued: true, configured: false, state: "pending-config",
-      reason: "GITHUB_ACTIONS_TOKEN tanımlı değil; eksik oyuncu tek kuyruğa kaydedildi." };
+    return { required: true, queued: false, configured: false, state: "pending-config",
+      reason: "GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı." };
+  }
+  if (queueStatus === "dispatching" && ageMs < 2 * 60000) {
+    return { required: true, queued: false, configured: !!token, state: "dispatching",
+      reason: "GitHub Actions başlatma isteği gönderildi; kabul yanıtı henüz doğrulanmadı." };
   }
   if ((queueStatus === "queued" && ageMs < 15 * 60000) ||
       (queueStatus === "running" && ageMs < 45 * 60000)) {
-    return { required: true, queued: true, configured: !!token, state: "already-queued" };
+    return { required: true, queued: true, configured: !!token,
+      state: queueStatus === "running" ? "running" : "already-queued" };
   }
   if (queueStatus === "dispatch-failed" && ageMs < 2 * 60000) {
     return { required: true, queued: false, configured: !!token, state: "dispatch-failed",
@@ -3076,7 +3083,7 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
 
   const now = new Date().toISOString();
   const queuePayload = {
-    status: token ? "queued" : "pending-config", player_id: String(playerId),
+    status: token ? "dispatching" : "pending-config", player_id: String(playerId),
     requested_at: now, reason: stale ? "stale-player-details" : "missing-player-fields"
   };
   const snapshot = {
@@ -3096,15 +3103,25 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
       // A concurrent profile open may have won the unique-key insert. Re-read
       // the durable lock rather than dispatching duplicate detail jobs.
       const raced = await tmDbRows(env, queueQuery);
-      if (raced.length) return { required: true, queued: true, configured: true, state: "concurrent-queue" };
+      if (raced.length) {
+        const racedStatus = String(raced[0].payload && raced[0].payload.status || "");
+        const accepted = racedStatus === "queued" || racedStatus === "running";
+        return {
+          required: true, queued: accepted, configured: !!token,
+          state: accepted ? "already-queued" : racedStatus === "pending-config" ? "pending-config" : "dispatching",
+          reason: accepted ? "" : racedStatus === "pending-config"
+            ? "GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı."
+            : "Başka bir istek GitHub Actions başlatma işlemini yürütüyor."
+        };
+      }
       throw error;
     }
   }
 
   if (!token) {
     return {
-      required: true, queued: true, configured: false, state: "pending-config",
-      reason: "GITHUB_ACTIONS_TOKEN tanımlı değil; eksik oyuncu tek kuyruğa kaydedildi."
+      required: true, queued: false, configured: false, state: "pending-config",
+      reason: "GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı."
     };
   }
 
@@ -3121,7 +3138,14 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
       body: JSON.stringify({ ref: "main", inputs: { mode: "refresh-player-missing", player_id: String(playerId) } }),
       signal: AbortSignal.timeout(8000)
     });
-    if (!response.ok) throw new Error("GitHub workflow dispatch HTTP " + response.status);
+    if (response.status !== 204) throw new Error("GitHub workflow dispatch HTTP " + response.status);
+    const acceptedAt = new Date().toISOString();
+    if (queueId != null) {
+      await tmDbWrite(env, "tm_source_records?id=eq." + encodeURIComponent(String(queueId)), "PATCH", {
+        payload: { ...queuePayload, status: "queued", dispatch_accepted_at: acceptedAt, dispatch_http_status: 204 },
+        fetched_at: acceptedAt
+      }).catch(() => {});
+    }
     return { required: true, queued: true, configured: true, state: "queued" };
   } catch (error) {
     if (queueId != null) {
@@ -3130,7 +3154,10 @@ async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
         fetched_at: new Date().toISOString()
       }).catch(() => {});
     }
-    return { required: true, queued: false, configured: true, reason: String(error && error.message || error) };
+    return {
+      required: true, queued: false, configured: true, state: "dispatch-failed",
+      reason: String(error && error.message || error)
+    };
   }
 }
 const TSDB = "https://www.thesportsdb.com/api/v1/json/123/";
@@ -4387,10 +4414,14 @@ async function tmPlayer(env, id, executionCtx = null) {
   const refreshPlan = tmPlayerRefreshPlan(row, sourceRecords);
   let refreshState = {
     required: !!refreshPlan.required,
-    queued: !!refreshPlan.required,
+    queued: false,
     configured: !!(env && env.GITHUB_ACTIONS_TOKEN),
-    state: refreshPlan.required ? ((env && env.GITHUB_ACTIONS_TOKEN) ? "queued" : "pending-config") : "current",
-    reason: refreshPlan.required && !(env && env.GITHUB_ACTIONS_TOKEN) ? "GITHUB_ACTIONS_TOKEN tanımlı değil" : ""
+    state: refreshPlan.required ? ((env && env.GITHUB_ACTIONS_TOKEN) ? "dispatching" : "pending-config") : "current",
+    reason: refreshPlan.required
+      ? ((env && env.GITHUB_ACTIONS_TOKEN)
+        ? "GitHub Actions başlatma isteği gönderiliyor; kabul henüz doğrulanmadı."
+        : "GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı.")
+      : ""
   };
   if (refreshPlan.required) {
     const refreshPromise = queueTmPlayerRefresh(env, playerId, row, sourceRecords).catch(error => ({
@@ -8267,7 +8298,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf43:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf44:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear, executionCtx);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
