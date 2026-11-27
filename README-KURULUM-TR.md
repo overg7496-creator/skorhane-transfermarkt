@@ -45,8 +45,10 @@ Cloudflare Worker (skor3)
 4. `database/003_player_profile_bundle.sql` dosyasını çalıştır. Oyuncu profilinin geçmiş verilerini tek sorguda getiren RPC'yi oluşturur.
 5. `database/004_league_sync_dashboard_detail.sql` dosyasını çalıştır. Bu dosya `tm_league_sync_dashboard` görünümünü ayrıntılı veri kapsamı raporuyla yeniler ve sezon bazında `tm_league_sync_dashboard_seasons` görünümünü oluşturur. Yalnızca raporlama görünümleri/fonksiyonu oluşturulur; oyuncu, kadro, transfer, değer veya istatistik kayıtları silinmez.
 6. `database/005_player_profile_fallbacks.sql` dosyasını çalıştır. Bu migration ayrı `tm_injuries` tablosunu oluşturur, eski JSON sakatlık kayıtlarını geri doldurur, oyuncu profil RPC'sine sakatlık satırlarını ekler ve `tm_player_data_diagnostic(text)` tanı fonksiyonunu oluşturur.
-7. Tabloların oluştuğunu doğrula: `tm_players`, `tm_player_season_stats`, `tm_transfers`, `tm_market_values`, `tm_appearances`, `tm_source_records`, `tm_sync_runs`, `tm_team_season_squads`.
-8. İki dashboard görünümünü kontrol et:
+7. `database/006_player_profile_full_history.sql`, `database/007_leaderboard_accuracy_and_profile_read.sql`, `database/008_profile_leaderboard_accuracy_v3.sql` ve `database/009_leaderboard_from_player_season_stats.sql` dosyalarını sırasıyla çalıştır.
+8. `database/010_indexed_league_season_cache.sql` dosyasını çalıştır. Bu yeni migration oyuncu sezon istatistiklerini tek seferde toplu yazan RPC'yi, lig/sezon bazında indeksli hazır okuma tablosunu ve her oyuncunun verisi geldikten sonra yalnızca o oyuncunun cache satırlarını yenileyen RPC'yi oluşturur. Eski v2 senkron checkpoint'leri kullanılmaz; güncel iş akışı 9 lig × 2022–2026 kapsamını v3 ile yeniden tarar.
+9. Tabloların oluştuğunu doğrula: `tm_players`, `tm_player_season_stats`, `tm_transfers`, `tm_market_values`, `tm_appearances`, `tm_source_records`, `tm_sync_runs`, `tm_team_season_squads`, `tm_league_player_season_totals_cache`.
+10. İki dashboard görünümünü kontrol et:
 
 ```sql
 select *
@@ -102,7 +104,7 @@ Diğer lig/kadro aktarım iş akışları otomatik başlamaz. `SkorHane Eksik Li
 
 ## 5. Tek seferlik canlıya alma ve test
 
-1. Supabase SQL Editor'da `database/001_transfermarkt_schema.sql` dosyasının tamamını çalıştır.
+1. Yeni kurulumda `database/001`–`010` migration dosyalarını numara sırasıyla çalıştır. Mevcut projede zaten uygulanmış migration'ları tekrar çalıştırma; bu güncelleme için eksikse özellikle `database/010_indexed_league_season_cache.sql` dosyasını Supabase SQL Editor'da çalıştır.
 2. GitHub Secrets içine `SUPABASE_URL` ve `SUPABASE_SERVICE_ROLE_KEY` ekle.
 3. Cloudflare `skor3` Worker secret'larına `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` ve `GITHUB_ACTIONS_TOKEN` ekle. Fine-grained PAT'yi bu depoyla sınırla.
 4. `SkorHane-Worker.js` dosyasını Worker'a yapıştırıp Deploy et.
@@ -170,6 +172,8 @@ Depo Public olsa bile Supabase service-role anahtarı, GitHub PAT veya başka bi
 | `database/002_team_seasons_and_leaderboards.sql` | Lig/sezon kadroları, takım sezon özetleri, gol ve asist liderleri |
 | `database/003_player_profile_bundle.sql` | Oyuncu profili için birleşik geçmiş veri RPC'si |
 | `database/004_league_sync_dashboard_detail.sql` | Lig ve sezon bazında ayrıntılı veri kapsamı dashboard görünümleri |
+| `database/006_player_profile_full_history.sql` – `009_leaderboard_from_player_season_stats.sql` | Oyuncu geçmişi, güvenilir lig/sezon istatistik eşlemesi ve liderlik görünümleri |
+| `database/010_indexed_league_season_cache.sql` | Toplu sezon-istatistik UPSERT'i ve indeksli lig/sezon okuma cache'i |
 | `SkorHane-Worker.js` | Canlı Cloudflare Worker |
 | `SkorHane-Worker-kodu-kopyalanabilir.txt` | Worker ile birebir kopya |
 | `SkorHane-HTML-kodu-kopyalanabilir.txt` | Oyuncu profil ekranı ve yenileme durumu UI'si |
