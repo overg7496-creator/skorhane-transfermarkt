@@ -141,7 +141,7 @@ jobs:
               'Prefer': 'count=exact',
               'Range': '0-0',
           }
-          ids = list(dict.fromkeys(x for x in re.split(r'[,;\\s]+', os.environ.get('TM_PRESEED_PLAYER_IDS', '').strip()) if x))
+          ids = list(dict.fromkeys(x for x in re.split(r'[,;\s]+', os.environ.get('TM_PRESEED_PLAYER_IDS', '').strip()) if x))
           if not ids or len(ids) > 20 or any(not x.isdigit() for x in ids):
               raise SystemExit('TM_PRESEED_PLAYER_IDS boş, geçersiz veya 20 ID sınırını aşıyor.')
 
