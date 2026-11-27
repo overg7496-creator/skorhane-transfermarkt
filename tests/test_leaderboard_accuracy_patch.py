@@ -51,6 +51,7 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn("assistLeadersAvailable", self.worker)
         self.assertIn("const old = unique.get(playerId)", self.worker)
         self.assertIn('"pf48:"', self.worker)
+        self.assertIn('tm-league-data:v2:', self.worker)
 
     def test_worker_profile_refresh_warning_respects_normalized_rows(self):
         self.assertIn("normalizedCoverage && normalizedCoverage[recordType]", self.worker)
