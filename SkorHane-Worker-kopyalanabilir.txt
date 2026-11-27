@@ -8711,7 +8711,7 @@ export default {
       } else if (p === "/tm-league-data") {
         const code = q.get("code") || "", year = Number(q.get("season")) || seasonStartYear();
         if (!/^[a-z0-9._-]+$/i.test(code) || !Number.isInteger(year) || year < 1900 || year > seasonStartYear() + 1) return json({ error: "Geçersiz Transfermarkt ligi veya sezon" }, 400);
-        res = await cached("tm-league-data:v1:" + code + ":" + year, async () => ({
+        res = await cached("tm-league-data:v2:" + code + ":" + year, async () => ({
           body: await tmLeagueData(env, code, year), ttl: 180
         }));
       } else if (p === "/tm-team-data") {
