@@ -54,7 +54,7 @@ class PlayerProfileFallbackTests(unittest.TestCase):
     def test_preseed_is_full_felipe_refresh_not_missing_only(self):
         marker = "def sync_preseed_players("
         start = self.sync.index(marker)
-        end = self.sync.index("\\ndef ", start + len(marker))
+        end = self.sync.index("\ndef ", start + len(marker))
         body = self.sync[start:end]
         self.assertIn("sync_felipeall(only_player=player_id, missing_only=False)", body)
         self.assertNotIn("missing_only=True", body)
