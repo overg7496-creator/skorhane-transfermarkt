@@ -1427,40 +1427,69 @@ def sync_felipeall(
     return successful
 
 def patch_dcaribou_rate_limit() -> None:
-    """Patch dcaribou's shared crawler factory after install: concurrency 1 + jitter hook.
+    """Patch dcaribou's crawler factory with a strict, low request rate.
 
-    The public scraper creates all ParselCrawler instances via tfmkt.common.create_crawler.
-    We patch only that local installed copy for this one-off seed job using Crawlee's
-    documented ConcurrencySettings API, with a hard cap of one task and 18/minute.
+    Current transfermarkt-scraper builds crawlers through
+    crawler_class(**crawler_options), not ParselCrawler() directly. Support
+    both factory shapes so upstream refactors fail closed only when neither
+    known construction point exists.
     """
     import tfmkt.common as common  # type: ignore
     path = Path(common.__file__)
     source = path.read_text(encoding="utf-8")
-    if "_skorhane_polite_delay" in source:
+    if "_skorhane_rate_limit" in source:
         return
+
     missing_imports = []
-    if not re.search(r"(?m)^import asyncio(?:\s|$)", source):
+    if not re.search(r"(?m)^import asyncio(?:\\s|$)", source):
         missing_imports.append("import asyncio")
-    if not re.search(r"(?m)^import random(?:\s|$)", source):
+    if not re.search(r"(?m)^import random(?:\\s|$)", source):
         missing_imports.append("import random")
-    if "ConcurrencySettings" not in source:
+    if not re.search(r"(?m)^from crawlee import .*\\bConcurrencySettings\\b", source):
         missing_imports.append("from crawlee import ConcurrencySettings")
     if missing_imports:
-        future = re.search(r"(?m)^from __future__ import [^\n]+\n", source)
+        future = re.search(r"(?m)^from __future__ import [^\\n]+\\n", source)
         at = future.end() if future else 0
-        source = source[:at] + "\n".join(missing_imports) + "\n" + source[at:]
-    pattern = r"(?m)^(\s*)crawler\s*=\s*ParselCrawler\(\s*\)\s*$"
-    replacement = (
-        r"\1crawler = ParselCrawler(concurrency_settings=ConcurrencySettings(min_concurrency=1, max_concurrency=1, desired_concurrency=1, max_tasks_per_minute=18))\n"
-        r"\1@crawler.pre_navigation_hook\n"
-        r"\1async def _skorhane_polite_delay(context):\n"
-        r"\1    await asyncio.sleep(random.uniform(1.5, 3.5))\n"
-    )
-    patched, count = re.subn(pattern, replacement, source, count=1)
+        source = source[:at] + "\\n".join(missing_imports) + "\\n" + source[at:]
+
+    settings = "ConcurrencySettings(min_concurrency=1, max_concurrency=1, desired_concurrency=1, max_tasks_per_minute=18)"
+    patterns = [
+        (
+            r"(?m)^(\\s*)crawler\\s*=\\s*crawler_class\\(\\s*\\*\\*\\s*crawler_options\\s*\\)\\s*$",
+            (
+                r"\\1crawler_options['concurrency_settings'] = " + settings + r"\\n"
+                r"\\1crawler = crawler_class(**crawler_options)  # _skorhane_rate_limit\\n"
+                r"\\1@crawler.pre_navigation_hook\\n"
+                r"\\1async def _skorhane_polite_delay(context):\\n"
+                r"\\1    await asyncio.sleep(random.uniform(1.5, 3.5))\\n"
+            ),
+        ),
+        (
+            r"(?m)^(\\s*)crawler\\s*=\\s*ParselCrawler\\(\\s*\\)\\s*$",
+            (
+                r"\\1crawler = ParselCrawler(concurrency_settings=" + settings + r")  # _skorhane_rate_limit\\n"
+                r"\\1@crawler.pre_navigation_hook\\n"
+                r"\\1async def _skorhane_polite_delay(context):\\n"
+                r"\\1    await asyncio.sleep(random.uniform(1.5, 3.5))\\n"
+            ),
+        ),
+    ]
+    patched = source
+    count = 0
+    for pattern, patch_text in patterns:
+        patched, count = re.subn(pattern, patch_text, source, count=1)
+        if count == 1:
+            break
     if count != 1:
-        raise RuntimeError("dcaribou create_crawler() güvenli hız sınırı yaması uygulanamadı; tarama başlatılmadı.")
+        raise RuntimeError(
+            "dcaribou create_crawler() güvenli hız sınırı yaması uygulanamadı; "
+            "hiçbir tarama başlatılmadı. Scraper factory yapısı kontrol edilmeli."
+        )
+
     path.write_text(patched, encoding="utf-8")
-    LOG.info("dcaribou crawler güvenli ayarlandı: concurrency=1, max 18 istek/dk, jitter 1.5–3.5 sn")
+    LOG.info(
+        "dcaribou crawler güvenli ayarlandı: concurrency=1, max 18 istek/dk, jitter 1.5–3.5 sn"
+    )
 
 
 def run_dcaribou_crawler(name: str, parents: list[dict[str, Any]] | None = None,
