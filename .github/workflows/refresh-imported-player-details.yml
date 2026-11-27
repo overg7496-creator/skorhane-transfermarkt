@@ -48,10 +48,6 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    env:
-      TM_DETAIL_SQUAD_SEEN_AFTER: ${{ github.event.inputs.seen_after }}
-      TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ github.event.inputs.seen_before }}
-      TM_DETAIL_PRESEED_ALL_HISTORY: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -110,6 +106,8 @@ jobs:
           TM_MAX_MATCH_PAGES: "5"
           HTTP_MAX_RETRIES: "4"
           HTTP_TIMEOUT_SECONDS: "45"
+          TM_DETAIL_SQUAD_SEEN_AFTER: ${{ github.event.inputs.seen_after }}
+          TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ github.event.inputs.seen_before }}
         run: |
           echo "Yeni kadro oyuncuları zaman aralığı: $TM_DETAIL_SQUAD_SEEN_AFTER - $TM_DETAIL_SQUAD_SEEN_BEFORE"
           python sync/sync_transfermarkt.py refresh-imported-details
