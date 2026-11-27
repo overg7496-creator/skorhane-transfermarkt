@@ -342,6 +342,7 @@ class SyncHelperTests(unittest.TestCase):
             "transfers_payload": {"transfers": []},
             "market_value_payload": {"marketValueHistory": []},
             "injuries_payload": {"injuries": []},
+            "absences_payload": {"absences": []},
             "current_season_payload": {"matches": []},
         }
         now = datetime.now(timezone.utc).isoformat()
