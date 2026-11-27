@@ -845,3 +845,26 @@ class HistoryFallbackTests(unittest.TestCase):
         self.assertIn("Stop local Felipe API", workflow)
 
 
+
+
+    def test_dcaribou_parser_accepts_single_competition_object(self):
+        row = {
+            "id": "TR1",
+            "name": "Süper Lig",
+            "competition_type": "first_tier",
+            "country_name": "Türkiye",
+        }
+        decoded = sync.decode_dcaribou_records(__import__("json").dumps(row))
+        self.assertEqual(decoded, [row])
+
+    def test_history_checkpoints_are_paginated_past_ten_thousand_limit(self):
+        from unittest.mock import patch
+
+        first_page = [{"record_key": f"player_season_appearances:2022:{i}"} for i in range(1000)]
+        second_page = [{"record_key": "player_season_appearances:2023:1001"}]
+        with patch.object(sync, "db_get", side_effect=[first_page, second_page]) as get:
+            rows = sync.load_felipe_history_checkpoints()
+        self.assertEqual(len(rows), 1001)
+        self.assertIn("player_season_appearances:2023:1001", rows)
+        self.assertIn("offset=0", get.call_args_list[0].args[0])
+        self.assertIn("offset=1000", get.call_args_list[1].args[0])
