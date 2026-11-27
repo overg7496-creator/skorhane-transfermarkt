@@ -50,7 +50,8 @@ class PlayerProfileFallbackTests(unittest.TestCase):
     def test_worker_falls_back_to_current_season_matches(self):
         self.assertIn("rawCurrentMatches", self.worker)
         self.assertIn('listPayload(currentSeason, ["matches", "matchHistory", "data", "items"])', self.worker)
-        self.assertIn('recentAppearanceRows.length ? recentAppearanceRows : rawCurrentMatches', self.worker)
+        self.assertIn('appearanceRows.length ? appearanceRows : rawCurrentMatches', self.worker)
+        self.assertIn('bundle && bundle.appearances', self.worker)
         self.assertIn('"current_season_matches", true', self.worker)
 
     def test_worker_uses_normalized_injuries_then_raw_snapshot(self):
@@ -107,6 +108,18 @@ class PlayerProfileFallbackTests(unittest.TestCase):
             'python sync/sync_transfermarkt.py seed-player-matches --player-ids "$TM_PRESEED_PLAYER_IDS" --seasons "$TM_PRESEED_SEASONS"',
             self.workflow,
         )
+
+
+    def test_full_match_archive_rpc_migration_and_worker_read_mapping(self):
+        migration = (ROOT / "database" / "006_player_profile_full_history.sql").read_text(encoding="utf-8").lower()
+        self.assertIn("'appearances', coalesce((", migration)
+        self.assertIn("'recent_appearances', coalesce((", migration)
+        self.assertIn("limit 13", migration)
+        self.assertIn("'absences', coalesce((", migration)
+        self.assertIn("bundleappearancerows", self.worker.lower())
+        self.assertIn("appearanceRows.length ? appearanceRows", self.worker)
+        match_reader = self.worker.split("out.recentMatches =", 1)[1].split("out.photo =", 1)[0]
+        self.assertNotIn(".slice(0, 13)", match_reader)
 
     def test_player_data_response_does_not_fetch_supplemental_career_logos(self):
         profile = self.worker.split("async function playerFull(", 1)[1].split("// ---------- PitchAPI:", 1)[0]
