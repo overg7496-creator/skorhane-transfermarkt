@@ -1,6 +1,8 @@
 name: SkorHane Oyuncu Maç Geçmişi Ön-Doldurma
 
 on:
+  schedule:
+    - cron: "0 10 * * 0"
   workflow_dispatch:
     inputs:
       competitions:
@@ -38,8 +40,8 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       GITHUB_REF_NAME: ${{ github.ref_name }}
-      DCARIBOU_COMPETITIONS: ${{ inputs.competitions || 'TR1,GB1,ES1,L1,IT1,FR1' }}
-      DCARIBOU_SEASONS: ${{ inputs.seasons || '2022,2023,2024,2025,2026' }}
+      DCARIBOU_COMPETITIONS: ${{ github.event.inputs.competitions || 'TR1,GB1,ES1,L1,IT1,FR1' }}
+      DCARIBOU_SEASONS: ${{ github.event.inputs.seasons || '2022,2023,2024,2025,2026' }}
       DCARIBOU_APPEARANCE_BATCH_SIZE: "25"
       HTTP_TIMEOUT_SECONDS: "45"
     steps:

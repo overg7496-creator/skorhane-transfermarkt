@@ -1970,6 +1970,11 @@ def load_felipe_history_checkpoints() -> set[str]:
     return completed
 
 
+def history_appearance_needs_refresh(season_id: str, tm_id: str, completed: set[str]) -> bool:
+    """Keep completed old seasons; refresh the active season on each scheduled run."""
+    return str(season_id) == str(TM_SEASON) or history_checkpoint_key(season_id, tm_id) not in completed
+
+
 def mark_felipe_history_checkpoint(
     season_id: str, tm_id: str, *, appearance_rows: int, source_name: str
 ) -> None:
@@ -2240,9 +2245,9 @@ def seed_felipe_history_fallback() -> int:
         return 0
 
     wanted = list(dict.fromkeys(DCARIBOU_COMPETITIONS))
-    seasons = list(dict.fromkeys(
-        str(value) for value in (DCARIBOU_SEASONS or [TM_SEASON - 1])
-    ))
+    seasons = list(dict.fromkeys(str(value) for value in (DCARIBOU_SEASONS or [])))
+    if str(TM_SEASON) not in seasons:
+        seasons.append(str(TM_SEASON))
     players_by_season: dict[tuple[str, str], dict[str, Any]] = {}
     supabase_roster_rows = 0
     api_roster_rows = 0
@@ -2311,7 +2316,7 @@ def seed_felipe_history_fallback() -> int:
         for (tm_id, season_id), player in sorted(
             players_by_season.items(), key=lambda item: (item[0][1], item[0][0])
         )
-        if history_checkpoint_key(season_id, tm_id) not in completed
+        if history_appearance_needs_refresh(season_id, tm_id, completed)
     ]
     max_pairs = max(1, int(os.getenv("FELIPE_HISTORY_MAX_PLAYER_SEASONS_PER_RUN", "1200")))
     max_runtime = max(60, int(os.getenv("FELIPE_HISTORY_MAX_RUNTIME_SECONDS", "19800")))

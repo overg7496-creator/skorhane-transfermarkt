@@ -3924,8 +3924,8 @@ async function loadPitchPlayerCareer(my){
     : 'Transfermarkt sezon kaydı bulunamadı';
   renderPlayer();
 }
-const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v10.'+pitchClientTeamKey(name||'');
-const playerInfoCacheKey=name=>'skorhane.playerinfo.v4.'+pitchClientTeamKey(name||'');
+const playerStatsCacheKey=name=>'skorhane.playerstats.legacy.v11.'+pitchClientTeamKey(name||'');
+const playerInfoCacheKey=name=>'skorhane.playerinfo.v5.'+pitchClientTeamKey(name||'');
 function readPlayerInfoCache(name){try{const raw=localStorage.getItem(playerInfoCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<30*86400e3&&x.data&&typeof x.data==='object'&&x.data.bio&&typeof x.data.bio==='object'?x.data:null}catch(_){return null}}
 function savePlayerInfoCache(name,data){try{if(data&&typeof data==='object'&&data.bio&&typeof data.bio==='object')localStorage.setItem(playerInfoCacheKey(name),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
 function readPlayerStatsCache(name){try{const raw=localStorage.getItem(playerStatsCacheKey(name));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<7*86400e3&&x.data&&Array.isArray(x.data.seasons)?x.data:null}catch(_){return null}}
@@ -4070,6 +4070,7 @@ const sumRows=rows=>{const sum=k=>{const vals=rows.map(r=>statNum(r[k])).filter(
 function playerNoDataMessage(j,fallback){
   const state=String(j&&j.tmRefreshState||'').toLowerCase();
   const reason=String(j&&j.tmRefreshReason||'').trim();
+  if(state==='preload-required')return 'Bu bölümün kaydı henüz Supabase’e önceden aktarılmamış. Sekme yalnızca hazır Supabase kayıtlarını okur; planlı ön-doldurma tamamlandığında görünür.';
   if(state==='pending-config')return 'Bu bölümde kayıt henüz yok. GITHUB_ACTIONS_TOKEN tanımlı olmadığı için GitHub Actions başlatılmadı.';
   if(state==='dispatch-failed')return 'Bu bölümde kayıt henüz yok. GitHub Actions başlatılamadı: '+(reason||'dispatch hatası')+'.';
   if(state==='dispatching')return 'Bu bölümde kayıt henüz yok. GitHub Actions başlatma isteği gönderildi; kuyruğa kabul edildiği henüz doğrulanmadı.';

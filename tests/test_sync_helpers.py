@@ -55,13 +55,14 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', worker)
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
-        self.assertIn('"pf45:"', worker)
+        self.assertIn('"pf46:"', worker)
         self.assertIn("function tmSupabaseBase(env)", worker)
         self.assertIn("SUPABASE_URL Project URL olmalı", worker)
         self.assertIn("function tmPlayerRefreshPlan(row, sourceRecords = [])", worker)
-        self.assertIn("const refreshPromise = queueTmPlayerRefresh", worker)
-        self.assertIn("executionCtx.waitUntil(refreshPromise)", worker)
-        self.assertNotIn("const refreshState = await refreshPromise", worker)
+        self.assertNotIn("queueTmPlayerRefresh(", worker)
+        self.assertNotIn("executionCtx.waitUntil(refreshPromise)", worker)
+        self.assertIn('state: refreshPlan.required ? "preload-required" : "current"', worker)
+        self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', worker)
         self.assertIn('refreshRetryAt = refreshState.retryAt', worker)
         self.assertIn('tmRefreshState:', worker)
 
@@ -621,7 +622,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertNotIn("api('/player?part=stats'+qs)", html)
         self.assertNotIn("api('/pitch-player-recent?", html)
         self.assertNotIn("attempt===0?6000:12000", html)
-        self.assertIn("skorhane.playerstats.legacy.v10.", html)
+        self.assertIn("skorhane.playerstats.legacy.v11.", html)
         self.assertNotIn("Eksik Transfermarkt kayıtları yenileme kuyruğuna alındı", html)
         self.assertNotIn("profili kısa süre sonra yeniden aç", html)
 
@@ -634,7 +635,7 @@ class SyncHelperTests(unittest.TestCase):
         requested_html = (ROOT / "SkorHane-HTML-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, requested_copy)
         self.assertEqual(html, requested_html)
-        self.assertIn('"pf45:"', worker)
+        self.assertIn('"pf46:"', worker)
 
     def test_database_saves_goalkeeper_season_fields(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
@@ -720,8 +721,10 @@ if __name__ == "__main__":
         worker_copy = (ROOT / "SkorHane-Worker-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, worker_copy)
-        self.assertIn("executionCtx.waitUntil(refreshPromise)", worker)
-        self.assertIn('"pf45:"', worker)
+        self.assertNotIn("executionCtx.waitUntil(refreshPromise)", worker)
+        self.assertNotIn("queueTmPlayerRefresh(", worker)
+        self.assertIn('"preload-required"', worker)
+        self.assertIn('"pf46:"', worker)
         self.assertIn("const loading=false", html)
         self.assertIn("const freshStats=await api('/player?part=stats'+qs)", html)
         self.assertNotIn("const freshInfo=await api('/player?part=info'+qs)", html)
@@ -881,6 +884,47 @@ class HistoryFallbackTests(unittest.TestCase):
             "2022", "123", appearance_rows=1, source_name="felipeall_api"
         )
         dispatch.assert_not_called()
+
+    def test_player_tab_clicks_only_switch_preloaded_supabase_data(self):
+        html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
+        click_block = html.split("const pt=e.target.closest('[data-pt]');", 1)[1].split("const pf=e.target.closest('[data-pf]');", 1)[0]
+        self.assertIn("renderPlayer()", click_block)
+        self.assertIn("loadPitchPlayerRecent(cur)", click_block)
+        self.assertNotIn("api(", click_block)
+        self.assertIn("my.stats.recentMatches", html)
+        self.assertIn("playerstats.legacy.v11.", html)
+        self.assertIn("playerinfo.v5.", html)
+
+    def test_player_worker_history_tabs_are_supabase_only(self):
+        worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
+        profile = worker.split("async function playerFull(", 1)[1].split("// ---------- PitchAPI:", 1)[0]
+        self.assertIn("tmPlayer(env, id)", profile)
+        self.assertNotIn("attachCareerTeamLogos(env", profile)
+        tm_player = worker.split("async function tmPlayer(env, id)", 1)[1].split("async function tsdbPlayer", 1)[0]
+        self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', tm_player)
+        self.assertNotIn("queueTmPlayerRefresh(", tm_player)
+
+    def test_history_checkpoint_refreshes_current_season_but_keeps_old_seasons(self):
+        from unittest.mock import patch
+        with patch.object(sync, "TM_SEASON", 2026):
+            completed = {
+                sync.history_checkpoint_key("2025", "123"),
+                sync.history_checkpoint_key("2026", "123"),
+            }
+            self.assertFalse(sync.history_appearance_needs_refresh("2025", "123", completed))
+            self.assertTrue(sync.history_appearance_needs_refresh("2026", "123", completed))
+            self.assertTrue(sync.history_appearance_needs_refresh("2026", "999", completed))
+
+    def test_player_data_preseed_workflows_are_scheduled(self):
+        rotation = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
+        details = (ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml").read_text(encoding="utf-8")
+        matches = (ROOT / ".github" / "workflows" / "seed-player-appearances.yml").read_text(encoding="utf-8")
+        self.assertIn('cron: "0 20 * * *"', rotation)
+        self.assertIn("refresh-rotation", rotation)
+        self.assertIn('cron: "0 2 * * 0"', details)
+        self.assertIn("TM_DETAIL_PRESEED_ALL_HISTORY: \"true\"", details)
+        self.assertIn('cron: "0 10 * * 0"', matches)
+        self.assertIn("python sync/sync_transfermarkt.py seed-history", matches)
 
     def test_history_workflow_starts_felipe_api_and_allows_auto_continuation(self):
         workflow = (

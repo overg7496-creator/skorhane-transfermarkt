@@ -1,6 +1,8 @@
 name: SkorHane Transfermarkt Tek Oyuncu Yenileme
 
 on:
+  schedule:
+    - cron: "0 20 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -44,6 +46,7 @@ jobs:
       TM_PRESEED_PLAYER_IDS: ${{ github.event.inputs.player_ids || github.event.inputs.player_id }}
       TM_PRESEED_SEASONS: ${{ github.event.inputs.seasons }}
       TM_PRESEED_MAX_PLAYERS: "20"
+      TM_MAX_PLAYERS_PER_RUN: "80"
       FELIPE_API_BASE: http://127.0.0.1:8000
       HTTP_MAX_RETRIES: "4"
       HTTP_TIMEOUT_SECONDS: "45"
@@ -102,6 +105,13 @@ jobs:
             exit 1
           fi
           echo "Yerel Felipe API hazır; upstream eşzamanlılığı 1."
+
+      - name: Scheduled refresh of rotating active-player details
+        if: github.event_name == 'schedule'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python sync/sync_transfermarkt.py refresh-rotation
 
       - name: Refresh only missing or stale fields for this player
         if: github.event.inputs.mode == 'refresh-player-missing'

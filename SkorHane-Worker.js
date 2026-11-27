@@ -2948,25 +2948,6 @@ async function tmDbRpc(env, functionName, payload) {
   return await response.json();
 }
 
-async function tmDbWrite(env, path, method, payload) {
-  const base = tmSupabaseBase(env);
-  const key = String(env && env.SUPABASE_SERVICE_ROLE_KEY || "");
-  if (!base || !key) throw new Error("Supabase bağlantısı yapılandırılmadı");
-  const response = await fetch(base + "/rest/v1/" + path, {
-    method,
-    headers: {
-      apikey: key, Authorization: "Bearer " + key,
-      Accept: "application/json", "Content-Type": "application/json",
-      Prefer: "return=representation"
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(8000)
-  });
-  if (!response.ok) throw new Error("Supabase yazma HTTP " + response.status);
-  const raw = await response.text();
-  return raw ? JSON.parse(raw) : [];
-}
-
 function tmSeasonLabel(value) {
   if (value == null) return "";
   const raw = String(value).trim().replace(/[–-]/g, "/");
@@ -3039,127 +3020,6 @@ function tmPlayerRefreshPlan(row, sourceRecords = []) {
   return { required: stale || missing, stale, missing };
 }
 
-async function queueTmPlayerRefresh(env, playerId, row, sourceRecords = []) {
-  const token = String(env && env.GITHUB_ACTIONS_TOKEN || "").trim();
-  const plan = tmPlayerRefreshPlan(row, sourceRecords);
-  const stale = plan.stale;
-  const required = plan.required;
-  if (!required) return { required: false, queued: false, configured: !!token };
-
-  const queueQuery = "tm_source_records?select=id,payload,fetched_at&source=eq.skorhane_worker&record_type=eq.player_detail_refresh&external_id=eq." +
-    encodeURIComponent(playerId) + "&record_key=eq.details&limit=1";
-  const queueRows = await tmDbRows(env, queueQuery);
-  const existing = queueRows[0] || null;
-  const fetchedAt = existing && Date.parse(existing.fetched_at || "");
-  const queueStatus = String(existing && existing.payload && existing.payload.status || "");
-  const queuePayloadExisting = existing && existing.payload && typeof existing.payload === "object" ? existing.payload : {};
-  const ageMs = Number.isFinite(fetchedAt) ? Date.now() - fetchedAt : Number.POSITIVE_INFINITY;
-  const retryAt = Date.parse(queuePayloadExisting.retry_at || "");
-  if (queueStatus === "blocked") {
-    return { required: true, queued: false, configured: !!token, state: "blocked",
-      reason: queuePayloadExisting.last_error || "Bu oyuncunun yenilemesi kalıcı hata nedeniyle durduruldu." };
-  }
-  if (queueStatus === "retry" && Number.isFinite(retryAt) && retryAt > Date.now()) {
-    return { required: true, queued: false, configured: !!token, state: "retry-wait", retryAt: queuePayloadExisting.retry_at,
-      reason: queuePayloadExisting.last_error || "Yeniden deneme zamanı bekleniyor." };
-  }
-  if (queueStatus === "pending-config" && !token && ageMs < 15 * 60000) {
-    return { required: true, queued: false, configured: false, state: "pending-config",
-      reason: "GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı." };
-  }
-  if (queueStatus === "dispatching" && ageMs < 2 * 60000) {
-    return { required: true, queued: false, configured: !!token, state: "dispatching",
-      reason: "GitHub Actions başlatma isteği gönderildi; kabul yanıtı henüz doğrulanmadı." };
-  }
-  if ((queueStatus === "queued" && ageMs < 15 * 60000) ||
-      (queueStatus === "running" && ageMs < 45 * 60000)) {
-    return { required: true, queued: true, configured: !!token,
-      state: queueStatus === "running" ? "running" : "already-queued" };
-  }
-  if (queueStatus === "dispatch-failed" && ageMs < 2 * 60000) {
-    return { required: true, queued: false, configured: !!token, state: "dispatch-failed",
-      reason: queuePayloadExisting.error || "GitHub Actions çalışması başlatılamadı." };
-  }
-
-  const now = new Date().toISOString();
-  const queuePayload = {
-    status: token ? "dispatching" : "pending-config", player_id: String(playerId),
-    requested_at: now, reason: stale ? "stale-player-details" : "missing-player-fields"
-  };
-  const snapshot = {
-    source: "skorhane_worker", record_type: "player_detail_refresh",
-    external_id: String(playerId), record_key: "details",
-    payload: queuePayload, fetched_at: now
-  };
-  let queueId = existing && existing.id;
-  if (queueId != null) {
-    await tmDbWrite(env, "tm_source_records?id=eq." + encodeURIComponent(String(queueId)), "PATCH",
-      { payload: queuePayload, fetched_at: now });
-  } else {
-    try {
-      const inserted = await tmDbWrite(env, "tm_source_records", "POST", snapshot);
-      queueId = inserted && inserted[0] && inserted[0].id;
-    } catch (error) {
-      // A concurrent profile open may have won the unique-key insert. Re-read
-      // the durable lock rather than dispatching duplicate detail jobs.
-      const raced = await tmDbRows(env, queueQuery);
-      if (raced.length) {
-        const racedStatus = String(raced[0].payload && raced[0].payload.status || "");
-        const accepted = racedStatus === "queued" || racedStatus === "running";
-        return {
-          required: true, queued: accepted, configured: !!token,
-          state: accepted ? "already-queued" : racedStatus === "pending-config" ? "pending-config" : "dispatching",
-          reason: accepted ? "" : racedStatus === "pending-config"
-            ? "GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı."
-            : "Başka bir istek GitHub Actions başlatma işlemini yürütüyor."
-        };
-      }
-      throw error;
-    }
-  }
-
-  if (!token) {
-    return {
-      required: true, queued: false, configured: false, state: "pending-config",
-      reason: "GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı."
-    };
-  }
-
-  try {
-    const response = await fetch("https://api.github.com/repos/overg7496-creator/skorhane-transfermarkt/actions/workflows/transfermarkt-sync.yml/dispatches", {
-      method: "POST",
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: "Bearer " + token,
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "SkorHane-Player-Refresh",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ ref: "main", inputs: { mode: "refresh-player-missing", player_id: String(playerId) } }),
-      signal: AbortSignal.timeout(8000)
-    });
-    if (response.status !== 204) throw new Error("GitHub workflow dispatch HTTP " + response.status);
-    const acceptedAt = new Date().toISOString();
-    if (queueId != null) {
-      await tmDbWrite(env, "tm_source_records?id=eq." + encodeURIComponent(String(queueId)), "PATCH", {
-        payload: { ...queuePayload, status: "queued", dispatch_accepted_at: acceptedAt, dispatch_http_status: 204 },
-        fetched_at: acceptedAt
-      }).catch(() => {});
-    }
-    return { required: true, queued: true, configured: true, state: "queued" };
-  } catch (error) {
-    if (queueId != null) {
-      await tmDbWrite(env, "tm_source_records?id=eq." + encodeURIComponent(String(queueId)), "PATCH", {
-        payload: { ...queuePayload, status: "dispatch-failed", error: String(error && error.message || error).slice(0, 300) },
-        fetched_at: new Date().toISOString()
-      }).catch(() => {});
-    }
-    return {
-      required: true, queued: false, configured: true, state: "dispatch-failed",
-      reason: String(error && error.message || error)
-    };
-  }
-}
 const TSDB = "https://www.thesportsdb.com/api/v1/json/123/";
 const pick = (o, ...ks) => { for (const k of ks) if (o && o[k] != null && o[k] !== "") return o[k]; return ""; };
 const nkp = (n) => String(n || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -4377,7 +4237,7 @@ async function tmPlayerSummary(env, id, fallback = {}) {
   return { photo: row.photo_url || b.imageUrl || b.image_url || b.image || b.photo || "", bio, name: row.name || b.name || fallback.name || "", tmId: playerId };
 }
 
-async function tmPlayer(env, id, executionCtx = null) {
+async function tmPlayer(env, id) {
   const out = { photo: "", bio: {}, seasons: [], transfers: [], marketValueHistory: [], injuries: [], absences: [], recentMatches: [] };
   const playerId = String(id || "").replace(/\D/g, "");
   if (!playerId) return { ...out, err: "geçersiz Transfermarkt oyuncu kimliği" };
@@ -4410,30 +4270,18 @@ async function tmPlayer(env, id, executionCtx = null) {
     market_value_payload: chooseSnapshot("market_value_payload", "player_market_values", ["marketValueHistory", "market_value_history", "history", "marketValues", "valuations", "items", "data"]),
     injuries_payload: chooseSnapshot("injuries_payload", "player_injuries", ["injuries", "data", "items"])
   };
-  // Respond with the current Supabase snapshot first; dispatch missing details under waitUntil.
+  // Player profiles are read-only: missing snapshots are prepared by scheduled sync workflows.
+  // Opening a profile never dispatches a scraper or waits for an external provider.
   const refreshPlan = tmPlayerRefreshPlan(row, sourceRecords);
-  let refreshState = {
+  const refreshState = {
     required: !!refreshPlan.required,
     queued: false,
-    configured: !!(env && env.GITHUB_ACTIONS_TOKEN),
-    state: refreshPlan.required ? ((env && env.GITHUB_ACTIONS_TOKEN) ? "dispatching" : "pending-config") : "current",
+    configured: false,
+    state: refreshPlan.required ? "preload-required" : "current",
     reason: refreshPlan.required
-      ? ((env && env.GITHUB_ACTIONS_TOKEN)
-        ? "GitHub Actions başlatma isteği gönderiliyor; kabul henüz doğrulanmadı."
-        : "GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı.")
+      ? "Eksik kayıtlar yalnızca zamanlanmış ön-doldurma göreviyle hazırlanır; profil isteği Supabase kayıtlarını okur."
       : ""
   };
-  if (refreshPlan.required) {
-    const refreshPromise = queueTmPlayerRefresh(env, playerId, row, sourceRecords).catch(error => ({
-      required: true, queued: false, configured: !!(env && env.GITHUB_ACTIONS_TOKEN),
-      state: "dispatch-failed", reason: String(error && error.message || error)
-    }));
-    if (executionCtx && typeof executionCtx.waitUntil === "function") {
-      executionCtx.waitUntil(refreshPromise);
-    } else {
-      refreshState = await refreshPromise;
-    }
-  }
   const profileRaw = row.profile_payload || {};
   const b = profileRaw.player || profileRaw.data || profileRaw.profile || profileRaw;
   const statsRaw = row.stats_payload || {};
@@ -4869,24 +4717,12 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
           st.transfermarkt = "Transfermarkt oyuncusu bulunamadı";
           return;
         }
-        const result = await tmPlayer(env, id, executionCtx);
+        const result = await tmPlayer(env, id);
         out.tm = result;
         out.tmId = id;
-        const refreshStatus = result.refreshState === "pending-config"
-          ? "uyarı: GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı"
-          : result.refreshState === "dispatching"
-            ? "başlatma isteği gönderildi; kabul henüz doğrulanmadı"
-            : result.refreshState === "dispatch-failed"
-              ? "hata: GitHub Actions başlatılamadı - " + (result.refreshReason || "dispatch hatası")
-              : result.refreshState === "queued" || result.refreshState === "already-queued"
-                ? "GitHub Actions kuyruğuna kabul edildi"
-                : result.refreshState === "running"
-                  ? "GitHub Actions çalışıyor"
-                  : result.refreshState === "retry-wait"
-                    ? "yeniden deneme zamanı bekleniyor"
-                    : result.refreshState === "blocked"
-                      ? "yenileme kalıcı hata nedeniyle engellendi"
-                      : "ok";
+        const refreshStatus = result.refreshState === "preload-required"
+          ? "eksik alanlar planlı Supabase ön-doldurmasını bekliyor"
+          : "ok";
         st.transfermarkt = result.err ? "hata: " + result.err : refreshStatus;
       } catch (error) {
         st.transfermarkt = "hata: " + (error && error.message || error);
@@ -4952,10 +4788,7 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     if (marked.length > 1) for (const row of seasonRows) row.seasonLastTeam = false;
   }
   const sp = splitSeasons(rows);
-  // Career rows come from Supabase and are returned immediately. Team-logo lookups
-  // are presentation-only network work, so they must not delay the player data response.
-  const careerLogoTask = attachCareerTeamLogos(env, [...sp.seasons, ...(out.national || [])]).catch(() => {});
-  if (executionCtx && typeof executionCtx.waitUntil === "function") executionCtx.waitUntil(careerLogoTask);
+  // Career and player-history sections are returned from the Supabase bundle only.
   if (coach && out.afCoach && out.afCoach.career.length) {
     const apiRows = out.afCoach.career;
     const wikiRows = out.coachRows || [];
@@ -8316,7 +8149,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf45:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf46:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear, executionCtx);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));

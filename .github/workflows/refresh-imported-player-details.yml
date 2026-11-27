@@ -1,6 +1,8 @@
 name: SkorHane Yeni Kadro Oyuncu Detayları
 
 on:
+  schedule:
+    - cron: "0 2 * * 0"
   workflow_dispatch:
     inputs:
       seen_after:
@@ -27,8 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      TM_DETAIL_SQUAD_SEEN_AFTER: ${{ inputs.seen_after }}
-      TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ inputs.seen_before }}
+      TM_DETAIL_SQUAD_SEEN_AFTER: ${{ github.event.inputs.seen_after }}
+      TM_DETAIL_SQUAD_SEEN_BEFORE: ${{ github.event.inputs.seen_before }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
