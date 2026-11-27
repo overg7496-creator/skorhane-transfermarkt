@@ -3031,8 +3031,10 @@ function tmPlayerRefreshPlan(row, sourceRecords = [], normalizedCoverage = {}) {
     const sourceHasVerifiedArray = sourceFresh && tmHasArrayPayload(sourceRecord.payload, keys, false);
     return !sourceFresh || (!localHasData && !sourceHasVerifiedArray);
   });
-  // A stale timestamp alone must not hide existing rows from normalized Supabase tables.
-  return { required: missing, stale, missing };
+  // A stale timestamp or one empty source snapshot must not hide the normalized
+  // rows already available for this player's other profile sections.
+  const hasNormalizedData = Object.values(normalizedCoverage || {}).some(Boolean);
+  return { required: missing && !hasNormalizedData, stale, missing };
 }
 
 const TSDB = "https://www.thesportsdb.com/api/v1/json/123/";
