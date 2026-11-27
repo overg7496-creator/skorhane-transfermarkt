@@ -1349,8 +1349,27 @@ def sync_felipeall(
                 season = normalize_tm_season(safe_text(
                     row.get("season_id"), row.get("seasonId"), row.get("seasonID"), row.get("season")
                 ))
-                competition = safe_text(row.get("competition_name"), row.get("competitionName"),
-                                        row.get("competition"), row.get("competitionId"))
+                raw_competition = row.get("competition")
+                if isinstance(raw_competition, dict):
+                    raw_competition_id = safe_text(
+                        raw_competition.get("id"), raw_competition.get("competitionId"),
+                        raw_competition.get("competition_id")
+                    ) or ""
+                    raw_competition_name = safe_text(
+                        raw_competition.get("name"), raw_competition.get("displayName")
+                    )
+                else:
+                    raw_competition_id = ""
+                    raw_competition_name = raw_competition if isinstance(raw_competition, str) else None
+                competition_id_for_stat = safe_text(
+                    row.get("competition_id"), row.get("competitionId"), row.get("competitionID"),
+                    raw_competition_id
+                ) or ""
+                competition = safe_text(
+                    row.get("competition_name"), row.get("competitionName"),
+                    raw_competition_name, raw_competition_name is None and raw_competition
+                    if isinstance(raw_competition, str) else None
+                )
                 raw_club = row.get("club")
                 if isinstance(raw_club, dict):
                     raw_club_id = safe_text(raw_club.get("id"), raw_club.get("clubId")) or ""
@@ -1367,7 +1386,9 @@ def sync_felipeall(
                     continue
                 mapped = {
                     "seasonID": season,
+                    "competitionID": competition_id_for_stat,
                     "competitionName": competition or "",
+                    "clubID": club_id_for_stat,
                     "clubName": stat_club,
                     "appearances": numeric(row, "appearances", "matches"),
                     "starts": numeric(row, "starts"),
@@ -1384,7 +1405,9 @@ def sync_felipeall(
                 rpc("tm_upsert_season_stat", {"p_row": {
                     "tm_id": tm_id,
                     "season_id": season,
+                    "competition_id": competition_id_for_stat,
                     "competition_name": competition or "",
+                    "club_id": club_id_for_stat,
                     "club_name": stat_club,
                     "appearances": mapped["appearances"],
                     "starts": mapped["starts"],
@@ -1403,20 +1426,43 @@ def sync_felipeall(
             # Preserve current-season match-derived totals when they add fields that
             # the season summary endpoint does not expose (for example starts/minutes).
             stat_batches: list[dict[str, Any]] = list(current_stats)
-            seen_stats: set[tuple[str, str, str]] = set()
+            seen_stats: set[tuple[str, str, str, str]] = set()
             for row in stat_batches:
                 season = safe_text(row.get("seasonID"), row.get("seasonId"), row.get("season"), row.get("seasonName")) or ""
-                competition = safe_text(row.get("competitionName"), row.get("competition"),
-                                        row.get("competitionID"), row.get("competitionId")) or ""
-                club = safe_text(row.get("clubName"), row.get("teamName"), row.get("club"), row.get("team")) or ""
+                raw_competition = row.get("competition")
+                competition_object = raw_competition if isinstance(raw_competition, dict) else {}
+                competition_id = safe_text(
+                    row.get("competition_id"), row.get("competitionID"), row.get("competitionId"),
+                    competition_object.get("id"), competition_object.get("competitionId")
+                ) or ""
+                competition = safe_text(
+                    row.get("competitionName"),
+                    competition_object.get("name"), competition_object.get("displayName"),
+                    raw_competition if isinstance(raw_competition, str) else None,
+                    row.get("competitionID"), row.get("competitionId")
+                ) or ""
+                raw_club = row.get("club")
+                club_object = raw_club if isinstance(raw_club, dict) else {}
+                club_id = safe_text(
+                    row.get("club_id"), row.get("clubID"), row.get("clubId"),
+                    club_object.get("id"), club_object.get("clubId")
+                ) or ""
+                club = safe_text(
+                    row.get("clubName"), row.get("teamName"),
+                    club_object.get("name"), club_object.get("displayName"),
+                    raw_club if isinstance(raw_club, str) else None,
+                    row.get("team") if isinstance(row.get("team"), str) else None
+                ) or ""
                 if not season or not club:
                     continue
-                stat_key = (str(season), competition, club)
+                stat_key = (str(season), competition_id or competition, club_id or club)
                 if stat_key in seen_stats:
                     continue
                 seen_stats.add(stat_key)
                 rpc("tm_upsert_season_stat", {"p_row": {
-                    "tm_id": tm_id, "season_id": str(season), "competition_name": competition, "club_name": club,
+                    "tm_id": tm_id, "season_id": str(season),
+                    "competition_id": competition_id, "competition_name": competition,
+                    "club_id": club_id, "club_name": club,
                     "appearances": numeric(row, "appearances", "apps", "matches"),
                     "starts": numeric(row, "starts", "gamesStarted", "appearancesAsStarter"),
                     "goals": numeric(row, "goals"), "assists": numeric(row, "assists"),
