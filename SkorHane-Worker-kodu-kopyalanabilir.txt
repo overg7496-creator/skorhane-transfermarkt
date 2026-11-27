@@ -4872,7 +4872,22 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
         const result = await tmPlayer(env, id, executionCtx);
         out.tm = result;
         out.tmId = id;
-        st.transfermarkt = result.err ? "hata: " + result.err : (result.refreshQueued ? "ok - eksik veriler yenileme kuyruğuna alındı" : "ok");
+        const refreshStatus = result.refreshState === "pending-config"
+          ? "uyarı: GITHUB_ACTIONS_TOKEN tanımlı değil; GitHub Actions başlatılmadı"
+          : result.refreshState === "dispatching"
+            ? "başlatma isteği gönderildi; kabul henüz doğrulanmadı"
+            : result.refreshState === "dispatch-failed"
+              ? "hata: GitHub Actions başlatılamadı - " + (result.refreshReason || "dispatch hatası")
+              : result.refreshState === "queued" || result.refreshState === "already-queued"
+                ? "GitHub Actions kuyruğuna kabul edildi"
+                : result.refreshState === "running"
+                  ? "GitHub Actions çalışıyor"
+                  : result.refreshState === "retry-wait"
+                    ? "yeniden deneme zamanı bekleniyor"
+                    : result.refreshState === "blocked"
+                      ? "yenileme kalıcı hata nedeniyle engellendi"
+                      : "ok";
+        st.transfermarkt = result.err ? "hata: " + result.err : refreshStatus;
       } catch (error) {
         st.transfermarkt = "hata: " + (error && error.message || error);
       }
@@ -8301,7 +8316,7 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf44:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf45:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear, executionCtx);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));

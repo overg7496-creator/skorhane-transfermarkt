@@ -55,7 +55,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', worker)
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
-        self.assertIn('"pf44:"', worker)
+        self.assertIn('"pf45:"', worker)
         self.assertIn("function tmSupabaseBase(env)", worker)
         self.assertIn("SUPABASE_URL Project URL olmalı", worker)
         self.assertIn("function tmPlayerRefreshPlan(row, sourceRecords = [])", worker)
@@ -621,7 +621,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertNotIn("api('/player?part=stats'+qs)", html)
         self.assertNotIn("api('/pitch-player-recent?", html)
         self.assertNotIn("attempt===0?6000:12000", html)
-        self.assertIn("skorhane.playerstats.legacy.v9.", html)
+        self.assertIn("skorhane.playerstats.legacy.v10.", html)
         self.assertNotIn("Eksik Transfermarkt kayıtları yenileme kuyruğuna alındı", html)
         self.assertNotIn("profili kısa süre sonra yeniden aç", html)
 
@@ -634,7 +634,7 @@ class SyncHelperTests(unittest.TestCase):
         requested_html = (ROOT / "SkorHane-HTML-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, requested_copy)
         self.assertEqual(html, requested_html)
-        self.assertIn('"pf44:"', worker)
+        self.assertIn('"pf45:"', worker)
 
     def test_database_saves_goalkeeper_season_fields(self):
         schema = (ROOT / "database" / "001_transfermarkt_schema.sql").read_text(encoding="utf-8")
@@ -674,6 +674,12 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("s.goals_conceded, s.clean_sheets", migration)
         self.assertIn("'recent_appearances'", migration)
         self.assertIn("limit 13", migration)
+    def test_single_player_id_is_used_for_preseed_and_match_verification(self):
+        workflow = (ROOT / ".github" / "workflows" / "transfermarkt-sync.yml").read_text(encoding="utf-8")
+        fallback = "TM_PRESEED_PLAYER_IDS: ${{ github.event.inputs.player_ids || github.event.inputs.player_id }}"
+        self.assertGreaterEqual(workflow.count(fallback), 4)
+        self.assertIn("Verify selected player batch rows in Supabase", workflow)
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -715,7 +721,7 @@ if __name__ == "__main__":
         html = (ROOT / "SkorHane-HTML-kodu-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, worker_copy)
         self.assertIn("executionCtx.waitUntil(refreshPromise)", worker)
-        self.assertIn('"pf44:"', worker)
+        self.assertIn('"pf45:"', worker)
         self.assertIn("const loading=false", html)
         self.assertIn("const freshStats=await api('/player?part=stats'+qs)", html)
         self.assertNotIn("const freshInfo=await api('/player?part=info'+qs)", html)
