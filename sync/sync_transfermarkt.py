@@ -1367,8 +1367,8 @@ def sync_felipeall(
                 ) or ""
                 competition = safe_text(
                     row.get("competition_name"), row.get("competitionName"),
-                    raw_competition_name, raw_competition_name is None and raw_competition
-                    if isinstance(raw_competition, str) else None
+                    raw_competition_name,
+                    raw_competition if isinstance(raw_competition, str) else None
                 )
                 raw_club = row.get("club")
                 if isinstance(raw_club, dict):
