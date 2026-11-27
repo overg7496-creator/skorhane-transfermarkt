@@ -33,6 +33,34 @@ set
 where nullif(s.competition_id, '') is null
    or nullif(s.club_id, '') is null;
 
+-- Older normalized rows may have no provider IDs in their payload. Recover IDs
+-- only when the same player/season/normalized competition/club resolves to
+-- exactly one non-null squad ID pair.
+with unique_named_matches as (
+  select
+    s.id,
+    max(nullif(q.competition_id, '')) as competition_id,
+    max(nullif(q.club_id, '')) as club_id
+  from public.tm_player_season_stats s
+  join public.tm_team_season_squads q
+    on q.tm_id = s.tm_id
+   and public.tm_leader_season_start_year(q.season_id) =
+       public.tm_leader_season_start_year(s.season_id)
+   and public.tm_leader_normalize_name(q.competition_name) =
+       public.tm_leader_normalize_name(s.competition_name)
+   and public.tm_leader_normalize_name(q.club_name) =
+       public.tm_leader_normalize_name(s.club_name)
+  group by s.id
+  having count(distinct nullif(q.competition_id, '')) = 1
+     and count(distinct nullif(q.club_id, '')) = 1
+)
+update public.tm_player_season_stats s
+set competition_id = coalesce(nullif(s.competition_id, ''), m.competition_id),
+    club_id = coalesce(nullif(s.club_id, ''), m.club_id)
+from unique_named_matches m
+where s.id = m.id
+  and (nullif(s.competition_id, '') is null or nullif(s.club_id, '') is null);
+
 create index if not exists tm_player_season_stats_leader_lookup_v3_idx
   on public.tm_player_season_stats (tm_id, competition_id, club_id, season_id);
 
