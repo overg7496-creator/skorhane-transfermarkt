@@ -4168,7 +4168,9 @@ async function tmLeagueData(env, code, year) {
     key, tmLeaderRows(totals, field)
   ]));
   // An empty list is complete only when the player-by-player sync coverage is complete.
-  const metricAvailability = Object.fromEntries(Object.keys(leaders).map(key => [key, coverageComplete]));
+  const metricAvailability = Object.fromEntries(Object.keys(leaders).map(key => [
+    key, coverageComplete && totalsR.status === "fulfilled"
+  ]));
   const tableRecord = tableR.status === "fulfilled" ? tableR.value[0] : null;
   const goalLeadersAvailable = coverageComplete && goalsR.status === "fulfilled";
   const assistLeadersAvailable = coverageComplete && assistsR.status === "fulfilled";
