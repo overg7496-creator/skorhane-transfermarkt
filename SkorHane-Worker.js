@@ -2931,6 +2931,18 @@ async function tmDbRows(env, query) {
   return Array.isArray(rows) ? rows : [];
 }
 
+async function tmDbRowsPaged(env, query, pageSize = 1000, maxRows = 10000) {
+  const rows = [];
+  let offset = 0;
+  while (offset < maxRows) {
+    const page = await tmDbRows(env, String(query || "") + "&limit=" + pageSize + "&offset=" + offset);
+    rows.push(...page);
+    if (page.length < pageSize) break;
+    offset += page.length;
+  }
+  return rows;
+}
+
 async function tmDbRpc(env, functionName, payload) {
   const base = tmSupabaseBase(env);
   const key = String(env && env.SUPABASE_SERVICE_ROLE_KEY || "");
@@ -2990,7 +3002,7 @@ function tmHasArrayPayload(payload, keys, requireRows = false) {
   const rows = tmPayloadArray(payload, keys);
   return Array.isArray(rows) && (!requireRows || rows.length > 0);
 }
-function tmPlayerRefreshPlan(row, sourceRecords = []) {
+function tmPlayerRefreshPlan(row, sourceRecords = [], normalizedCoverage = {}) {
   const repairCutoff = Date.parse("2026-11-26T12:00:00Z");
   const sourceByType = Object.fromEntries((Array.isArray(sourceRecords) ? sourceRecords : [])
     .filter(item => item && item.record_type)
@@ -3007,17 +3019,20 @@ function tmPlayerRefreshPlan(row, sourceRecords = []) {
   const profileRecord = sourceByType.player_profile;
   const profileFetchedAt = Date.parse(profileRecord && profileRecord.fetched_at || "");
   const profileFresh = Number.isFinite(profileFetchedAt) && profileFetchedAt >= repairCutoff;
-  const profileExists = profileFresh &&
-    !!(profileRecord.payload && typeof profileRecord.payload === "object" && Object.keys(profileRecord.payload).length);
+  const localProfileExists = !!(row && row.profile_payload && typeof row.profile_payload === "object" && Object.keys(row.profile_payload).length);
+  const profileExists = localProfileExists || (profileFresh &&
+    !!(profileRecord.payload && typeof profileRecord.payload === "object" && Object.keys(profileRecord.payload).length));
   const missing = !profileExists || snapshotChecks.some(([field, keys, recordType, requireRows]) => {
     const localHasData = tmHasArrayPayload(row && row[field], keys, requireRows);
+    if (normalizedCoverage && normalizedCoverage[recordType]) return false;
     const sourceRecord = sourceByType[recordType];
     const fetchedAt = Date.parse(sourceRecord && sourceRecord.fetched_at || "");
     const sourceFresh = Number.isFinite(fetchedAt) && fetchedAt >= repairCutoff;
     const sourceHasVerifiedArray = sourceFresh && tmHasArrayPayload(sourceRecord.payload, keys, false);
     return !sourceFresh || (!localHasData && !sourceHasVerifiedArray);
   });
-  return { required: stale || missing, stale, missing };
+  // A stale timestamp alone must not hide existing rows from normalized Supabase tables.
+  return { required: missing, stale, missing };
 }
 
 const TSDB = "https://www.thesportsdb.com/api/v1/json/123/";
@@ -4048,36 +4063,57 @@ function tmExtractTableRows(payload) {
   return [];
 }
 function tmLeaderRows(rows, metric) {
-  return (rows || []).map(row => ({
-    rank: Number(row.leader_rank) || 0, playerId: String(row.tm_id || ""),
-    player: String(row.player_name || ""), logo: String(row.photo_url || ""),
-    team: String(row.club_name || ""), value: Number(row[metric]) || 0,
-    appearances: Number(row.appearances) || 0, assists: Number(row.assists) || 0,
-    goals: Number(row.goals) || 0, minutes: Number(row.minutes) || 0,
-    source: "Supabase/Transfermarkt"
-  })).filter(row => row.playerId && row.player && row.value > 0)
+  const unique = new Map();
+  for (const row of rows || []) {
+    const playerId = String(row.tm_id || "").trim();
+    const player = String(row.player_name || "").trim();
+    const value = Number(row[metric]) || 0;
+    if (!playerId || !player || value <= 0) continue;
+    const old = unique.get(playerId);
+    if (!old) {
+      unique.set(playerId, {
+        rank: Number(row.leader_rank) || 0, playerId, player,
+        logo: String(row.photo_url || ""), team: String(row.club_name || ""),
+        value, appearances: Number(row.appearances) || 0,
+        assists: Number(row.assists) || 0, goals: Number(row.goals) || 0,
+        minutes: Number(row.minutes) || 0, source: "Supabase/Transfermarkt"
+      });
+      continue;
+    }
+    if (value > old.value) old.value = value;
+    old.appearances = Math.max(old.appearances, Number(row.appearances) || 0);
+    old.assists = Math.max(old.assists, Number(row.assists) || 0);
+    old.goals = Math.max(old.goals, Number(row.goals) || 0);
+    old.minutes = Math.max(old.minutes, Number(row.minutes) || 0);
+    if (!old.logo && row.photo_url) old.logo = String(row.photo_url);
+    if (row.club_name && !old.team.includes(String(row.club_name))) old.team = [old.team, String(row.club_name)].filter(Boolean).join(" / ");
+  }
+  return [...unique.values()]
     .sort((a,b) => b.value-a.value || a.player.localeCompare(b.player, "tr"))
-    .slice(0,50).map((row,index) => ({...row, rank:row.rank || index+1}));
+    .map((row,index) => ({...row, rank:row.rank || index+1}));
 }
 async function tmLeagueData(env, code, year) {
   const competitionId = tmCompetitionIdForCode(code);
-  if (!competitionId) return { found:false, code, season:year, seasons:[], goals:[], assists:[], standings:[] };
+  if (!competitionId) return { found:false, code, season:year, seasons:[], goals:[], assists:[], standings:[], goalLeadersAvailable:false, assistLeadersAvailable:false, metricAvailability:{} };
   const season = String(year);
   const statesQuery = "tm_source_records?select=record_key,payload&source=eq.felipeall&record_type=eq.squad_sync_state&external_id=eq." +
-    encodeURIComponent(competitionId) + "&limit=40";
+    encodeURIComponent(competitionId) + "&order=record_key.desc";
   const goalsQuery = "tm_league_goal_leaders?select=leader_rank,tm_id,player_name,photo_url,club_name,goals,assists,appearances,minutes" +
     "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
-    "&order=leader_rank.asc&limit=50";
+    "&order=leader_rank.asc";
   const assistsQuery = "tm_league_assist_leaders?select=leader_rank,tm_id,player_name,photo_url,club_name,goals,assists,appearances,minutes" +
     "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) +
-    "&order=leader_rank.asc&limit=50";
+    "&order=leader_rank.asc";
   const totalsQuery = "tm_league_player_season_totals?select=tm_id,player_name,photo_url,club_name,appearances,starts,goals,assists,minutes,yellow_cards,red_cards,goals_conceded,clean_sheets" +
-    "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) + "&limit=1000";
+    "&competition_id=eq." + encodeURIComponent(competitionId) + "&season_id=eq." + encodeURIComponent(season) + "&order=tm_id.asc";
   const tableQuery = "tm_source_records?select=payload&source=eq.felipeall&record_type=eq.competition_table" +
     "&external_id=eq." + encodeURIComponent(competitionId) + "&record_key=eq." + encodeURIComponent(season) + "&limit=1";
   const [statesR, goalsR, assistsR, totalsR, tableR] = await Promise.allSettled([
-    tmDbRows(env, statesQuery), tmDbRows(env, goalsQuery), tmDbRows(env, assistsQuery),
-    tmDbRows(env, totalsQuery), tmDbRows(env, tableQuery)
+    tmDbRowsPaged(env, statesQuery, 1000, 40000),
+    tmDbRowsPaged(env, goalsQuery, 1000, 10000),
+    tmDbRowsPaged(env, assistsQuery, 1000, 10000),
+    tmDbRowsPaged(env, totalsQuery, 1000, 10000),
+    tmDbRows(env, tableQuery)
   ]);
   const states = statesR.status === "fulfilled" ? statesR.value : [];
   const goals = goalsR.status === "fulfilled" ? tmLeaderRows(goalsR.value, "goals") : [];
@@ -4090,9 +4126,13 @@ async function tmLeagueData(env, code, year) {
   const leaders = Object.fromEntries(Object.entries(metricFields).map(([key, field]) => [
     key, tmLeaderRows(totals, field)
   ]));
+  const metricAvailability = Object.fromEntries(Object.entries(leaders).map(([key, rows]) => [key, rows.length > 0]));
   const tableRecord = tableR.status === "fulfilled" ? tableR.value[0] : null;
+  const goalLeadersAvailable = goalsR.status === "fulfilled" && goals.length > 0;
+  const assistLeadersAvailable = assistsR.status === "fulfilled" && assists.length > 0;
   return {
-    found: !!(goals.length || assists.length || Object.values(leaders).some(rows => rows.length) || states.length || tableRecord),
+    found: !!(goalLeadersAvailable || assistLeadersAvailable || Object.values(metricAvailability).some(Boolean) || states.length || tableRecord),
+    goalLeadersAvailable, assistLeadersAvailable, metricAvailability,
     code: competitionId, requestedCode:code, season:Number(season),
     seasons:tmSeasonRows(states), goals, assists, leaders,
     standings:tmExtractTableRows(tableRecord && tableRecord.payload),
@@ -4276,7 +4316,14 @@ async function tmPlayer(env, id) {
   };
   // Player profiles are read-only: missing snapshots are prepared by scheduled sync workflows.
   // Opening a profile never dispatches a scraper or waits for an external provider.
-  const refreshPlan = tmPlayerRefreshPlan(row, sourceRecords);
+  const refreshPlan = tmPlayerRefreshPlan(row, sourceRecords, {
+    player_stats: bundleSeasonRows.length > 0,
+    player_transfers: bundleTransfers.length > 0,
+    player_market_values: bundleMarketValues.length > 0,
+    player_injuries: bundleInjuries.length > 0,
+    player_absences: bundleAbsences.length > 0,
+    current_season_matches: bundleAppearanceRows.length > 0 || recentAppearanceRows.length > 0
+  });
   const refreshState = {
     required: !!refreshPlan.required,
     queued: false,
@@ -8153,11 +8200,11 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf47:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf48:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear, executionCtx);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
-          return { body: r, ttl: r.tmRefreshRequired ? 3 : part === "info" ? 60 : hasCareer ? 900 : providerErrors ? 30 : 120 };
+          return { body: r, ttl: r.tmRefreshRequired ? 3 : part === "info" ? 30 : hasCareer ? 60 : providerErrors ? 15 : 30 };
         });
       } else if (p === "/team") {
         let code = q.get("code") || "";
