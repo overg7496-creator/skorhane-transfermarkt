@@ -20,6 +20,8 @@ class PlayerProfileFallbackTests(unittest.TestCase):
         self.assertIn("create or replace function public.tm_player_profile_bundle", self.sql)
         self.assertIn("'injuries'", self.sql)
         self.assertIn("create or replace function public.tm_player_data_diagnostic", self.sql)
+        self.assertIn("jsonb_array_length(coalesce(p_rows, '[]'::jsonb)) = 0", self.sql)
+        self.assertIn("An empty upstream response", self.sql)
 
     def test_diagnostic_reports_all_requested_database_tables(self):
         for field in (
