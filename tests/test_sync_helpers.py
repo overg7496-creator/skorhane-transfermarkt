@@ -717,3 +717,131 @@ if __name__ == "__main__":
         self.assertIn("preseed-players", workflow)
         self.assertIn("player_ids:", workflow)
         self.assertIn('python sync/sync_transfermarkt.py preseed-players --player-ids "$TM_PRESEED_PLAYER_IDS"', workflow)
+
+
+class HistoryFallbackTests(unittest.TestCase):
+    def test_dcaribou_parser_accepts_pretty_json_arrays_and_jsonl(self):
+        array = '[{"href":"/wettbewerb/TR1"},{"href":"/wettbewerb/GB1"}]'
+        jsonl = '{"gameId":"1"}\n{"gameId":"2"}'
+        self.assertEqual(len(sync.decode_dcaribou_records(array)), 2)
+        self.assertEqual(len(sync.decode_dcaribou_records(jsonl)), 2)
+
+    def test_felipe_match_endpoint_reads_all_pages_for_requested_season(self):
+        from unittest.mock import patch
+
+        first = {
+            "id": "123",
+            "pageNumber": 1,
+            "lastPageNumber": 2,
+            "matches": [{"gameId": "m1"}],
+        }
+        second = {
+            "id": "123",
+            "pageNumber": 2,
+            "lastPageNumber": 2,
+            "matches": [{"gameId": "m2"}],
+        }
+        with (
+            patch.object(sync, "FELIPE_API_BASE", "http://127.0.0.1:8000"),
+            patch.object(sync, "json_request", side_effect=[first, second]) as request,
+        ):
+            rows = sync.fetch_felipe_player_season_matches("123", "2022")
+        self.assertEqual([row["gameId"] for row in rows], ["m1", "m2"])
+        self.assertIn("/players/123/matches?season_id=2022&page_number=1", request.call_args_list[0].args[0])
+        self.assertIn("page_number=2", request.call_args_list[1].args[0])
+
+    def test_felipe_appearance_persistence_maps_match_and_skips_dnp(self):
+        from unittest.mock import patch
+
+        matches = [
+            {
+                "gameId": "played-1",
+                "date": "2022-08-01T17:00:00Z",
+                "competition": {"id": "TR1", "name": "Süper Lig"},
+                "club": {"id": "1", "name": "Club A"},
+                "opponent": {"id": "2", "name": "Club B"},
+                "participation": "played",
+                "isStarting": True,
+                "minutesPlayed": 90,
+                "goals": 1,
+                "assists": 0,
+                "yellowCard": True,
+            },
+            {
+                "gameId": "bench-1",
+                "date": "2022-08-08T17:00:00Z",
+                "participation": "onBench",
+                "minutesPlayed": 0,
+            },
+        ]
+        with patch.object(sync, "rpc") as rpc:
+            saved = sync.persist_felipe_history_appearances("123", "2022", matches)
+        self.assertEqual(saved, 1)
+        rpc.assert_called_once()
+        row = rpc.call_args.args[1]["p_row"]
+        self.assertEqual(row["source"], "felipeall")
+        self.assertEqual(row["source_record_key"], "123:2022:played-1")
+        self.assertEqual(row["competition_name"], "Süper Lig")
+        self.assertEqual(row["club_name"], "Club A")
+        self.assertEqual(row["opponent_name"], "Club B")
+        self.assertEqual(row["starts"], 1)
+        self.assertEqual(row["minutes"], 90)
+        self.assertEqual(row["goals"], 1)
+        self.assertEqual(row["yellow_cards"], 1)
+
+    def test_seed_history_catches_empty_dcaribou_and_calls_felipe_fallback(self):
+        from unittest.mock import patch
+
+        with (
+            patch.object(sync, "_seed_dcaribou_history_scraper", side_effect=RuntimeError("records=0")),
+            patch.object(sync, "seed_felipe_history_fallback", return_value=14) as fallback,
+        ):
+            count = sync.seed_dcaribou_history()
+        self.assertEqual(count, 14)
+        fallback.assert_called_once()
+
+    def test_felipe_fallback_uses_supabase_roster_and_checkpoints_player_season(self):
+        from unittest.mock import patch
+
+        match = {
+            "gameId": "match-2022",
+            "date": "2022-09-01T18:00:00Z",
+            "competition": {"name": "Süper Lig"},
+            "club": {"name": "Club A"},
+            "opponent": {"name": "Club B"},
+            "participation": "played",
+            "minutesPlayed": 90,
+        }
+        with (
+            patch.object(sync, "FELIPE_API_BASE", "http://127.0.0.1:8000"),
+            patch.object(sync, "DCARIBOU_COMPETITIONS", ["TR1"]),
+            patch.object(sync, "DCARIBOU_SEASONS", [2022]),
+            patch.object(sync, "load_supabase_history_roster", return_value=[{
+                "competition_id": "TR1", "competition_name": "Süper Lig",
+                "season_id": "2022", "tm_id": "123", "club_name": "Club A",
+            }]),
+            patch.object(sync, "load_felipe_history_checkpoints", return_value=set()),
+            patch.object(sync, "fetch_felipe_player_season_matches", return_value=[match]),
+            patch.object(sync, "persist_felipe_history_appearances", return_value=1) as persist,
+            patch.object(sync, "mark_felipe_history_checkpoint") as checkpoint,
+            patch.object(sync, "dispatch_refresh_details_continuation") as dispatch,
+        ):
+            count = sync.seed_felipe_history_fallback()
+        self.assertEqual(count, 1)
+        persist.assert_called_once()
+        checkpoint.assert_called_once_with(
+            "2022", "123", appearance_rows=1, source_name="felipeall_api"
+        )
+        dispatch.assert_not_called()
+
+    def test_history_workflow_starts_felipe_api_and_allows_auto_continuation(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "seed-player-appearances.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("actions: write", workflow)
+        self.assertIn("Start dedicated Felipe Transfermarkt API v5.0.0", workflow)
+        self.assertIn("FELIPE_API_BASE: http://127.0.0.1:8000", workflow)
+        self.assertIn("continue-on-error: true", workflow)
+        self.assertIn("Stop local Felipe API", workflow)
+
+
