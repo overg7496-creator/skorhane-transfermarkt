@@ -2338,8 +2338,11 @@ def seed_felipe_history_fallback() -> int:
                     continue
                 api_roster_rows += len(roster_rows)
                 if not roster_rows:
+                    roster_failures.append(
+                        f"{competition_id}/{season_id}: Supabase ve Felipe API boş kadro döndürdü"
+                    )
                     LOG.warning(
-                        "%s/%s için Supabase veya Felipe API oyuncu kadrosu bulunamadı; mevcut veriler korundu.",
+                        "%s/%s için Supabase veya Felipe API oyuncu kadrosu bulunamadı; mevcut veriler korundu ve devam kuyruğuna bırakıldı.",
                         competition_id, season_id,
                     )
                     continue
