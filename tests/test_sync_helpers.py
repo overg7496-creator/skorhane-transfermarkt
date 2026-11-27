@@ -446,6 +446,30 @@ class SyncHelperTests(unittest.TestCase):
             inputs={"seen_after": after, "seen_before": before},
         )
 
+    def test_detail_worker_time_limit_continuation_resumes_same_league_only(self):
+        from unittest.mock import patch
+
+        player = {"tm_id": "123", "name": "Oyuncu"}
+        with (
+            patch.object(sync, "load_player_detail_queue_states", return_value={}),
+            patch.object(sync, "load_pending_player_detail_candidates", return_value=[player]),
+            patch.object(sync, "dispatch_refresh_details_continuation") as dispatch,
+            patch.object(sync.time, "monotonic", side_effect=[0.0, 1.0]),
+            patch.dict(os.environ, {
+                "TM_DETAIL_COMPETITION_ID": "GB1",
+                "TM_DETAIL_MAX_RUNTIME_SECONDS": "0",
+                "TM_DETAIL_CONTINUATION_WORKFLOW": "refresh-imported-player-details.yml",
+                "TM_DETAIL_SQUAD_SEEN_AFTER": "",
+                "TM_DETAIL_SQUAD_SEEN_BEFORE": "",
+            }),
+        ):
+            sync.sync_felipeall(backfill_only=True)
+
+        dispatch.assert_called_once_with(
+            workflow_file="refresh-imported-player-details.yml",
+            inputs={"competition_id": "GB1"},
+        )
+
     def test_detail_aggregate_freshness_includes_old_and_unfinished_players(self):
         from datetime import datetime, timezone
 
@@ -513,6 +537,9 @@ class SyncHelperTests(unittest.TestCase):
 
     def test_backfill_queue_is_resumable_and_uses_time_guard(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
+        self.assertIn("same league partition", script)
+        self.assertIn("saatlik otomatik kontrol", script)
+        self.assertIn("for attempt in range(3):", script)
         self.assertIn("pending = [row for row in candidates if not detail_aggregate_is_fresh(row)]", script)
         self.assertIn('"player_detail_queue"', script)
         self.assertIn("dispatch_refresh_details_continuation(", script)
@@ -1033,8 +1060,10 @@ class HistoryFallbackTests(unittest.TestCase):
         matches = (ROOT / ".github" / "workflows" / "seed-player-appearances.yml").read_text(encoding="utf-8")
         self.assertIn('cron: "0 20 * * *"', rotation)
         self.assertIn("refresh-rotation", rotation)
-        self.assertIn('cron: "0 2 * * 0"', details)
+        self.assertIn('cron: "17 * * * *"', details)
         self.assertIn("TM_DETAIL_PRESEED_ALL_HISTORY: \"true\"", details)
+        self.assertIn('TM_DETAIL_MAX_RUNTIME_SECONDS: "14400"', details)
+        self.assertIn("timeout-minutes: 360", details)
         self.assertIn('cron: "0 10 * * 0"', matches)
         self.assertIn("python sync/sync_transfermarkt.py seed-history", matches)
 
