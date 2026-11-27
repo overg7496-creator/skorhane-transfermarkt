@@ -1507,9 +1507,13 @@ def decode_dcaribou_records(stdout: str) -> list[dict[str, Any]]:
                 if isinstance(nested, list):
                     records.extend(item for item in nested if isinstance(item, dict))
                     return
-            if any(key in value for key in (
-                "href", "competition_name", "club_id", "clubId", "player_id",
-                "playerId", "game_id", "gameId", "appearance_id",
+            is_named_entity = "id" in value and any(
+                key in value for key in ("name", "displayName", "competition_name", "club_name")
+            )
+            if is_named_entity or any(key in value for key in (
+                "href", "url", "competition_name", "competition_type", "competitionType",
+                "club_id", "clubId", "player_id", "playerId", "game_id", "gameId",
+                "appearance_id",
             )):
                 records.append(value)
 
@@ -1919,18 +1923,28 @@ def history_checkpoint_key(season_id: str, tm_id: str) -> str:
 
 
 def load_felipe_history_checkpoints() -> set[str]:
-    rows = db_get(
-        "tm_source_records?select=record_key&source=eq.felipeall"
-        "&record_type=eq.history_appearance_checkpoint"
-        "&record_key=like.player_season_appearances:*&limit=10000"
-    )
-    if not isinstance(rows, list):
-        raise RuntimeError("Felipe geçmiş maç checkpoint kayıtları okunamadı.")
-    return {
-        str(row.get("record_key") or "")
-        for row in rows
-        if isinstance(row, dict) and row.get("record_key")
-    }
+    """Read all completed history checkpoints, not just PostgREST's first 10k rows."""
+    completed: set[str] = set()
+    page_size = 1000
+    offset = 0
+    while True:
+        rows = db_get(
+            "tm_source_records?select=record_key&source=eq.felipeall"
+            "&record_type=eq.history_appearance_checkpoint"
+            "&record_key=like.player_season_appearances:*"
+            f"&order=record_key.asc&limit={page_size}&offset={offset}"
+        )
+        if not isinstance(rows, list):
+            raise RuntimeError("Felipe geçmiş maç checkpoint kayıtları okunamadı.")
+        completed.update(
+            str(row.get("record_key") or "")
+            for row in rows
+            if isinstance(row, dict) and row.get("record_key")
+        )
+        if len(rows) < page_size:
+            break
+        offset += len(rows)
+    return completed
 
 
 def mark_felipe_history_checkpoint(
