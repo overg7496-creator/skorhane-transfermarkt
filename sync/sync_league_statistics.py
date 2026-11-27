@@ -297,6 +297,32 @@ def matching_targets(stat: dict[str, Any], targets: list[dict[str, Any]]) -> lis
             matches.append(target)
     return matches
 
+def identity_conflict_scope_keys(stat: dict[str, Any], targets: list[dict[str, Any]]) -> set[str]:
+    """Flag only same-season/name rows whose same-namespace provider IDs conflict."""
+    year = season_start_year(text_value(stat, "season_id", "seasonId", "seasonID", "season"))
+    competition_id = stat_competition_id(stat)
+    competition = norm(stat_competition_name(stat))
+    club_id = stat_club_id(stat)
+    club = norm(stat_club_name(stat))
+    conflicts: set[str] = set()
+    if year is None or not competition:
+        return conflicts
+    for target in targets:
+        if target.get("season_start") != year or competition != norm(target.get("competition_name")):
+            continue
+        target_competition_id = str(target.get("competition_id") or "").strip()
+        if (competition_id and target_competition_id and
+                competition_ids_share_namespace(competition_id, target_competition_id) and
+                competition_id != target_competition_id):
+            conflicts.add(f"{target_competition_id}:{target.get('season_id')}")
+            continue
+        target_club_id = str(target.get("club_id") or "").strip()
+        target_club = norm(target.get("club_name"))
+        if (club and club == target_club and club_id and target_club_id and
+                stat_ids_share_namespace(club_id, target_club_id) and club_id != target_club_id):
+            conflicts.add(f"{target_competition_id}:{target.get('season_id')}")
+    return conflicts
+
 def map_stat_payloads(tm_id: str, stat: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map only exact season + competition + club matches; never mix cup/league rows."""
     mapped = []
@@ -475,15 +501,32 @@ def run() -> int:
             try:
                 stat_rows = fetch_player_stats(player_id)
                 saved = 0
+                matched_scope_keys: set[str] = set()
+                unmatched_scope_keys: set[str] = set()
                 for stat in stat_rows:
+                    unmatched_scope_keys.update(identity_conflict_scope_keys(stat, targets[player_id]))
                     for payload in map_stat_payloads(player_id, stat, targets[player_id]):
                         tm.rpc("tm_upsert_season_stat", {"p_row": payload})
                         saved += 1
+                        matched_scope_keys.add(
+                            f"{payload['competition_id']}:{payload['season_id']}"
+                        )
+                expected_scope_keys = {
+                    f"{target['competition_id']}:{target['season_id']}"
+                    for target in targets[player_id]
+                }
+                # A successful player-stats response is complete for a target
+                # scope even when it contains no row for that club/season.
+                # But an explicit same-namespace ID conflict must stay incomplete.
+                completed_scope_keys = sorted(expected_scope_keys - unmatched_scope_keys)
                 now = datetime.now(timezone.utc).isoformat()
                 save_checkpoint(player_id, scope, {
                     "status": "completed", "coverage_version": 2,
                     "attempts": int(old_state.get("attempts") or 0),
                     "stats_rows_seen": len(stat_rows), "stats_rows_saved": saved,
+                    "matched_scope_keys": sorted(matched_scope_keys),
+                    "completed_scope_keys": completed_scope_keys,
+                    "unmatched_scope_keys": sorted(unmatched_scope_keys),
                     "no_matching_league_rows": len(stat_rows) > 0 and saved == 0,
                     "scope_competitions": COMPETITIONS, "scope_seasons": SEASONS,
                     "completed_at": now, "source": "felipeall",
