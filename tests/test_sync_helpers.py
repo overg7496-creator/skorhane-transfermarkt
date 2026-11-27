@@ -465,6 +465,10 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("appearances_player:", script)
         self.assertIn('run_dcaribou_crawler("players", [club]', script)
         self.assertIn("ConcurrencySettings(min_concurrency=1, max_concurrency=1, desired_concurrency=1, max_tasks_per_minute=18)", script)
+        self.assertIn("crawler_class(**crawler_options)", script)
+        self.assertIn("crawler_options['concurrency_settings']", script)
+        self.assertIn("crawler.pre_navigation_hook", script)
+        self.assertIn("@6c1eb59a59349f6869155164808e17c617b0e80d", workflow)
 
 
     def test_parse_money_eur_handles_european_and_grouped_numbers(self):
