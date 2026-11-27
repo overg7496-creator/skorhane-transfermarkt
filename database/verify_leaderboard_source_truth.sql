@@ -1,8 +1,7 @@
 -- SkorHane leaderboard source-truth verification.
+-- Fast version: scopes the source view once, then performs small aggregations
+-- over the selected competition/season only.
 -- Change only these two values for another league/season.
--- This query reads tm_league_player_season_totals ONCE. It deliberately does not
--- scan the goal and assist views independently (the old script made two costly
--- passes over the same derived view).
 
 with params as (
   select
@@ -23,35 +22,72 @@ scoped_totals as materialized (
     coalesce(t.appearances, 0)::bigint as appearances,
     coalesce(t.minutes, 0)::bigint as minutes
   from public.tm_league_player_season_totals t
-  join params p
-    on p.competition_id = t.competition_id
-   and p.season_id = t.season_id
+  cross join params p
+  where t.competition_id = p.competition_id
+    and t.season_id = p.season_id
 ),
 goal_rows as materialized (
-  select
-    dense_rank() over (order by s.goals desc)::integer as leader_rank,
-    row_number() over (order by s.goals desc, s.player_name, s.tm_id) as display_row,
-    count(*) over (partition by s.tm_id) as rows_for_player,
-    s.*
-  from scoped_totals s
-  where s.goals > 0
+  select *
+  from scoped_totals
+  where goals > 0
 ),
 assist_rows as materialized (
-  select
-    dense_rank() over (order by s.assists desc)::integer as leader_rank,
-    row_number() over (order by s.assists desc, s.player_name, s.tm_id) as display_row,
-    count(*) over (partition by s.tm_id) as rows_for_player,
-    s.*
-  from scoped_totals s
-  where s.assists > 0
+  select *
+  from scoped_totals
+  where assists > 0
 ),
-goal_summary as (
+goal_duplicates as (
+  select tm_id
+  from goal_rows
+  group by tm_id
+  having count(*) > 1
+),
+assist_duplicates as (
+  select tm_id
+  from assist_rows
+  group by tm_id
+  having count(*) > 1
+),
+goal_top_10 as (
+  select
+    dense_rank() over (order by goals desc)::integer as leader_rank,
+    player_name,
+    tm_id,
+    club_name,
+    goals,
+    assists
+  from goal_rows
+  order by goals desc, assists desc, minutes desc, player_name, tm_id
+  limit 10
+),
+assist_top_10 as (
+  select
+    dense_rank() over (order by assists desc)::integer as leader_rank,
+    player_name,
+    tm_id,
+    club_name,
+    assists,
+    goals
+  from assist_rows
+  order by assists desc, goals desc, minutes desc, player_name, tm_id
+  limit 10
+),
+totals_summary as (
   select
     count(*)::bigint as rows,
     count(distinct tm_id)::bigint as unique_players,
-    count(distinct tm_id) filter (where rows_for_player > 1)::bigint as duplicate_player_groups,
-    coalesce(
-      jsonb_agg(
+    (select count(*) from (
+      select tm_id from scoped_totals group by tm_id having count(*) > 1
+    ) d)::bigint as duplicate_player_groups
+  from scoped_totals
+),
+goal_summary as (
+  select
+    (select count(*) from goal_rows)::bigint as rows,
+    (select count(distinct tm_id) from goal_rows)::bigint as unique_players,
+    (select count(*) from goal_duplicates)::bigint as duplicate_player_groups,
+    coalesce((
+      select jsonb_agg(
         jsonb_build_object(
           'rank', leader_rank,
           'player', player_name,
@@ -60,19 +96,18 @@ goal_summary as (
           'goals', goals,
           'assists', assists
         )
-        order by display_row
-      ) filter (where display_row <= 10),
-      '[]'::jsonb
-    ) as top_10
-  from goal_rows
+        order by leader_rank, goals desc, player_name
+      )
+      from goal_top_10
+    ), '[]'::jsonb) as top_10
 ),
 assist_summary as (
   select
-    count(*)::bigint as rows,
-    count(distinct tm_id)::bigint as unique_players,
-    count(distinct tm_id) filter (where rows_for_player > 1)::bigint as duplicate_player_groups,
-    coalesce(
-      jsonb_agg(
+    (select count(*) from assist_rows)::bigint as rows,
+    (select count(distinct tm_id) from assist_rows)::bigint as unique_players,
+    (select count(*) from assist_duplicates)::bigint as duplicate_player_groups,
+    coalesce((
+      select jsonb_agg(
         jsonb_build_object(
           'rank', leader_rank,
           'player', player_name,
@@ -81,18 +116,16 @@ assist_summary as (
           'assists', assists,
           'goals', goals
         )
-        order by display_row
-      ) filter (where display_row <= 10),
-      '[]'::jsonb
-    ) as top_10
-  from assist_rows
+        order by leader_rank, assists desc, player_name
+      )
+      from assist_top_10
+    ), '[]'::jsonb) as top_10
 )
 select jsonb_pretty(
   jsonb_build_object(
     'competition_id', (select competition_id from params),
     'season_id', (select season_id from params),
-    'totals_rows', (select count(*) from scoped_totals),
-    'unique_players_in_totals', (select count(distinct tm_id) from scoped_totals),
+    'totals', (select to_jsonb(t) from totals_summary t),
     'goals', (select to_jsonb(g) from goal_summary g),
     'assists', (select to_jsonb(a) from assist_summary a),
     'checks', jsonb_build_object(
@@ -101,7 +134,7 @@ select jsonb_pretty(
       'assist_duplicate_player_groups_zero',
         (select duplicate_player_groups = 0 from assist_summary),
       'same_player_counted_once_in_totals',
-        (select count(*) = count(distinct tm_id) from scoped_totals)
+        (select duplicate_player_groups = 0 from totals_summary)
     )
   )
 ) as skorhane_leaderboard_source_truth;
