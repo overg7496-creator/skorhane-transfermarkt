@@ -21,6 +21,7 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
 
     def test_leaderboard_join_normalizes_season_and_prefers_ids(self):
         self.assertIn("tm_leader_season_start_year(s.season_id)", self.sql)
+        self.assertIn("([0-9]{2})[[:space:]]*[/.-]", self.sql)
         self.assertIn("s.competition_id = q.competition_id", self.sql)
         self.assertIn("s.club_id = q.club_id", self.sql)
         self.assertIn("left join lateral", self.sql)
@@ -66,6 +67,10 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
     def test_html_fallback_merges_player_ids_by_name_and_has_no_50_row_cap(self):
         self.assertIn("pitchClientTeamKey(player)||providerId", self.html)
         self.assertNotIn(".slice(0,50).map((r,i)=>({...r,rank:i+1}))", self.html)
+        self.assertIn("rows=expanded?all:all.slice(0,3)", self.html)
+        self.assertIn("leaderList(goals,'goals'", self.html)
+        self.assertIn("leaderList(assists,'assists'", self.html)
+        self.assertNotIn(".slice(0, 50).map((row, index)", self.worker)
 
     def test_ingestion_persists_competition_and_club_ids_for_both_stat_feeds(self):
         self.assertIn('"competition_id": competition_id_for_stat', self.sync)
