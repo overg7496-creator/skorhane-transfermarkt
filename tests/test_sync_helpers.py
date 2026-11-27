@@ -556,6 +556,18 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("p_row->>'goals_conceded'", schema)
         self.assertIn("p_row->>'clean_sheets'", schema)
 
+    def test_player_appearance_history_has_manual_checkpointed_workflow(self):
+        workflow = (ROOT / ".github" / "workflows" / "seed-player-appearances.yml").read_text(encoding="utf-8")
+        source = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("DCARIBOU_COMPETITIONS:", workflow)
+        self.assertIn("DCARIBOU_SEASONS:", workflow)
+        self.assertIn("DCARIBOU_APPEARANCE_BATCH_SIZE:", workflow)
+        self.assertIn("python sync/sync_transfermarkt.py seed-history", workflow)
+        self.assertIn("def seed_dcaribou_history()", source)
+        self.assertIn("appearances_player:", source)
+        self.assertIn("rpc(\"tm_upsert_appearance\"", source)
+
     def test_historical_detail_preseed_allows_optional_date_window(self):
         workflow = (ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)
