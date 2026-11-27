@@ -847,17 +847,18 @@ def load_pending_player_detail_candidates(
     squad_seen_after: str | None = None,
     squad_seen_before: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Load unprocessed players only from the exact configured cohort window."""
+    """Load unfinished players from the exact nine-league/five-season roster scope."""
     select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
     candidates: list[dict[str, Any]] = []
     offset = 0
     page_size = 1000
-    history_backfill = os.getenv("TM_DETAIL_PRESEED_ALL_HISTORY", "").strip().lower() in {"1", "true", "yes"}
-    has_explicit_window = bool(squad_seen_after or squad_seen_before) and not history_backfill
-    if history_backfill:
-        squad_filter = ""
-        LOG.info("Geçmiş kadro detay ön-doldurması: tüm sezon kadro tablolarındaki eksik oyuncular taranacak.")
-    elif has_explicit_window:
+    all_history_requested = os.getenv("TM_DETAIL_PRESEED_ALL_HISTORY", "").strip().lower() in {"1", "true", "yes"}
+    has_explicit_window = bool(squad_seen_after or squad_seen_before)
+
+    # An explicit import window always wins over all-history mode. The squad
+    # importer dispatches this workflow with exact UTC boundaries; ignoring
+    # those boundaries would silently expand a small import into the whole backlog.
+    if has_explicit_window:
         if not squad_seen_after or not squad_seen_before:
             raise RuntimeError("Detay kuyruğu için hem başlangıç hem bitiş zamanı gerekli.")
         squad_seen_after, squad_seen_before = validate_detail_squad_window(
@@ -868,22 +869,31 @@ def load_pending_player_detail_candidates(
             f"last_squad_seen_at.lt.{squad_seen_before})"
         )
         squad_filter = "&" + quote(window, safe="=.")
+        use_preseed_view = True
+        cohort_label = "açık kadro aktarım aralığı"
+    elif all_history_requested:
+        # The SQL view limits this to TR1/TR2/TR3A/TR3B/GB1/ES1/L1/IT1/FR1
+        # and season starts 2022-2026; it includes completed rows for accurate
+        # total/completed/pending counts. No inactive-player filter is applied.
+        squad_filter = ""
+        use_preseed_view = True
+        cohort_label = "9 lig x 2022-2026 tarihî kadro kapsamı"
     else:
         squad_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
         squad_filter = f"&last_squad_seen_at=gte.{quote(squad_cutoff, safe='')}"
+        use_preseed_view = False
+        cohort_label = "son 14 günlük aktif kadro"
+
     while True:
-        # Count the full cohort, not only pending rows, so the size stays stable
-        # as successfully completed players are removed from the work list.
-        if history_backfill:
+        if use_preseed_view:
             query = (
                 f"tm_detail_preseed_candidates?select={select}"
-                f"&order=tm_id.asc&limit={page_size}&offset={offset}"
+                f"{squad_filter}&order=tm_id.asc&limit={page_size}&offset={offset}"
             )
         else:
             query = (
                 f"tm_players?select={select}&is_active=eq.true"
-                f"{squad_filter}&order=tm_id.asc"
-                f"&limit={page_size}&offset={offset}"
+                f"{squad_filter}&order=tm_id.asc&limit={page_size}&offset={offset}"
             )
         rows = db_get(query)
         if not isinstance(rows, list):
@@ -902,16 +912,16 @@ def load_pending_player_detail_candidates(
         if expected_size < 1 or len(candidates) != expected_size:
             raise RuntimeError(
                 f"Detay kuyruğu güvenlik kontrolü durduruldu: sabit kohortta "
-                f"beklenen {expected_size}, veritabanında bulunan {len(candidates)} aktif oyuncu. "
+                f"beklenen {expected_size}, veritabanında bulunan {len(candidates)} oyuncu. "
                 "Yanlış gruba taşmamak için hiçbir oyuncu işlenmedi."
             )
+
     pending = [row for row in candidates if not row.get("last_felipe_synced_at")]
     LOG.info(
-        "Detay ön-doldurma kuyruğu: toplam=%s, daha önce tamamlanan=%s, kalan=%s",
-        len(candidates), len(candidates) - len(pending), len(pending),
+        "Detay ön-doldurma kohortu (%s): toplam=%s, daha önce tamamlanan=%s, kalan=%s",
+        cohort_label, len(candidates), len(candidates) - len(pending), len(pending),
     )
     return pending
-
 
 def detail_retry_is_due(state: dict[str, Any], now: datetime | None = None) -> bool:
     status = str(state.get("status") or "pending")
