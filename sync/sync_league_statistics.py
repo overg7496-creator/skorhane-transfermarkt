@@ -227,33 +227,54 @@ def stat_competition_name(row: dict[str, Any]) -> str:
 def stat_club_name(row: dict[str, Any]) -> str:
     return text_value(row, "club_name", "clubName", "club", "team", "teamName") or ""
 
+def stat_competition_id(row: dict[str, Any]) -> str:
+    for key in ("competition_id", "competitionId", "competitionID", "league_id", "leagueId", "leagueID"):
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    for key in ("competition", "league"):
+        item = row.get(key)
+        if isinstance(item, dict):
+            value = item.get("id") or item.get("competitionId") or item.get("leagueId")
+            if value is not None and str(value).strip():
+                return str(value).strip()
+    return ""
+
 def stat_club_id(row: dict[str, Any]) -> str:
-    value = row.get("club_id") or row.get("clubId") or row.get("clubID")
-    if value is None:
-        club = row.get("club")
-        if isinstance(club, dict):
-            value = club.get("id") or club.get("clubId")
-        elif club is not None:
-            value = club
-    if value is None:
-        team = row.get("team")
-        if isinstance(team, dict):
-            value = team.get("id")
-    return str(value).strip() if value is not None else ""
+    for key in ("club_id", "clubId", "clubID", "team_id", "teamId", "teamID"):
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    for key in ("club", "team"):
+        item = row.get(key)
+        if isinstance(item, dict):
+            value = item.get("id") or item.get("clubId") or item.get("teamId")
+            if value is not None and str(value).strip():
+                return str(value).strip()
+    return ""
 
 def matching_targets(stat: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     season_value = text_value(stat, "season_id", "seasonId", "seasonID", "season")
     year = season_start_year(season_value)
+    competition_id = stat_competition_id(stat)
     competition = norm(stat_competition_name(stat))
     club_id = stat_club_id(stat)
     club = norm(stat_club_name(stat))
-    if year is None or not competition:
+    if year is None or (not competition_id and not competition):
         return []
     matches = []
     for target in targets:
-        if target.get("season_start") != year or norm(target.get("competition_name")) != competition:
+        if target.get("season_start") != year:
             continue
-        target_club_id = str(target.get("club_id") or "")
+        target_competition_id = str(target.get("competition_id") or "").strip()
+        target_competition = norm(target.get("competition_name"))
+        if competition_id and target_competition_id:
+            same_competition = competition_id == target_competition_id
+        else:
+            same_competition = bool(competition and target_competition and competition == target_competition)
+        if not same_competition:
+            continue
+        target_club_id = str(target.get("club_id") or "").strip()
         target_club = norm(target.get("club_name"))
         if club_id and target_club_id:
             same_club = club_id == target_club_id
@@ -271,6 +292,8 @@ def map_stat_payloads(tm_id: str, stat: dict[str, Any], targets: list[dict[str, 
         row = {
             "tm_id": str(tm_id),
             "season_id": stat_season_id(season_value, str(target["season_id"])),
+            "competition_id": str(target.get("competition_id") or ""),
+            "club_id": str(target.get("club_id") or ""),
             "competition_name": target["competition_name"],
             "club_name": target["club_name"],
             "appearances": tm.numeric(stat, "appearances", "matches", "gamesPlayed"),
@@ -313,7 +336,9 @@ def fetch_player_stats(tm_id: str) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 def checkpoint_scope() -> str:
-    return "v1_" + "-".join(COMPETITIONS) + "_" + "-".join(SEASONS)
+    # v2 forces a one-time refetch after league/team IDs became first-class columns.
+    # Old v1 checkpoints must not label rows written without typed IDs as complete.
+    return "v2_" + "-".join(COMPETITIONS) + "_" + "-".join(SEASONS)
 
 def load_checkpoints(scope: str) -> dict[str, dict[str, Any]]:
     query = (
@@ -443,7 +468,8 @@ def run() -> int:
                         saved += 1
                 now = datetime.now(timezone.utc).isoformat()
                 save_checkpoint(player_id, scope, {
-                    "status": "completed", "attempts": int(old_state.get("attempts") or 0),
+                    "status": "completed", "coverage_version": 2,
+                    "attempts": int(old_state.get("attempts") or 0),
                     "stats_rows_seen": len(stat_rows), "stats_rows_saved": saved,
                     "no_matching_league_rows": len(stat_rows) > 0 and saved == 0,
                     "scope_competitions": COMPETITIONS, "scope_seasons": SEASONS,
@@ -461,7 +487,7 @@ def run() -> int:
                 attempts = int(old_state.get("attempts") or 0) + 1
                 status = "retryable_failed" if attempts < MAX_FAILURE_ATTEMPTS else "failed"
                 save_checkpoint(player_id, scope, {
-                    "status": status, "attempts": attempts,
+                    "status": status, "coverage_version": 2, "attempts": attempts,
                     "last_error": tm.safe_error_for_log(exc),
                     "last_attempt_at": datetime.now(timezone.utc).isoformat(),
                     "scope_competitions": COMPETITIONS, "scope_seasons": SEASONS,
