@@ -99,5 +99,18 @@ class PlayerProfileFallbackTests(unittest.TestCase):
         self.assertNotIn("Transfermarkt kariyer verileri yükleniyor", self.html)
 
 
+    def test_manual_workflow_seeds_felipe_player_match_history(self):
+        self.assertIn("seed-player-matches", self.workflow)
+        self.assertIn("TM_PRESEED_SEASONS", self.workflow)
+        self.assertIn(
+            'python sync/sync_transfermarkt.py seed-player-matches --player-ids "$TM_PRESEED_PLAYER_IDS" --seasons "$TM_PRESEED_SEASONS"',
+            self.workflow,
+        )
+
+    def test_player_data_response_does_not_wait_for_team_logo_lookups(self):
+        self.assertIn("executionCtx.waitUntil(careerLogoTask)", self.worker)
+        self.assertNotIn("await attachCareerTeamLogos(env, [...sp.seasons", self.worker)
+
+
 if __name__ == "__main__":
     unittest.main()
