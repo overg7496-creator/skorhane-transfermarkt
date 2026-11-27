@@ -343,8 +343,10 @@ def identity_conflict_scope_keys(stat: dict[str, Any], targets: list[dict[str, A
         return conflicts
 
     if club_id and target_club_ids and not comparable_ids:
+        # Different ID namespaces may still be safely matched by an exact club
+        # name. Without that name match, keep the scope incomplete.
         matching_name = any(club and club == norm(target.get("club_name")) for target in same_scope)
-        if matching_name:
+        if not matching_name:
             conflicts.add(scope_key)
     return conflicts
 
