@@ -197,7 +197,9 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("one-player-test", main_workflow)
         self.assertNotIn("TM_LEAGUES:", main_workflow)
         self.assertIn("TM_LEAGUES:", missing_workflow)
-        self.assertNotRegex(main_workflow, r"(?m)^\s+(?:schedule|push):")
+        self.assertIn('cron: "0 20 * * *"', main_workflow)
+        self.assertIn("Scheduled refresh of rotating active-player details", main_workflow)
+        self.assertNotRegex(main_workflow, r"(?m)^\s+push:")
 
     def test_main_backlog_never_expands_into_imported_or_future_window(self):
         from unittest.mock import patch
@@ -306,7 +308,8 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("skorhane-transfermarkt-", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
-        self.assertNotRegex(workflow, r"(?m)^\s+(?:schedule|push):")
+        self.assertIn('cron: "0 20 * * *"', workflow)
+        self.assertNotRegex(workflow, r"(?m)^\s+push:")
         self.assertIn("required: false", workflow[workflow.index("player_id:"):workflow.index("permissions:")])
         self.assertIn("player_ids:", workflow)
         self.assertIn('TM_PRESEED_MAX_PLAYERS: "20"', workflow)
@@ -661,7 +664,8 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("required: false", workflow)
         self.assertIn('TM_DETAIL_PRESEED_ALL_HISTORY: "true"', workflow)
-        self.assertNotRegex(workflow, r"(?m)^\s+(?:schedule|workflow_run):")
+        self.assertIn('cron: "0 2 * * 0"', workflow)
+        self.assertNotRegex(workflow, r"(?m)^\s+workflow_run:")
 
     def test_worker_does_not_invent_current_club_for_unattributed_stats(self):
         worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
@@ -899,7 +903,8 @@ class HistoryFallbackTests(unittest.TestCase):
         worker = (ROOT / "SkorHane-Worker.js").read_text(encoding="utf-8")
         profile = worker.split("async function playerFull(", 1)[1].split("// ---------- PitchAPI:", 1)[0]
         self.assertIn("tmPlayer(env, id)", profile)
-        self.assertNotIn("attachCareerTeamLogos(env", profile)
+        self.assertNotIn("const careerLogoTask", profile)
+        self.assertIn("if (coach && out.afCoach", profile)
         tm_player = worker.split("async function tmPlayer(env, id)", 1)[1].split("async function tsdbPlayer", 1)[0]
         self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', tm_player)
         self.assertNotIn("queueTmPlayerRefresh(", tm_player)
