@@ -18,7 +18,7 @@ on:
         required: false
         type: string
       player_ids:
-        description: "Ön doldurma için oyuncu ID listesi (virgül, boşluk veya noktalı virgül)"
+        description: "Oyuncu ön doldurma veya maç geçmişi için ID listesi (virgül, boşluk veya noktalı virgül)"
         required: false
         type: string
       seasons:
