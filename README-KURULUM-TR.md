@@ -43,9 +43,10 @@ Cloudflare Worker (skor3)
 2. `database/001_transfermarkt_schema.sql` dosyasının tamamını çalıştır. Dosya tabloları, güvenli UPSERT fonksiyonlarını ve RLS ayarlarını oluşturur.
 3. `database/002_team_seasons_and_leaderboards.sql` dosyasını çalıştır. Bu migration lig/sezon kadro bağlantılarını, takım/oyuncu sezon toplamlarını, gol krallığı ve asist lideri görünümlerini oluşturur.
 4. `database/003_player_profile_bundle.sql` dosyasını çalıştır. Oyuncu profilinin geçmiş verilerini tek sorguda getiren RPC'yi oluşturur.
-5. `database/004_league_sync_dashboard_detail.sql` dosyasını çalıştır. Bu dosya `tm_league_sync_dashboard` görünümünü ayrıntılı veri kapsamı raporuyla yeniler ve sezon bazında `tm_league_sync_dashboard_seasons` görünümünü oluşturur. Yalnızca raporlama görünümleri/fonksiyonu oluşturulur; oyuncu, kadro, transfer, değer veya istatistik kayıtları silinmez.
-6. Tabloların oluştuğunu doğrula: `tm_players`, `tm_player_season_stats`, `tm_transfers`, `tm_market_values`, `tm_appearances`, `tm_source_records`, `tm_sync_runs`, `tm_team_season_squads`.
-7. İki dashboard görünümünü kontrol et:
+5. `database/004_league_sync_dashboard_detail.sql` dosyasını çalıştır.
+6. `database/005_player_profile_fallbacks.sql` dosyasını çalıştır. Bu migration ayrı `tm_injuries` tablosunu oluşturur, eski JSON sakatlık kayıtlarını geri doldurur, oyuncu profil RPC'sine sakatlık satırlarını ekler ve `tm_player_data_diagnostic(text)` tanı fonksiyonunu oluşturur. Bu dosya `tm_league_sync_dashboard` görünümünü ayrıntılı veri kapsamı raporuyla yeniler ve sezon bazında `tm_league_sync_dashboard_seasons` görünümünü oluşturur. Yalnızca raporlama görünümleri/fonksiyonu oluşturulur; oyuncu, kadro, transfer, değer veya istatistik kayıtları silinmez.
+7. Tabloların oluştuğunu doğrula: `tm_players`, `tm_player_season_stats`, `tm_transfers`, `tm_market_values`, `tm_appearances`, `tm_source_records`, `tm_sync_runs`, `tm_team_season_squads`.
+8. İki dashboard görünümünü kontrol et:
 
 ```sql
 select *
@@ -174,3 +175,16 @@ Depo Public olsa bile Supabase service-role anahtarı, GitHub PAT veya başka bi
 | `SkorHane-HTML-kodu-kopyalanabilir.txt` | Oyuncu profil ekranı ve yenileme durumu UI'si |
 | `tests/` | Ağ gerektirmeyen Python regresyon testleri |
 
+
+
+## 9. Oyuncu profilini anında besleme ve tanılama
+
+Oyuncu profilinde son maçlar için önce `tm_appearances` kullanılır; bu tabloda kayıt yoksa `tm_players.current_season_payload.matches` içindeki mevcut maç kayıtları son 13 maç yedeği olarak gösterilir. Kariyer için önce `tm_player_season_stats`, yoksa oyuncunun ham `stats_payload` kaydı kullanılır. Piyasa değeri ve transfer geçmişinde de normalize tablolar boşsa kayıtlı JSON snapshot'ları okunur. Sakatlıklar `tm_injuries` tablosunda normalize edilir ve eski JSON verileri migration sırasında geri doldurulur.
+
+Canlı Supabase'deki tek bir oyuncunun gerçek satır sayılarını kontrol etmek için SQL Editor'da aşağıdakini çalıştır (ID'yi değiştir):
+
+```sql
+select public.tm_player_data_diagnostic('401923');
+```
+
+Felipe API üzerinden dcaribou'dan bağımsız, seçilen oyuncuların ayrıntılarını toplu yenilemek için GitHub → Actions → **SkorHane Transfermarkt Tek Oyuncu Yenileme** → **preseed-players** seç. `player_ids` alanına virgülle ayrılmış en fazla 20 Transfermarkt ID yaz. Bu mod Felipe API'den her oyuncunun tam detay uçlarını yeniden çeker ve Supabase'e UPSERT eder; `dcaribou` kullanılmaz. `tm_players` içinde bulunmayan ID'ler otomatik oluşturulmaz; önce ilgili oyuncunun kadro/oyuncu kaydı Supabase'e eklenmiş olmalı.
