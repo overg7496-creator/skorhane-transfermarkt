@@ -35,12 +35,12 @@ permissions:
   contents: read
   actions: write
 
-# The matrix runs nine league partitions, with at most seven providers active at once.
+# The matrix runs all nine league partitions at the same time, one dedicated worker per league.
 jobs:
   refresh-player-details:
     strategy:
       fail-fast: false
-      max-parallel: 7
+      max-parallel: 9
       matrix:
         competition_id: ${{ fromJSON(github.event_name != 'workflow_dispatch' && '["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]' || ((inputs.seen_after != '' || inputs.seen_before != '') && '["TR1"]') || (inputs.competition_id == 'ALL' && '["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]') || format('["{0}"]', inputs.competition_id)) }}
     concurrency:
