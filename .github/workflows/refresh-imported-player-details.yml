@@ -42,12 +42,7 @@ jobs:
       fail-fast: false
       max-parallel: 7
       matrix:
-        competition_id: [TR1, TR2, TR3A, TR3B, GB1, ES1, L1, IT1, FR1]
-    if: >-
-      ${{ github.event_name != 'workflow_dispatch' ||
-          ((inputs.seen_after != '' || inputs.seen_before != '') && matrix.competition_id == 'TR1') ||
-          ((inputs.seen_after == '' && inputs.seen_before == '') &&
-           (inputs.competition_id == 'ALL' || inputs.competition_id == matrix.competition_id)) }}
+        competition_id: ${{ fromJSON(github.event_name != 'workflow_dispatch' && '["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]' || ((inputs.seen_after != '' || inputs.seen_before != '') && '["TR1"]') || (inputs.competition_id == 'ALL' && '["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]') || format('["{0}"]', inputs.competition_id)) }}
     concurrency:
       group: skorhane-imported-player-details-${{ matrix.competition_id }}
       cancel-in-progress: false
