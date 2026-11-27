@@ -63,7 +63,9 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn('coverage_version: 2', self.worker)
         self.assertIn("leaderboardCoverage", self.worker)
         self.assertIn("payload=cs.", self.worker)
-        self.assertIn("no_matching_league_rows !== true", self.worker)
+        self.assertIn("completed_scope_keys: [scopeKey]", self.worker)
+        self.assertIn("tm_team_season_player_stats?select=tm_id", self.worker)
+        self.assertIn("tmDbRowsPaged(env, rosterQuery", self.worker)
 
     def test_worker_profile_refresh_warning_respects_normalized_rows(self):
         self.assertIn("normalizedCoverage && normalizedCoverage[recordType]", self.worker)
@@ -148,7 +150,9 @@ if __name__ == "__main__":
         self.assertIn('coverage_version: 2', self.worker)
         self.assertIn("leaderboardCoverage", self.worker)
         self.assertIn("payload=cs.", self.worker)
-        self.assertIn("no_matching_league_rows !== true", self.worker)
+        self.assertIn("completed_scope_keys: [scopeKey]", self.worker)
+        self.assertIn("tm_team_season_player_stats?select=tm_id", self.worker)
+        self.assertIn("tmDbRowsPaged(env, rosterQuery", self.worker)
 
     def test_worker_profile_refresh_warning_respects_normalized_rows(self):
         self.assertIn("normalizedCoverage && normalizedCoverage[recordType]", self.worker)
@@ -232,7 +236,9 @@ if __name__ == "__main__":
         self.assertIn('coverage_version: 2', self.worker)
         self.assertIn("leaderboardCoverage", self.worker)
         self.assertIn("payload=cs.", self.worker)
-        self.assertIn("no_matching_league_rows !== true", self.worker)
+        self.assertIn("completed_scope_keys: [scopeKey]", self.worker)
+        self.assertIn("tm_team_season_player_stats?select=tm_id", self.worker)
+        self.assertIn("tmDbRowsPaged(env, rosterQuery", self.worker)
 
     def test_worker_profile_refresh_warning_respects_normalized_rows(self):
         self.assertIn("normalizedCoverage && normalizedCoverage[recordType]", self.worker)
