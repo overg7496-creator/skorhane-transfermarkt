@@ -89,8 +89,8 @@ jobs:
         worker_shard: ${{ fromJSON((inputs.seen_after != '' || inputs.seen_before != '') && '[1]' || ((github.event_name != 'workflow_dispatch' || inputs.worker_shard == 'ALL') && '[1,2,3,4,5]') || format('[{0}]', inputs.worker_shard)) }}
     concurrency:
       group: skorhane-imported-player-details-${{ matrix.competition_id }}-shard-${{ matrix.worker_shard }}
-      # A newer run replaces an older job for the same league/shard, releasing stale shard locks.
-      cancel-in-progress: true
+      # Never cancel a running league/shard worker; queue the newer sweep so long player batches can finish.
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
