@@ -764,7 +764,7 @@ class SyncHelperTests(unittest.TestCase):
         requested_html = (ROOT / "SkorHane-HTML-kopyalanabilir.txt").read_text(encoding="utf-8")
         self.assertEqual(worker, requested_copy)
         self.assertEqual(html, requested_html)
-        self.assertIn('"pf49:"', worker)
+        self.assertIn('"pf50:"', worker)
         self.assertIn("const bundleAppearanceRows", worker)
         self.assertIn("const bundleAppearanceRows", requested_copy)
 
@@ -856,7 +856,7 @@ if __name__ == "__main__":
         self.assertNotIn("executionCtx.waitUntil(refreshPromise)", worker)
         self.assertNotIn("queueTmPlayerRefresh(", worker)
         self.assertIn('"preload-required"', worker)
-        self.assertIn('"pf49:"', worker)
+        self.assertIn('"pf50:"', worker)
         self.assertIn("const loading=false", html)
         self.assertIn("const freshStats=await api('/player?part=stats'+qs)", html)
         self.assertNotIn("const freshInfo=await api('/player?part=info'+qs)", html)
