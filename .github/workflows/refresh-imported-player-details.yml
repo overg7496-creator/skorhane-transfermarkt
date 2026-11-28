@@ -59,7 +59,8 @@ jobs:
   refresh-player-details:
     strategy:
       fail-fast: false
-      max-parallel: 45
+      # Keep Supabase's worker-view reads below the concurrency level that caused statement timeouts.
+      max-parallel: 12
       matrix:
         competition_id: ${{ fromJSON(github.event_name != 'workflow_dispatch' && '["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]' || ((inputs.seen_after != '' || inputs.seen_before != '') && '["TR1"]') || (inputs.competition_id == 'ALL' && '["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]') || format('["{0}"]', inputs.competition_id)) }}
         worker_shard: ${{ fromJSON((inputs.seen_after != '' || inputs.seen_before != '') && '[1]' || ((github.event_name != 'workflow_dispatch' || inputs.worker_shard == 'ALL') && '[1,2,3,4,5]') || format('[{0}]', inputs.worker_shard)) }}
