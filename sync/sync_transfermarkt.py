@@ -873,11 +873,25 @@ def load_pending_player_detail_candidates(
     page_size = 1000
     all_history_requested = os.getenv("TM_DETAIL_PRESEED_ALL_HISTORY", "").strip().lower() in {"1", "true", "yes"}
     worker_competition = os.getenv("TM_DETAIL_COMPETITION_ID", "").strip().upper()
+    worker_shard_text = os.getenv("TM_DETAIL_WORKER_SHARD", "").strip()
+    worker_shard: int | None = None
     if worker_competition and worker_competition not in DETAIL_WORKER_COMPETITIONS:
         raise RuntimeError(
             f"Geçersiz TM_DETAIL_COMPETITION_ID: {worker_competition}. "
             f"İzin verilen ligler: {', '.join(DETAIL_WORKER_COMPETITIONS)}"
         )
+    if worker_competition:
+        if not worker_shard_text:
+            raise RuntimeError(
+                "TM_DETAIL_COMPETITION_ID verildiğinde TM_DETAIL_WORKER_SHARD da verilmelidir "
+                "(1-5); takım grubu olmadan tüm lig kuyruğu başlatılmayacak."
+            )
+        try:
+            worker_shard = int(worker_shard_text)
+        except ValueError as exc:
+            raise RuntimeError("TM_DETAIL_WORKER_SHARD 1-5 arasında tam sayı olmalı.") from exc
+        if not 1 <= worker_shard <= 5:
+            raise RuntimeError("TM_DETAIL_WORKER_SHARD 1-5 arasında olmalı.")
     worker_view = False
     has_explicit_window = bool(squad_seen_after or squad_seen_before)
 
@@ -898,13 +912,12 @@ def load_pending_player_detail_candidates(
         use_preseed_view = True
         cohort_label = "açık kadro aktarım aralığı"
     elif worker_competition:
-        # Every historical player is assigned to exactly one league worker.
-        # This prevents two concurrent league jobs from fetching/upserting the
-        # same Transfermarkt player at the same time.
+        # Each historical player is assigned to one league and one latest club.
+        # Five balanced club shards split that league without overlapping players.
         squad_filter = ""
         use_preseed_view = True
         worker_view = True
-        cohort_label = f"{worker_competition} işçisine atanmış tarihî oyuncular"
+        cohort_label = f"{worker_competition} / takım grubu {worker_shard} tarihî oyuncuları"
     elif all_history_requested:
         # The SQL view limits this to TR1/TR2/TR3A/TR3B/GB1/ES1/L1/IT1/FR1
         # and season starts 2022-2026; it includes completed rows for accurate
@@ -921,8 +934,9 @@ def load_pending_player_detail_candidates(
     while True:
         if worker_view:
             query = (
-                f"tm_detail_preseed_candidates_by_worker?select={select}"
+                f"tm_detail_preseed_candidates_by_team_worker?select={select}"
                 f"&worker_competition_id=eq.{quote(worker_competition, safe='')}"
+                f"&worker_shard_id=eq.{worker_shard}"
                 f"&order=tm_id.asc&limit={page_size}&offset={offset}"
             )
         elif use_preseed_view:
@@ -1607,11 +1621,13 @@ def sync_felipeall(
                     "seen_before": squad_seen_before,
                 }
             else:
-                # Resume the same league partition; never restart all nine workers
-                # when a single league reaches its safe runtime limit.
+                # Resume the same league partition and same team shard; never restart
+                # all 45 workers when one shard reaches its safe runtime limit.
                 worker_competition = os.getenv("TM_DETAIL_COMPETITION_ID", "").strip().upper()
+                worker_shard = os.getenv("TM_DETAIL_WORKER_SHARD", "").strip()
                 continuation_inputs = (
-                    {"competition_id": worker_competition} if worker_competition else {}
+                    {"competition_id": worker_competition, "worker_shard": worker_shard}
+                    if worker_competition and worker_shard else {}
                 )
             dispatched = dispatch_refresh_details_continuation(
                 workflow_file=continuation_workflow,

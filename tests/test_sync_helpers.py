@@ -454,6 +454,7 @@ class SyncHelperTests(unittest.TestCase):
             patch.object(sync.time, "monotonic", side_effect=[0.0, 1.0]),
             patch.dict(os.environ, {
                 "TM_DETAIL_COMPETITION_ID": "GB1",
+                "TM_DETAIL_WORKER_SHARD": "3",
                 "TM_DETAIL_MAX_RUNTIME_SECONDS": "0",
                 "TM_DETAIL_CONTINUATION_WORKFLOW": "refresh-imported-player-details.yml",
                 "TM_DETAIL_SQUAD_SEEN_AFTER": "",
@@ -464,7 +465,7 @@ class SyncHelperTests(unittest.TestCase):
 
         dispatch.assert_called_once_with(
             workflow_file="refresh-imported-player-details.yml",
-            inputs={"competition_id": "GB1"},
+            inputs={"competition_id": "GB1", "worker_shard": "3"},
         )
 
     def test_detail_aggregate_freshness_includes_old_and_unfinished_players(self):
@@ -489,12 +490,14 @@ class SyncHelperTests(unittest.TestCase):
             patch.dict(os.environ, {
                 "TM_DETAIL_PRESEED_ALL_HISTORY": "true",
                 "TM_DETAIL_COMPETITION_ID": "TR1",
+                "TM_DETAIL_WORKER_SHARD": "2",
             }),
         ):
             self.assertEqual(sync.load_pending_player_detail_candidates(), [])
         query = fetch.call_args.args[0]
-        self.assertIn("tm_detail_preseed_candidates_by_worker", query)
+        self.assertIn("tm_detail_preseed_candidates_by_team_worker", query)
         self.assertIn("worker_competition_id=eq.TR1", query)
+        self.assertIn("worker_shard_id=eq.2", query)
         self.assertNotIn("tm_detail_preseed_candidates?select", query)
 
     def test_history_detail_worker_rejects_unknown_league_code(self):
@@ -521,7 +524,10 @@ class SyncHelperTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("max-parallel: 9", workflow)
+        self.assertIn("max-parallel: 45", workflow)
+        self.assertIn("worker_shard: ${{ fromJSON(", workflow)
+        self.assertIn("TM_DETAIL_WORKER_SHARD: ${{ matrix.worker_shard }}", workflow)
+        self.assertIn("skorhane-imported-player-details-${{ matrix.competition_id }}-shard-${{ matrix.worker_shard }}", workflow)
         self.assertNotIn("TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}", workflow.split("- name: Validate detail worker and tests", 1)[1].split("- name: Start dedicated Transfermarkt API", 1)[0])
         validation_step = workflow.split("- name: Validate detail worker and tests", 1)[1].split("- name: Start dedicated Transfermarkt API", 1)[0]
         self.assertNotIn("TM_DETAIL_PRESEED_ALL_HISTORY", validation_step)
@@ -531,6 +537,28 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn('["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]', workflow)
         self.assertIn("format('[\"{0}\"]'", workflow)
         self.assertIn("TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}", workflow)
+
+
+    def test_team_shard_worker_requires_a_valid_shard(self):
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {
+            "TM_DETAIL_PRESEED_ALL_HISTORY": "true",
+            "TM_DETAIL_COMPETITION_ID": "TR1",
+        }, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "TM_DETAIL_WORKER_SHARD"):
+                sync.load_pending_player_detail_candidates()
+
+    def test_five_team_shard_migration_balances_teams_and_keeps_player_ownership_unique(self):
+        migration = (
+            ROOT / "database" / "015_five_team_detail_workers.sql"
+        ).read_text(encoding="utf-8").lower()
+        for competition in ("tr1", "tr2", "tr3a", "tr3b", "gb1", "es1", "l1", "it1", "fr1"):
+            self.assertIn("'" + competition + "'", migration)
+        self.assertIn("ntile(5)", migration)
+        self.assertIn("partition by em.tm_id", migration)
+        self.assertIn("where player_rank = 1", migration)
+        self.assertIn("worker_shard_id", migration)
 
     def test_backfill_queue_is_resumable_and_uses_time_guard(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
