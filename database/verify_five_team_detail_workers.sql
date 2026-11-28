@@ -1,19 +1,45 @@
--- Per-league assignment sizes. Team counts across the five shards must differ by at most one.
+-- Team allocation per league. All eligible clubs are counted, including clubs whose
+-- historical players are already owned by another league's unique-player partition.
+with team_pool as (
+  select
+    q.competition_id,
+    q.club_id
+  from public.tm_team_season_squads q
+  where q.competition_id in (
+    'TR1', 'TR2', 'TR3A', 'TR3B', 'GB1', 'ES1', 'L1', 'IT1', 'FR1'
+  )
+    and public.tm_leader_season_start_year(q.season_id) between 2022 and 2026
+    and nullif(trim(q.club_id), '') is not null
+  group by q.competition_id, q.club_id
+),
+team_shards as (
+  select
+    competition_id,
+    club_id,
+    ntile(5) over (
+      partition by competition_id
+      order by club_id
+    )::integer as worker_shard_id
+  from team_pool
+)
 select
-  worker_competition_id,
-  worker_shard_id,
-  max(competition_team_count)::integer as league_team_count,
-  count(distinct worker_club_id)::bigint as assigned_teams,
-  count(distinct tm_id)::bigint as assigned_players
-from public.tm_detail_preseed_candidates_by_team_worker
-group by worker_competition_id, worker_shard_id
+  s.competition_id,
+  s.worker_shard_id,
+  count(*)::bigint as assigned_teams,
+  count(distinct v.tm_id)::bigint as assigned_players
+from team_shards s
+left join public.tm_detail_preseed_candidates_by_team_worker v
+  on v.worker_competition_id = s.competition_id
+ and v.worker_shard_id = s.worker_shard_id
+ and v.worker_club_id = s.club_id
+group by s.competition_id, s.worker_shard_id
 order by
-  case worker_competition_id
+  case s.competition_id
     when 'TR1' then 1 when 'TR2' then 2 when 'TR3A' then 3
     when 'TR3B' then 4 when 'GB1' then 5 when 'ES1' then 6
     when 'L1' then 7 when 'IT1' then 8 when 'FR1' then 9 else 99
   end,
-  worker_shard_id;
+  s.worker_shard_id;
 
 -- Must return no rows: a player may be assigned to only one league/team shard.
 select tm_id, count(*) as worker_count
