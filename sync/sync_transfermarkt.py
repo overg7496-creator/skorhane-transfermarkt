@@ -368,14 +368,19 @@ def detail_aggregate_is_fresh(player: dict[str, Any], now: datetime | None = Non
 
 
 def player_detail_refresh_plan(tm_id: str, player: dict[str, Any]) -> set[str]:
-    """Return only missing or stale Felipe endpoint names for one player."""
-    record_types = ",".join(item[1] for endpoint, item in DETAIL_ENDPOINTS.items())
+    """Return only missing or stale endpoints based on the persisted source snapshots.
+
+    Team-worker views intentionally expose only lightweight roster columns, not the
+    large *_payload fields from tm_players. Therefore source_records.payload is the
+    authoritative place to inspect both freshness and response shape.
+    """
+    record_types = ",".join(item[1] for item in DETAIL_ENDPOINTS.values())
     rows = db_get(
-        "tm_source_records?select=record_type,record_key,fetched_at"
+        "tm_source_records?select=record_type,record_key,fetched_at,payload"
         f"&source=eq.felipeall&external_id=eq.{quote(str(tm_id))}"
         f"&record_type=in.({record_types})&order=fetched_at.desc&limit=100"
     )
-    fetched: dict[str, Any] = {}
+    snapshots: dict[str, dict[str, Any]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -383,15 +388,20 @@ def player_detail_refresh_plan(tm_id: str, player: dict[str, Any]) -> set[str]:
         # Current-season snapshots are keyed by season; ignore historical season keys.
         if record_type == "current_season_matches" and str(row.get("record_key") or "") != str(TM_SEASON):
             continue
-        # Query is newest-first; keep the latest checked snapshot per endpoint.
-        if record_type and record_type not in fetched:
-            fetched[record_type] = row.get("fetched_at")
+        # Query is newest-first; retain the newest payload and timestamp per endpoint.
+        if record_type and record_type not in snapshots:
+            snapshots[record_type] = {
+                "fetched_at": row.get("fetched_at"),
+                "payload": row.get("payload"),
+            }
+
     stale_days = max(1, int(os.getenv("TM_DETAIL_STALE_DAYS", "7")))
     cutoff = max(datetime.now(timezone.utc) - timedelta(days=stale_days), DETAIL_REPAIR_CUTOFF)
     due: set[str] = set()
-    for endpoint, (column, record_type, keys) in DETAIL_ENDPOINTS.items():
-        payload = player.get(column)
-        stamp = fetched.get(record_type)
+    for endpoint, (_column, record_type, keys) in DETAIL_ENDPOINTS.items():
+        snapshot = snapshots.get(record_type, {})
+        payload = snapshot.get("payload")
+        stamp = snapshot.get("fetched_at")
         fresh = False
         if stamp:
             try:
