@@ -561,7 +561,7 @@ class SyncHelperTests(unittest.TestCase):
             ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("max-parallel: 45", workflow)
-        self.assertIn("cancel-in-progress: true", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
         self.assertIn("five disjoint team shards", workflow)
         self.assertIn("needs: prepare-detail-worker-cache", workflow)
         self.assertIn("prepare-detail-worker-cache:", workflow)
