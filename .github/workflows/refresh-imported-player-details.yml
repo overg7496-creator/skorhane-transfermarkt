@@ -16,7 +16,7 @@ on:
         type: string
         default: ""
       competition_id:
-        description: "ALL seçilirse 9 lig paralel çalışır; tek lig seçilirse yalnızca o lig işçisi çalışır."
+        description: "ALL seçilirse 9 lig çalışır; tek lig seçilirse yalnızca o lig. Her lig 5 takım grubuna ayrılır."
         required: false
         type: choice
         options:
@@ -31,21 +31,34 @@ on:
           - IT1
           - FR1
         default: ALL
+      worker_shard:
+        description: "ALL beş takım grubunu çalıştırır; 1-5 seçimi yalnızca o grubu devam ettirir."
+        required: false
+        type: choice
+        options:
+          - ALL
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+        default: ALL
 permissions:
   contents: read
   actions: write
 
-# The matrix runs all nine league partitions at the same time, one dedicated worker per league.
-# An hourly sweep retries due players after temporary failures or interrupted runs.
+# The matrix runs five disjoint team shards for each of the nine leagues (45 workers).
+# Each player is assigned to exactly one league+club shard; hourly sweeps retry unfinished details.
 jobs:
   refresh-player-details:
     strategy:
       fail-fast: false
-      max-parallel: 9
+      max-parallel: 45
       matrix:
         competition_id: ${{ fromJSON(github.event_name != 'workflow_dispatch' && '["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]' || ((inputs.seen_after != '' || inputs.seen_before != '') && '["TR1"]') || (inputs.competition_id == 'ALL' && '["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]') || format('["{0}"]', inputs.competition_id)) }}
+        worker_shard: ${{ fromJSON((inputs.seen_after != '' || inputs.seen_before != '') && '[1]' || ((github.event_name != 'workflow_dispatch' || inputs.worker_shard == 'ALL') && '[1,2,3,4,5]') || format('[{0}]', inputs.worker_shard)) }}
     concurrency:
-      group: skorhane-imported-player-details-${{ matrix.competition_id }}
+      group: skorhane-imported-player-details-${{ matrix.competition_id }}-shard-${{ matrix.worker_shard }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -100,6 +113,7 @@ jobs:
           TM_MAX_PLAYERS_PER_RUN: "80"
           TM_DETAIL_PRESEED_ALL_HISTORY: "true"
           TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}
+          TM_DETAIL_WORKER_SHARD: ${{ matrix.worker_shard }}
           TM_DETAIL_MAX_RUNTIME_SECONDS: "14400"
           TM_DETAIL_CONTINUATION_WORKFLOW: refresh-imported-player-details.yml
           FELIPE_DELAY_MIN_SECONDS: "8.0"
