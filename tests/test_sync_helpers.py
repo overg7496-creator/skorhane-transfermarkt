@@ -336,27 +336,63 @@ class SyncHelperTests(unittest.TestCase):
         from datetime import datetime, timezone
         from unittest.mock import patch
 
-        player = {
-            "profile_payload": {"id": "123", "name": "Oyuncu"},
-            "stats_payload": {"stats": []},
-            "transfers_payload": {"transfers": []},
-            "market_value_payload": {"marketValueHistory": []},
-            "injuries_payload": {"injuries": []},
-            "absences_payload": {"absences": []},
-            "current_season_payload": {"matches": []},
-        }
+        # The worker view intentionally omits tm_players' large payload columns.
+        player = {"tm_id": "123", "name": "Oyuncu"}
         now = datetime.now(timezone.utc).isoformat()
+        payloads = {
+            "player_profile": {"id": "123", "name": "Oyuncu"},
+            "player_market_values": {"marketValueHistory": []},
+            "player_transfers": {"transfers": []},
+            "player_stats": {"stats": []},
+            "player_injuries": {"injuries": []},
+            "player_absences": {"absences": []},
+            "current_season_matches": {"matches": []},
+        }
         records = [
             {
                 "record_type": item[1],
                 "record_key": str(sync.TM_SEASON) if item[1] == "current_season_matches" else "",
                 "fetched_at": now,
+                "payload": payloads[item[1]],
+            }
+            for item in sync.DETAIL_ENDPOINTS.values()
+        ]
+        with patch.object(sync, "db_get", return_value=records) as get:
+            due = sync.player_detail_refresh_plan("123", player)
+        self.assertEqual(due, set())
+        self.assertIn("payload", get.call_args.args[0])
+
+    def test_detail_refresh_plan_uses_source_payload_even_without_player_payload_columns(self):
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import patch
+
+        now = datetime.now(timezone.utc)
+        player = {"tm_id": "123", "name": "Oyuncu"}
+        payloads = {
+            "player_profile": {"id": "123", "name": "Oyuncu"},
+            "player_market_values": {"marketValueHistory": [{"value": 1000000}]},
+            "player_transfers": {"transfers": [{"id": "t1"}]},
+            "player_stats": {"stats": [{"season": "2026"}]},
+            "player_injuries": {"injuries": []},
+            "player_absences": {"absences": []},
+            "current_season_matches": {"matches": [], "stats": []},
+        }
+        records = [
+            {
+                "record_type": item[1],
+                "record_key": str(sync.TM_SEASON) if item[1] == "current_season_matches" else "",
+                "fetched_at": now.isoformat(),
+                "payload": payloads[item[1]],
             }
             for item in sync.DETAIL_ENDPOINTS.values()
         ]
         with patch.object(sync, "db_get", return_value=records):
-            due = sync.player_detail_refresh_plan("123", player)
-        self.assertEqual(due, set())
+            self.assertEqual(sync.player_detail_refresh_plan("123", player), set())
+
+        # A stale snapshot must still be refreshed, even when it has useful rows.
+        records[1]["fetched_at"] = (now - timedelta(days=10)).isoformat()
+        with patch.object(sync, "db_get", return_value=records):
+            self.assertEqual(sync.player_detail_refresh_plan("123", player), {"market_value"})
 
     def test_imported_detail_queue_rejects_incomplete_or_reversed_window(self):
         with self.assertRaisesRegex(RuntimeError, "hem başlangıç hem bitiş"):
