@@ -49,6 +49,7 @@ on:
       - "database/015_five_team_detail_workers.sql"
       - "database/016_latest_season_detail_workers.sql"
       - "database/017_detail_worker_candidate_cache.sql"
+      - ".github/workflows/refresh-imported-player-details.yml"
 
 permissions:
   contents: read
@@ -81,14 +82,15 @@ jobs:
     needs: prepare-detail-worker-cache
     strategy:
       fail-fast: false
-      # Keep Supabase's worker-view reads below the concurrency level that caused statement timeouts.
-      max-parallel: 12
+      # The indexed worker cache makes the cohort lookup lightweight; keep all 45 league/shard workers eligible to run together.
+      max-parallel: 45
       matrix:
         competition_id: ${{ fromJSON(github.event_name != 'workflow_dispatch' && '["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]' || ((inputs.seen_after != '' || inputs.seen_before != '') && '["TR1"]') || (inputs.competition_id == 'ALL' && '["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]') || format('["{0}"]', inputs.competition_id)) }}
         worker_shard: ${{ fromJSON((inputs.seen_after != '' || inputs.seen_before != '') && '[1]' || ((github.event_name != 'workflow_dispatch' || inputs.worker_shard == 'ALL') && '[1,2,3,4,5]') || format('[{0}]', inputs.worker_shard)) }}
     concurrency:
       group: skorhane-imported-player-details-${{ matrix.competition_id }}-shard-${{ matrix.worker_shard }}
-      cancel-in-progress: false
+      # A newer run replaces an older job for the same league/shard, releasing stale shard locks.
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
