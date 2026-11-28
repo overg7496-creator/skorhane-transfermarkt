@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       competitions:
-        description: "Dokuz lig kodu: Türkiye (TR1, TR2, TR3A, TR3B) + İngiltere, İspanya, Almanya, İtalya, Fransa"
+        description: "On iki lig kodu: Türkiye (TR1, TR2, TR3A, TR3B, TR4A, TR4B, TR4C) + İngiltere, İspanya, Almanya, İtalya, Fransa"
         required: true
         type: string
-        default: "TR1,TR2,TR3A,TR3B,GB1,ES1,L1,IT1,FR1"
+        default: "TR1,TR2,TR3A,TR3B,TR4A,TR4B,TR4C,GB1,ES1,L1,IT1,FR1"
       seasons:
         description: "Sezon başlangıç yılları; her sezon ayrı ayrı işlenir."
         required: true
@@ -46,7 +46,7 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       FELIPE_API_BASE: http://127.0.0.1:8000
-      TM_STATS_COMPETITIONS: ${{ github.event.inputs.competitions || 'TR1,TR2,TR3A,TR3B,GB1,ES1,L1,IT1,FR1' }}
+      TM_STATS_COMPETITIONS: ${{ github.event.inputs.competitions || 'TR1,TR2,TR3A,TR3B,TR4A,TR4B,TR4C,GB1,ES1,L1,IT1,FR1' }}
       TM_STATS_SEASONS: ${{ github.event.inputs.seasons || '2022,2023,2024,2025,2026' }}
       TM_STATS_FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
       TM_STATS_CONTINUE_COUNT: ${{ github.event.inputs.continue_count || '0' }}

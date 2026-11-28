@@ -1,6 +1,6 @@
 -- SkorHane: per-league player detail completion dashboard.
 -- Apply after 011_detail_preseed_scope.sql and the core schema migrations.
--- The cohort matches the detail preseed job: nine leagues, season starts
+-- The cohort matches the detail preseed job: twelve Transfermarkt competitions, season starts
 -- 2022-2026, one unique player per league (not one row per season).
 --
 -- A section is "completed" when its source endpoint has a saved snapshot newer
@@ -38,7 +38,7 @@ league_members as materialized (
     q.tm_id
   from public.tm_team_season_squads q
   where q.competition_id in (
-    'TR1', 'TR2', 'TR3A', 'TR3B',
+    'TR1', 'TR2', 'TR3A', 'TR3B', 'TR4A', 'TR4B', 'TR4C',
     'GB1', 'ES1', 'L1', 'IT1', 'FR1'
   )
     and public.tm_leader_season_start_year(q.season_id) between 2022 and 2026

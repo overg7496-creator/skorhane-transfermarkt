@@ -35,7 +35,7 @@ if not LOG.handlers:
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     LOG.addHandler(handler)
 
-DEFAULT_COMPETITIONS = ["TR1", "TR2", "TR3A", "TR3B", "GB1", "ES1", "L1", "IT1", "FR1"]
+DEFAULT_COMPETITIONS = ["TR1", "TR2", "TR3A", "TR3B", "TR4A", "TR4B", "TR4C", "GB1", "ES1", "L1", "IT1", "FR1"]
 DEFAULT_SEASONS = ["2022", "2023", "2024", "2025", "2026"]
 MAX_FAILURE_ATTEMPTS = max(1, int(os.getenv("TM_STATS_MAX_FAILURE_ATTEMPTS", "3")))
 MAX_PLAYER_REQUESTS = max(1, int(os.getenv("TM_STATS_MAX_PLAYER_REQUESTS_PER_RUN", "1200")))

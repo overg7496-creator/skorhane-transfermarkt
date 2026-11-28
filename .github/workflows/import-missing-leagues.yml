@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       tm_leagues:
-        description: "Transfermarkt lig kodları; ilk sırada ES1 ve GB1 bulunur. Ek lig kodlarını virgülle ekleyebilirsin."
+        description: "Transfermarkt lig kodları; TFF 3. Lig grupları TR4A/TR4B/TR4C dahildir. Ek lig kodlarını virgülle ekleyebilirsin."
         required: true
         type: string
-        default: "TR1,TR2,TR3A,TR3B,GB1,ES1,L1,IT1,FR1"
+        default: "TR1,TR2,TR3A,TR3B,TR4A,TR4B,TR4C,GB1,ES1,L1,IT1,FR1"
       tm_seasons:
         description: "Sezon başlangıç yılları; güncel sezon önce, geçmiş sezonlar sonra."
         required: true
@@ -36,7 +36,7 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       FELIPE_API_BASE: http://127.0.0.1:8000
-      TM_LEAGUES: ${{ github.event.inputs.tm_leagues || 'TR1,TR2,TR3A,TR3B,GB1,ES1,L1,IT1,FR1' }}
+      TM_LEAGUES: ${{ github.event.inputs.tm_leagues || 'TR1,TR2,TR3A,TR3B,TR4A,TR4B,TR4C,GB1,ES1,L1,IT1,FR1' }}
       TM_SEASONS: ${{ github.event.inputs.tm_seasons || '2026,2025,2024,2023,2022' }}
       TM_SEASON: "2026"
       TM_CONTINUE_COUNT: ${{ github.event.inputs.continue_count || '0' }}
