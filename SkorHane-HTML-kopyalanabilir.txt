@@ -503,10 +503,10 @@ const WORKER_URL='https://skor3.overg7496.workers.dev';
 const LIVE=['1H','2H','ET','BT','P','LIVE','INT','SUSP'], HT=['HT'], DONE=['FT','AET','PEN','AWD','WO'], NS=['NS','TBD'];
 
 /* Önemli ligler (API-Football lig numaraları) bu sırayla en üstte görünür */
-const PRIORITY=[203,39,140,78,135,2,3,848,61,206,204,45,48,143,81,137,88,94,1,4,5,40,179,144,253,307,71,128,13];
-const LNAME={203:'Süper Lig',39:'Premier Lig',140:'La Liga',78:'Bundesliga',135:'Serie A',61:'Ligue 1',2:'UEFA Şampiyonlar Ligi',3:'UEFA Avrupa Ligi',848:'UEFA Konferans Ligi',206:'Türkiye Kupası',204:'TFF 1. Lig',88:'Eredivisie',94:'Liga Portugal',40:'Championship',253:'MLS',307:'Suudi Pro Lig',71:'Brezilya Serie A',128:'Arjantin Ligi',1:'Dünya Kupası',4:'Avrupa Şampiyonası',5:'UEFA Uluslar Ligi','uefa.nations':'UEFA Uluslar Ligi','uefa.euro':'Avrupa Şampiyonası','fifa.world':'Dünya Kupası'};
-const STL=[['tur.1','Süper Lig'],['tur.2','TFF 1. Lig'],['eng.1','Premier Lig'],['eng.2','Championship'],['esp.1','La Liga'],['ger.1','Bundesliga'],['ita.1','Serie A'],['fra.1','Ligue 1'],['ned.1','Eredivisie'],['por.1','Liga Portugal'],['uefa.champions','Şampiyonlar Ligi'],['uefa.europa','Avrupa Ligi'],['uefa.europa.conf','Konferans Ligi'],['usa.1','MLS'],['ksa.1','Suudi Pro Lig'],['bra.1','Brezilya Serie A'],['arg.1','Arjantin Ligi']];
-const rank=L=>{const i=PRIORITY.indexOf(L.id);return i<0?1000:i};
+const PRIORITY=[203,204,39,140,78,135,2,3,848,61,206,45,48,143,81,137,88,94,1,4,5,40,179,144,253,307,71,128,13,318,321];
+const LNAME={203:'Süper Lig',204:'TFF 1. Lig',39:'Premier Lig',140:'La Liga',78:'Bundesliga',135:'Serie A',61:'Ligue 1',2:'UEFA Şampiyonlar Ligi',3:'UEFA Avrupa Ligi',848:'UEFA Konferans Ligi',206:'Türkiye Kupası',318:'TFF 2. Lig',321:'TFF 3. Lig',88:'Eredivisie',94:'Liga Portugal',40:'Championship',253:'MLS',307:'Suudi Pro Lig',71:'Brezilya Serie A',128:'Arjantin Ligi',1:'Dünya Kupası',4:'Avrupa Şampiyonası',5:'UEFA Uluslar Ligi','uefa.nations':'UEFA Uluslar Ligi','uefa.euro':'Avrupa Şampiyonası','fifa.world':'Dünya Kupası'};
+const STL=[['tur.1','Süper Lig'],['tur.2','TFF 1. Lig'],['af-318','TFF 2. Lig'],['af-321','TFF 3. Lig'],['eng.1','Premier Lig'],['eng.2','Championship'],['esp.1','La Liga'],['ger.1','Bundesliga'],['ita.1','Serie A'],['fra.1','Ligue 1'],['ned.1','Eredivisie'],['por.1','Liga Portugal'],['uefa.champions','Şampiyonlar Ligi'],['uefa.europa','Avrupa Ligi'],['uefa.europa.conf','Konferans Ligi'],['usa.1','MLS'],['ksa.1','Suudi Pro Lig'],['bra.1','Brezilya Serie A'],['arg.1','Arjantin Ligi']];
+const rank=L=>{const id=Number(L&&L.id);const i=PRIORITY.indexOf(id);return i<0?1000:i};
 
 function loadSavedFavorites(){try{const saved=JSON.parse(localStorage.getItem('favs')||'[]');return Array.isArray(saved)?saved.map(String):[]}catch(_){return []}}
 const state={imp:false,loading:false,requesting:false,partial:0,date:new Date(),tab:'all',q:'',data:[],favs:new Set(loadSavedFavorites()),prev:{},loadedAt:0};
@@ -3133,6 +3133,7 @@ function loadLeagueData(my){
     my.tmLeagueDataLoading=false;
     my.seasons=db.seasons&&db.seasons.length?db.seasons:my.seasons||[];
     my.data=my.data||{code:my.code,name:my.name,season,seasons:my.seasons,goals:[],assists:[],fixtures:[],tables:[],errors:{}};
+    if(Array.isArray(db.standings)&&db.standings.length)my.data.tables=db.standings;
     const goalRows=tmLeagueMetricRows(my,'goals'),assistRows=tmLeagueMetricRows(my,'assists');
     if(goalRows!==null)my.data.goals=goalRows;
     if(assistRows!==null)my.data.assists=assistRows;
@@ -3167,7 +3168,8 @@ function loadLeagueData(my){
       goals:goalRows!==null?goalRows:(Array.isArray(local.goals)&&local.goals.length?local.goals:(j.goals||[])),
       assists:assistRows!==null?assistRows:(Array.isArray(local.assists)&&local.assists.length?local.assists:(j.assists||[])),
       seasons:db&&db.seasons&&db.seasons.length?db.seasons:(j.seasons||[]),
-      fixtures:local.fixtures||j.fixtures||[],tables:local.tables||j.tables||[],
+      fixtures:local.fixtures&&local.fixtures.length?local.fixtures:(j.fixtures||[]),
+      tables:(db&&Array.isArray(db.standings)&&db.standings.length?db.standings:(local.tables&&local.tables.length?local.tables:(j.tables||[]))),
       errors:{...(j.errors||{}),...(local.errors||{})}};
     my.seasons=my.data.seasons||my.seasons||[];
     renderLeague();
@@ -3470,8 +3472,8 @@ let drawerOpen=false,drawerView='home';
 const currentLang=()=>localStorage.getItem('canliskor.language')||'tr';
 const currentTheme=()=>localStorage.getItem('canliskor.theme')||'dark';
 const currentSoundSetting=()=>soundsEnabled()?'on':'off';
-const LEAGUE_PNGS={'eng.1':'https://media.api-sports.io/football/leagues/39.png','esp.1':'https://media.api-sports.io/football/leagues/140.png','ger.1':'https://media.api-sports.io/football/leagues/78.png','ita.1':'https://media.api-sports.io/football/leagues/135.png','fra.1':'https://media.api-sports.io/football/leagues/61.png','tur.1':'https://media.api-sports.io/football/leagues/203.png','aut.1':'https://media.api-sports.io/football/leagues/218.png','aut.2':'https://media.api-sports.io/football/leagues/219.png','bel.1':'https://media.api-sports.io/football/leagues/144.png','bel.2':'https://media.api-sports.io/football/leagues/145.png','uefa.champions':'https://media.api-sports.io/football/leagues/2.png','uefa.europa':'https://media.api-sports.io/football/leagues/3.png','uefa.europa.conf':'https://media.api-sports.io/football/leagues/848.png','uefa.nations':'https://media.api-sports.io/football/leagues/5.png','uefa.euro':'https://media.api-sports.io/football/leagues/4.png','fifa.world':'https://media.api-sports.io/football/leagues/1.png','tur.cup':'https://media.api-sports.io/football/leagues/206.png','tur.2':'https://media.api-sports.io/football/leagues/204.png','eng.fa':'https://media.api-sports.io/football/leagues/45.png','eng.league_cup':'https://media.api-sports.io/football/leagues/48.png','esp.copa_del_rey':'https://media.api-sports.io/football/leagues/143.png','ita.coppa_italia':'https://media.api-sports.io/football/leagues/137.png','ger.dfb_pokal':'https://media.api-sports.io/football/leagues/81.png'};
-const LEAGUE_ID_PNGS={1:LEAGUE_PNGS['fifa.world'],2:LEAGUE_PNGS['uefa.champions'],3:LEAGUE_PNGS['uefa.europa'],4:LEAGUE_PNGS['uefa.euro'],5:LEAGUE_PNGS['uefa.nations'],39:LEAGUE_PNGS['eng.1'],61:LEAGUE_PNGS['fra.1'],78:LEAGUE_PNGS['ger.1'],135:LEAGUE_PNGS['ita.1'],140:LEAGUE_PNGS['esp.1'],203:LEAGUE_PNGS['tur.1'],218:LEAGUE_PNGS['aut.1'],219:LEAGUE_PNGS['aut.2'],144:LEAGUE_PNGS['bel.1'],145:LEAGUE_PNGS['bel.2'],848:LEAGUE_PNGS['uefa.europa.conf'],206:LEAGUE_PNGS['tur.cup'],204:LEAGUE_PNGS['tur.2'],45:LEAGUE_PNGS['eng.fa'],48:LEAGUE_PNGS['eng.league_cup'],143:LEAGUE_PNGS['esp.copa_del_rey'],137:LEAGUE_PNGS['ita.coppa_italia'],81:LEAGUE_PNGS['ger.dfb_pokal']};
+const LEAGUE_PNGS={'af-318':'https://media.api-sports.io/football/leagues/318.png','af-321':'https://media.api-sports.io/football/leagues/321.png','eng.1':'https://media.api-sports.io/football/leagues/39.png','esp.1':'https://media.api-sports.io/football/leagues/140.png','ger.1':'https://media.api-sports.io/football/leagues/78.png','ita.1':'https://media.api-sports.io/football/leagues/135.png','fra.1':'https://media.api-sports.io/football/leagues/61.png','tur.1':'https://media.api-sports.io/football/leagues/203.png','aut.1':'https://media.api-sports.io/football/leagues/218.png','aut.2':'https://media.api-sports.io/football/leagues/219.png','bel.1':'https://media.api-sports.io/football/leagues/144.png','bel.2':'https://media.api-sports.io/football/leagues/145.png','uefa.champions':'https://media.api-sports.io/football/leagues/2.png','uefa.europa':'https://media.api-sports.io/football/leagues/3.png','uefa.europa.conf':'https://media.api-sports.io/football/leagues/848.png','uefa.nations':'https://media.api-sports.io/football/leagues/5.png','uefa.euro':'https://media.api-sports.io/football/leagues/4.png','fifa.world':'https://media.api-sports.io/football/leagues/1.png','tur.cup':'https://media.api-sports.io/football/leagues/206.png','tur.2':'https://media.api-sports.io/football/leagues/204.png','eng.fa':'https://media.api-sports.io/football/leagues/45.png','eng.league_cup':'https://media.api-sports.io/football/leagues/48.png','esp.copa_del_rey':'https://media.api-sports.io/football/leagues/143.png','ita.coppa_italia':'https://media.api-sports.io/football/leagues/137.png','ger.dfb_pokal':'https://media.api-sports.io/football/leagues/81.png'};
+const LEAGUE_ID_PNGS={318:LEAGUE_PNGS['af-318'],321:LEAGUE_PNGS['af-321'],1:LEAGUE_PNGS['fifa.world'],2:LEAGUE_PNGS['uefa.champions'],3:LEAGUE_PNGS['uefa.europa'],4:LEAGUE_PNGS['uefa.euro'],5:LEAGUE_PNGS['uefa.nations'],39:LEAGUE_PNGS['eng.1'],61:LEAGUE_PNGS['fra.1'],78:LEAGUE_PNGS['ger.1'],135:LEAGUE_PNGS['ita.1'],140:LEAGUE_PNGS['esp.1'],203:LEAGUE_PNGS['tur.1'],218:LEAGUE_PNGS['aut.1'],219:LEAGUE_PNGS['aut.2'],144:LEAGUE_PNGS['bel.1'],145:LEAGUE_PNGS['bel.2'],848:LEAGUE_PNGS['uefa.europa.conf'],206:LEAGUE_PNGS['tur.cup'],204:LEAGUE_PNGS['tur.2'],45:LEAGUE_PNGS['eng.fa'],48:LEAGUE_PNGS['eng.league_cup'],143:LEAGUE_PNGS['esp.copa_del_rey'],137:LEAGUE_PNGS['ita.coppa_italia'],81:LEAGUE_PNGS['ger.dfb_pokal']};
 const leagueLogo=L=>{const names=[L&&L.code,L&&L.id,L&&L.name].filter(x=>x!=null).map(x=>String(x).trim());for(const k of names){if(LEAGUE_PNGS[k])return LEAGUE_PNGS[k];if(LEAGUE_PNGS[k.toLowerCase()])return LEAGUE_PNGS[k.toLowerCase()]}const idLogo=LEAGUE_ID_PNGS[Number(L&&L.id)];if(idLogo)return idLogo;if(L&&L.logo)return L.logo;const code=L&&L.code;return code?`https://a.espncdn.com/i/leaguelogos/soccer/500/${code}.png`:''};
 const UI_EN={
   'Menü':'Menu','Ana Sayfa':'Home','Ayarlar':'Settings','Simüle':'Simulate','Takımlar':'Teams','Ligler':'Leagues','Oyuncular':'Players',
@@ -3996,18 +3998,43 @@ async function loadPitchPlayerCareer(my){
   renderPlayer();
 }
 const playerCacheTmId=value=>String(value||'').replace(/\D/g,'');
-const playerStatsCacheKey=tmId=>'skorhane.playerstats.tm.v14.'+playerCacheTmId(tmId);
-const playerInfoCacheKey=tmId=>'skorhane.playerinfo.tm.v7.'+playerCacheTmId(tmId);
-function readPlayerInfoCache(tmId){try{const id=playerCacheTmId(tmId);if(!id)return null;const raw=localStorage.getItem(playerInfoCacheKey(id));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<60*60e3&&x.data&&typeof x.data==='object'&&x.data.bio&&typeof x.data.bio==='object'?x.data:null}catch(_){return null}}
+const playerStatsCacheKey=tmId=>'skorhane.playerstats.tm.v15.'+playerCacheTmId(tmId);
+const playerInfoCacheKey=tmId=>'skorhane.playerinfo.tm.v8.'+playerCacheTmId(tmId);
+function readPlayerInfoCache(tmId){try{const id=playerCacheTmId(tmId);if(!id)return null;const raw=localStorage.getItem(playerInfoCacheKey(id))||localStorage.getItem('skorhane.playerinfo.tm.v7.'+id);if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<60*60e3&&x.data&&typeof x.data==='object'&&x.data.bio&&typeof x.data.bio==='object'?x.data:null}catch(_){return null}}
 function savePlayerInfoCache(tmId,data){try{const id=playerCacheTmId(tmId);if(id&&data&&typeof data==='object'&&data.bio&&typeof data.bio==='object')localStorage.setItem(playerInfoCacheKey(id),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
-function readPlayerStatsCache(tmId){try{const id=playerCacheTmId(tmId);if(!id)return null;const raw=localStorage.getItem(playerStatsCacheKey(id));if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<10*60e3&&x.data&&Array.isArray(x.data.seasons)?x.data:null}catch(_){return null}}
+function readPlayerStatsCache(tmId){try{const id=playerCacheTmId(tmId);if(!id)return null;const raw=localStorage.getItem(playerStatsCacheKey(id))||localStorage.getItem('skorhane.playerstats.tm.v14.'+id);if(!raw)return null;const x=JSON.parse(raw);return x&&Date.now()-Number(x.savedAt||0)<10*60e3&&x.data&&Array.isArray(x.data.seasons)?x.data:null}catch(_){return null}}
 function savePlayerStatsCache(tmId,data){try{const id=playerCacheTmId(tmId);if(id&&data&&Array.isArray(data.seasons))localStorage.setItem(playerStatsCacheKey(id),JSON.stringify({savedAt:Date.now(),data}))}catch(_){}}
 function loadPitchPlayerRecent(my){
-  if(!my||my!==cur||my.kind!=='player'||my.it.role==='coach')return;
+  if(!my||my!==cur||my.kind!=='player'||my.it.role==='coach'||!my.statsLoaded)return;
   my.pitchRecentMatches=Array.isArray(my.stats&&my.stats.recentMatches)?my.stats.recentMatches:[];
   my.pitchRecentLoading=false;my.pitchRecentLoaded=true;
-  my.pitchRecentError=my.pitchRecentMatches.length?'':'Supabase içinde bu oyuncuya bağlı maç detayı bulunamadı; maç puanı için bekleme yapılmadı.';
+  my.pitchRecentError=my.pitchRecentMatches.length?'':'Supabase içinde bu oyuncuya bağlı maç detayı bulunamadı.';
   renderPlayer();
+  if(my.pitchRecentEnrichmentAttempted)return;
+  const team=String(my.it.team||my.it.teamName||my.info&&my.info.bio&&my.info.bio['Şu Anki Takım']||'').trim();
+  const code=String(my.it.pitchCode||my.it.pitchLeagueCode||my.it.leagueCode||guessPitchCodeFromTeam(team)||my.prev&&my.prev.code||'').trim();
+  if(!team||!code){my.pitchRecentEnrichmentAttempted=true;return}
+  my.pitchRecentEnrichmentAttempted=true;
+  const params=new URLSearchParams({name:String(my.it.name||''),team,code,season:String(Number(my.it.pitchYear)||currentTeamSeason()),player:String(my.it.pitchId||''),limit:'13'});
+  api('/pitch-player-recent?'+params.toString()).then(result=>{
+    if(cur!==my)return;
+    const pitchRows=Array.isArray(result&&result.matches)?result.matches:[];
+    if(!pitchRows.length)return;
+    const base=Array.isArray(my.pitchRecentMatches)?my.pitchRecentMatches:[];
+    const used=new Set();
+    const merged=pitchRows.map(row=>{
+      const key=String(row.date||'').slice(0,10)+'|'+pitchClientTeamKey(row.opponent||'');
+      const match=base.find(item=>{
+        const rival=item.isHome===false?(item.home&&item.home.name):(item.away&&item.away.name);
+        return String(item.date||'').slice(0,10)+'|'+pitchClientTeamKey(rival||'')===key;
+      });
+      if(match)used.add(match);
+      return {...(match||{}),...row,goals:match&&match.goals!=null?match.goals:row.goals,assists:match&&match.assists!=null?match.assists:row.assists,minutes:match&&match.minutes!=null?match.minutes:row.minutes,rating:row.rating??(match&&match.rating)};
+    });
+    my.pitchRecentMatches=merged.concat(base.filter(item=>!used.has(item))).sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+    my.pitchRecentError='';
+    renderPlayer();
+  }).catch(()=>{});
 }
 async function loadPitchPlayerProfilePhoto(my){
   if(!my||my!==cur||my.kind!=='player'||my.it.role==='coach'||my.pitchProfilePhotoLoading||my.pitchProfilePhotoLoaded)return;
@@ -4051,6 +4078,7 @@ function openPlayer(it){
     if(Array.isArray(my.pitchCareerRows))mergePitchCareerIntoStats(my.stats,my.pitchCareerRows);
     renderPlayer();
     if(my.tab==='kariyer')maybeStartPitchPlayerCareer(my,j);
+    if(my.tab==='maclar')loadPitchPlayerRecent(my);
   }).catch(error=>{
     if(cur!==my)return;
     my.infoLoaded=true;my.statsLoaded=true;my.pitchRecentLoading=false;my.pitchRecentLoaded=true;
@@ -4162,6 +4190,61 @@ function playerRecentMatchCard(match){
   const rating=match.rating==null?'—':Number(match.rating).toFixed(1);
   return `<article class="player-recent-match"><div class="player-recent-date">${esc(date)}<small>${esc(match.league||'')}</small></div><div class="player-recent-teams"><span>${avatarT(home.logo,home.name)}<b>${esc(home.name||'')}</b></span><strong class="player-recent-score">${known?sh+' : '+sa:'— : —'}</strong><span>${avatarT(away.logo,away.name)}<b>${esc(away.name||'')}</b></span></div><div class="player-recent-stats"><span class="player-result ${resultClass}">${outcome||'—'}</span><span class="player-recent-stat-tile"><small>Puan</small><b>${rating}</b></span><span class="player-recent-stat-tile"><small>Gol</small><b>${match.goals==null?'—':match.goals}</b></span><span class="player-recent-stat-tile"><small>Asist</small><b>${match.assists==null?'—':match.assists}</b></span><span class="player-recent-stat-tile"><small>Dakika</small><b>${match.minutes==null?'—':match.minutes+"'"}</b></span></div></article>`;
 }
+function playerHistorySeasonLabel(value,fromDate){
+  const raw=String(value||'').trim().replace(/[–—]/g,'-');
+  let m=raw.match(/((?:19|20)[0-9]{2})\s*[/-]\s*((?:19|20)?[0-9]{2})/);
+  if(!m)m=raw.match(/([0-9]{2})\s*[/-]\s*([0-9]{2})/);
+  let year=m?Number(m[1]):0;if(year&&year<100)year+=year>=50?1900:2000;
+  if(!year&&fromDate){const d=new Date(String(fromDate).slice(0,10)+'T12:00:00Z');if(!Number.isNaN(d.getTime()))year=d.getUTCMonth()>=6?d.getUTCFullYear():d.getUTCFullYear()-1}
+  return year?String(year).slice(-2)+'-'+String(year+1).slice(-2):'';
+}
+function playerHistoryDate(value){
+  const m=String(value||'').match(/([0-9]{4})-([0-9]{2})-([0-9]{2})/);
+  return m?new Date(Date.UTC(Number(m[1]),Number(m[2])-1,Number(m[3]))).toLocaleDateString('tr-TR',{day:'2-digit',month:'short',year:'numeric'}):String(value||'');
+}
+function playerInjuryDays(item){
+  const n=Number(item&&item.days);if(item&&item.days!=null&&item.days!==''&&Number.isFinite(n))return Math.max(0,Math.round(n));
+  const a=new Date(String(item&&item.from_date||'').slice(0,10)+'T12:00:00Z'),b=new Date(String(item&&item.until_date||'').slice(0,10)+'T12:00:00Z');
+  if(Number.isNaN(a.getTime())||Number.isNaN(b.getTime())||b<a)return null;
+  return Math.round((b-a)/86400e3)+1;
+}
+function playerInjuryTitle(value){
+  let text=String(value||'Sakatlık kaydı');
+  const replacements=[
+    [/anterior cruciate ligament|\bACL\b/gi,'Ön çapraz bağ'],[/posterior cruciate ligament|\bPCL\b/gi,'Arka çapraz bağ'],[/cruciate ligament/gi,'çapraz bağ'],
+    [/hamstring/gi,'Arka adale'],[/calf injury|calf muscle/gi,'Baldır kası'],[/muscle injury|muscle fibre injury|muscle fiber injury/gi,'Kas sakatlığı'],
+    [/muscle (?:fibre|fiber)/gi,'kas lifi'],[/ankle injury|ankle sprain/gi,'Ayak bileği sakatlığı'],[/knee injury/gi,'Diz sakatlığı'],
+    [/shoulder injury/gi,'Omuz sakatlığı'],[/back injury/gi,'Sırt sakatlığı'],[/groin injury/gi,'Kasık sakatlığı'],
+    [/torn meniscus/gi,'Menisküs yırtığı'],[/illness/gi,'Hastalık'],[/thigh injury/gi,'Uyluk sakatlığı'],[/foot injury/gi,'Ayak sakatlığı'],
+    [/achilles tendon/gi,'Aşil tendonu'],[/unknown injury/gi,'Nedeni belirtilmeyen sakatlık'],
+    [/\bknee\b/gi,'diz'],[/\bankle\b/gi,'ayak bileği'],[/\bshoulder\b/gi,'omuz'],[/\bback\b/gi,'sırt'],
+    [/\bfoot\b/gi,'ayak'],[/\bthigh\b/gi,'uyluk'],[/\bcalf\b/gi,'baldır'],[/\bgroin\b/gi,'kasık'],
+    [/\bhip\b/gi,'kalça'],[/\belbow\b/gi,'dirsek'],[/\bwrist\b/gi,'bilek'],[/\bhand\b/gi,'el'],
+    [/\bhead\b/gi,'baş'],[/\bmuscle\b/gi,'kas'],[/\bproblems?\b/gi,'problemleri'],[/\binjury\b/gi,'sakatlığı'],
+    [/\bstrain\b/gi,'zorlanma'],[/\bsprain\b/gi,'burkulma'],[/\btear\b|\btorn\b|\bru(p|pt)ure\b/gi,'yırtık'],
+    [/\bcontusion\b|\bbruise\b/gi,'ezilme'],[/\bfracture\b/gi,'kırık'],[/\bconcussion\b/gi,'beyin sarsıntısı'],
+    [/\bswelling\b/gi,'şişlik'],[/\bbruising\b/gi,'morluk'],[/\binfection\b/gi,'enfeksiyon'],[/\bvirus\b/gi,'virüs'],
+    [/\bsoreness\b/gi,'ağrı'],[/\bknock\b/gi,'darbe'],[/\boperation\b|\bsurgery\b/gi,'ameliyat']
+  ];
+  for(const [pattern,replacement] of replacements)text=text.replace(pattern,replacement);
+  return text;
+}
+function playerMarketValueNumber(raw){
+  if(raw==null||raw==='')return null;
+  if(typeof raw==='number')return Number.isFinite(raw)?raw:null;
+  const source=String(raw).toLowerCase().replace(/eur|euro|€/g,'').trim();
+  const suffix=(source.match(/(bn|billion|mn|million|m|k)\s*$/)||[])[1]||'';
+  let cleaned=source.replace(/[^0-9,.-]/g,'');
+  if(suffix)cleaned=cleaned.replace(/\.(?=.*\.)/g,'').replace(',','.');
+  else cleaned=cleaned.replace(/[.,]/g,'');
+  const number=Number(cleaned);if(!Number.isFinite(number))return null;
+  return number*(suffix==='k'?1000:(suffix==='m'||suffix==='mn'||suffix==='million')?1e6:(suffix==='bn'||suffix==='billion')?1e9:1);
+}
+function playerMarketTrendIcon(direction){
+  if(!direction)return '';
+  const down=direction==='down';
+  return '<svg class="market-trend-icon '+(down?'down':'up')+'" viewBox="0 0 24 24" aria-hidden="true"><path d="'+(down?'M12 4v15m-7-7 7 7 7-7':'M12 20V5m-7 7 7-7 7 7')+'" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
 function myTeamFromBio(bio,it){return (it&& (it.team||it.teamName))||(bio&& (bio['Şu Anki Takım']||bio['Takım']))||''}
 function playerHTML(it,j,loadingStats,tab,f){
   const pl=(j&&j.player)||{},coach=it.role==='coach';
@@ -4187,8 +4270,10 @@ function playerHTML(it,j,loadingStats,tab,f){
     const marketValueText=String(bio['Piyasa Değeri']||'').trim();
     h+='<section class="player-bio-card player-market-value-card"><div class="player-summary-title"><b>Piyasa Değeri</b><small>Transfermarkt</small></div><div class="player-bio-grid"><div><small>Güncel değer</small><b>'+esc(marketValueText||'Henüz veri aktarılmadı')+'</b></div></div></section>';
     h+='<section class="player-form-card"><div class="player-summary-title"><b>Son 13 Maç Performansı</b><small>'+((rated.length)?'Ort. '+(rated.reduce((a,x)=>a+Number(x.rating),0)/rated.length).toFixed(1):'Supabase')+'</small></div>';
-    if(recent.length){h+='<div class="player-form-chart">'+recent.slice(0,13).reverse().map((match,index)=>{const value=match.rating==null?null:Number(match.rating),height=value==null?4:Math.max(8,Math.min(100,value*10));return `<div class="player-form-bar-wrap"><b>${value==null?'—':value.toFixed(1)}</b><span class="player-form-bar ${playerRatingBarClass(value)}" style="height:${height}%"></span><small>${index+1}</small></div>`}).join('')+'</div><div class="player-form-legend"><span>← Eski maç</span><span>Yeni maç →</span></div>';}else h+='<div class="empty">'+esc(playerNoDataMessage(j,cur.pitchRecentError||"Bu oyuncu için maç kaydı bulunamadı."))+'</div>';
-    h+='</section>';
+    if(recent.length){
+      h+='<div class="player-form-chart">'+recent.slice(0,13).reverse().map((match,index)=>{const value=match.rating==null?null:Number(match.rating),height=value==null?4:Math.max(8,Math.min(100,value*10));return '<div class="player-form-bar-wrap"><b>'+(value==null?'—':value.toFixed(1))+'</b><span class="player-form-bar '+playerRatingBarClass(value)+'" style="height:'+height+'%"></span><small>'+(index+1)+'</small></div>'}).join('')+'</div><div class="player-form-legend"><span>← Eski maç</span><span>Yeni maç →</span></div>';
+      h+='<div class="player-form-table-wrap"><table class="player-form-table"><thead><tr><th>Tarih</th><th>Rakip</th><th>Skor</th><th>Puan</th><th>Gol</th><th>Asist</th><th>Dakika</th></tr></thead><tbody>'+recent.slice(0,13).map(match=>{const opponent=match.isHome===false?(match.home&&match.home.name):(match.away&&match.away.name);const known=match.scoreHome!=null&&match.scoreAway!=null;const score=known?match.scoreHome+' - '+match.scoreAway:'—';return '<tr><td>'+esc(playerHistoryDate(match.date||''))+'</td><td>'+esc(trTeam(opponent||'Rakip belirtilmedi'))+'</td><td>'+score+'</td><td>'+(match.rating==null?'—':Number(match.rating).toFixed(1))+'</td><td>'+(match.goals==null?'—':match.goals)+'</td><td>'+(match.assists==null?'—':match.assists)+'</td><td>'+(match.minutes==null?'—':match.minutes)+'</td></tr>'}).join('')+'</tbody></table></div>';
+    }else h+='<div class="empty">'+esc(playerNoDataMessage(j,cur.pitchRecentError||"Bu oyuncu için maç kaydı bulunamadı."))+'</div>';
     const last=recent.slice(0,3);h+='<section class="player-recent-card"><div class="player-summary-title"><b>Son Maçlar</b><button type="button" data-pt="maclar">Tümünü gör ›</button></div>';
     if(last.length)h+=last.map(match=>playerRecentMatchCard(match)).join('');else h+='<div class="empty">'+esc(playerNoDataMessage(j,'Son maç kaydı bulunamadı.'))+'</div>';
     h+='</section>';
@@ -4209,36 +4294,53 @@ function playerHTML(it,j,loadingStats,tab,f){
     }else h+='<div class="empty">'+esc(recent.length?'Seçilen müsabakada maç kaydı bulunamadı.':playerNoDataMessage(j,cur.pitchRecentError||'Supabase içinde son maç kaydı bulunamadı.'))+'</div>';
   }else if(tab==='sakatliklar'&&!coach){
     const injuries=Array.isArray(j.injuries)?j.injuries:[];
+    const normalized=injuries.map(x=>({...x,_season:playerHistorySeasonLabel(x.season||x.season_id,x.from_date||x.fromDate||x.start),_days:playerInjuryDays(x)}));
+    const seasons=[...new Set(normalized.map(x=>x._season).filter(Boolean))].sort((a,b)=>Number(b.slice(0,2))-Number(a.slice(0,2)));
+    const selected=String(cur.injurySeason||'all');
+    const visible=selected==='all'?normalized:normalized.filter(x=>x._season===selected);
     h+='<section class="player-history-section"><div class="player-summary-title"><b>Sakatlık Geçmişi</b><small>Transfermarkt kayıtları</small></div>';
-    if(injuries.length)h+=injuries.map(x=>`<article class="player-history-row"><span class="player-history-mark injury-mark">+</span><div><b>${esc(x.injury||x.reason||x.type||'Sakatlık kaydı')}</b><small>${esc([x.from_date||x.start||'',x.until_date?'– '+x.until_date:(x.end?'– '+x.end:''),x.season?'Sezon '+x.season:'',x.days!=null?x.days+' gün':'',x.games_missed!=null?x.games_missed+' maç kaçırdı':''].filter(Boolean).join(' '))}</small></div></article>`).join('');
+    h+='<div class="player-injury-filter"><label for="playerInjurySeason">Sezon</label><select id="playerInjurySeason" data-injury-season><option value="all" '+(selected==='all'?'selected':'')+'>Tümü</option>'+seasons.map(s=>'<option value="'+esc(s)+'" '+(selected===s?'selected':'')+'>'+esc(s)+'</option>').join('')+'</select></div>';
+    if(visible.length)h+=visible.map(x=>{
+      const days=x._days,missed=x.games_missed==null||x.games_missed===''?null:Number(x.games_missed);
+      const dates=[x.from_date||x.start||'',x.until_date||x.end||''].filter(Boolean).map(playerHistoryDate);
+      const details=[dates.join(' – '),x._season?'Sezon '+x._season:''].filter(Boolean).join(' · ');
+      return '<article class="player-history-row player-injury-row"><span class="player-history-mark injury-mark">+</span><div class="player-injury-main"><b>'+esc(playerInjuryTitle(x.injury||x.reason||x.type))+'</b><small>'+esc(details)+'</small></div><div class="player-injury-badges"><span class="injury-pill"><b>'+(days==null?'—':days)+'</b><small>gün</small></span><span class="injury-pill"><b>'+(missed==null?'—':missed)+'</b><small>maç</small></span></div></article>';
+    }).join('');
     else h+='<div class="empty">'+esc(playerNoDataMessage(j,j.historyProviderAvailable?'Bu oyuncu için doğrulanmış sakatlık kaydı bulunamadı.':'Sakatlık kaydı henüz alınmadı.'))+'</div>';
+    if(selected!=='all'&&visible.length){
+      const daysKnown=visible.every(x=>x._days!=null),gamesKnown=visible.every(x=>x.games_missed!=null&&x.games_missed!=='');
+      const days=daysKnown?visible.reduce((sum,x)=>sum+Number(x._days||0),0):null;
+      const games=gamesKnown?visible.reduce((sum,x)=>sum+Number(x.games_missed||0),0):null;
+      h+='<div class="player-injury-total"><b>'+esc(selected)+' Toplam</b><span>'+(days==null?'—':days.toLocaleString('tr-TR'))+' gün</span><span>'+(games==null?'—':games.toLocaleString('tr-TR'))+' maç kaçırıldı</span></div>';
+    }
     h+='</section>';
   }else if(tab==='transferler'&&!coach){
     const transfers=Array.isArray(j.transfers)?j.transfers:[];
     h+='<section class="player-history-section"><div class="player-summary-title"><b>Transfer Geçmişi</b><small>Transfermarkt kayıtları</small></div>';
-    if(transfers.length)h+=transfers.map(x=>`<article class="player-history-row transfer-history-row"><span class="player-history-mark transfer-mark">⇄</span><div class="player-transfer-route"><b>${esc(trTeam(x.from||'Bilinmeyen takım'))}</b><span>→</span><b>${esc(trTeam(x.to||'Bilinmeyen takım'))}</b><small>${esc(x.date||'Tarih yok')} · ${esc(x.kind||'Detay belirtilmemiş')}${x.fee?' · '+esc(x.fee):''}</small></div></article>`).join('');
+    if(transfers.length)h+=transfers.map(x=>'<article class="player-history-row transfer-history-row"><span class="player-history-mark transfer-mark">⇄</span><div class="player-transfer-main"><div class="player-transfer-route">'+avatarT(x.fromLogo,x.from||'Bilinmeyen takım')+'<b>'+esc(trTeam(x.from||'Bilinmeyen takım'))+'</b><span>→</span>'+avatarT(x.toLogo,x.to||'Bilinmeyen takım')+'<b>'+esc(trTeam(x.to||'Bilinmeyen takım'))+'</b></div><small>'+esc([playerHistoryDate(x.date||'Tarih yok'),x.kind||'Transfer'].filter(Boolean).join(' · '))+'</small></div><div class="player-transfer-fee">'+esc(x.fee||'—')+'</div></article>').join('');
     else h+='<div class="empty">'+esc(playerNoDataMessage(j,j.historyProviderAvailable?'Bu oyuncu için doğrulanmış transfer kaydı bulunamadı.':'Transfer kaydı henüz alınmadı.'))+'</div>';
     h+='</section>';
   }else if(tab==='piyasa'&&!coach){
-    const history=Array.isArray(j.marketValueHistory)?j.marketValueHistory:[];
+    const history=(Array.isArray(j.marketValueHistory)?j.marketValueHistory:[]).slice().sort((a,b)=>String(b.date||b.valuation_date||b.valuationDate||'').localeCompare(String(a.date||a.valuation_date||a.valuationDate||'')));
     const formatMarketValue=value=>{
       if(value==null||value==='')return '—';
-      if(typeof value==='number'||/^\d+(?:\.\d+)?$/.test(String(value))){
-        return new Intl.NumberFormat('tr-TR',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(Number(value));
-      }
+      if(typeof value==='number'||/^[0-9]+(?:\\.[0-9]+)?$/.test(String(value)))return new Intl.NumberFormat('tr-TR',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(Number(value));
       return String(value);
     };
     h+='<section class="player-history-section"><div class="player-summary-title"><b>Piyasa Değeri Geçmişi</b><small>Transfermarkt kayıtları</small></div>';
-    if(history.length)h+=history.map(x=>{
+    if(history.length)h+=history.map((x,index)=>{
       const rawValue=x.display_value??x.displayValue??x.marketValueFormatted??x.market_value??x.marketValue??x.value_eur??x.value;
       const value=rawValue&&typeof rawValue==='object'?(rawValue.displayValue||rawValue.value||rawValue.amount||rawValue.text):rawValue;
+      const current=playerMarketValueNumber(x.value_eur??value);
+      const next=history[index+1];
+      const nextRaw=next&&(next.value_eur??next.marketValue??next.market_value??next.display_value??next.displayValue??next.value);
+      const older=playerMarketValueNumber(nextRaw&&typeof nextRaw==='object'?(nextRaw.displayValue||nextRaw.value||nextRaw.amount||nextRaw.text):nextRaw);
+      const direction=current==null||older==null||current===older?'':current<older?'down':'up';
       const clubRaw=x.clubName||x.club_name||x.club||'';
       const club=typeof clubRaw==='object'?(clubRaw.name||clubRaw.displayName||(clubRaw.id!=null?'Kulüp #'+clubRaw.id:'')):clubRaw;
-      const clubId=x.clubId??x.clubID??x.club_id;
-      const clubLabel=club||(clubId!=null?'Kulüp #'+clubId:'');
       const date=x.date||x.valuation_date||x.valuationDate||'Tarih yok';
       const age=x.age!=null?' · '+x.age+' yaş':'';
-      return '<article class="player-history-row"><span class="player-history-mark transfer-mark">€</span><div><b>'+esc(formatMarketValue(value))+'</b><small>'+esc([date,clubLabel].filter(Boolean).join(' · ')+age)+'</small></div></article>';
+      return '<article class="player-history-row player-market-value-row"><span class="player-history-mark transfer-mark">€</span><div><b>'+esc(formatMarketValue(value))+'</b><small>'+esc([playerHistoryDate(date),club].filter(Boolean).join(' · ')+age)+'</small></div>'+playerMarketTrendIcon(direction)+'</article>';
     }).join('');
     else h+='<div class="empty">'+esc(playerNoDataMessage(j,j.historyProviderAvailable?'Bu oyuncu için doğrulanmış piyasa değeri geçmişi bulunamadı.':'Piyasa değeri geçmişi henüz alınmadı.'))+'</div>';
     h+='</section>';
@@ -4523,7 +4625,7 @@ document.addEventListener('click',e=>{
   const ro=e.target.closest('[data-roster]');
   if(ro&&cur&&cur.kind==='team'&&cur.roster){const p=cur.roster[+ro.dataset.roster];if(p)openPlayer({name:p.name,team:cur.name,pos:p.pos,pitchId:p.pitchId||p.id||'',logo:p.photo,photos:p.photos||[],pitchCode:ro.dataset.pitchCode||cur.code||'',af:p.afPlayerId||p.af||'',espn:p.espnPlayerId||p.espn||'',tsdb:p.tsdbPlayerId||p.tsdb||'',tm:p.tm||'',slug:p.slug||''});return}
   const pt=e.target.closest('[data-pt]');
-  if(pt&&cur&&cur.kind==='player'){cur.tab=pt.dataset.pt;renderPlayer();if(cur.tab==='kariyer')maybeStartPitchPlayerCareer(cur,cur.info);if(cur.tab==='maclar'&&!cur.pitchRecentLoaded)loadPitchPlayerRecent(cur);if((cur.tab==='sakatliklar'||cur.tab==='transferler')&&!cur.statsLoaded&&!cur.statsLoading){}return}
+  if(pt&&cur&&cur.kind==='player'){cur.tab=pt.dataset.pt;renderPlayer();if(cur.tab==='kariyer')maybeStartPitchPlayerCareer(cur,cur.info);if(cur.tab==='maclar')loadPitchPlayerRecent(cur);if((cur.tab==='sakatliklar'||cur.tab==='transferler')&&!cur.statsLoaded&&!cur.statsLoading){}return}
   const pf=e.target.closest('[data-pf]');
   if(pf&&cur&&cur.kind==='player'){cur.f=pf.dataset.pf;renderPlayer();return}
   const pr=e.target.closest('[data-pr]');
@@ -4544,6 +4646,8 @@ document.addEventListener('click',e=>{
   if(d){state.date=new Date(d.dataset.d+'T12:00');renderDates();load()}
 });
 document.addEventListener('change',e=>{
+  const injurySeason=e.target.closest('[data-injury-season]');
+  if(injurySeason&&cur&&cur.kind==='player'){cur.injurySeason=injurySeason.value||'all';renderPlayer();return}
   const week=e.target.closest('[data-lw]');
   if(week&&cur&&cur.kind==='league'){cur.week=week.value;cur.pitchWeekTeamKey='';renderLeague();if(cur.tab==='hafta'){const fs=cur.pitchFixtures||cur.data&&cur.data.fixtures||[],key=leagueSelectedWeek(fs);if(key)loadPitchWeekTeam(cur,key)}}
 });
@@ -4669,6 +4773,32 @@ window.__SKORHANE_READY__=true;
 #shBody .team-match-row .tm{font-size:14px!important;font-weight:800!important;min-height:30px!important;gap:8px!important}
 #shBody .team-match-row .tm img{width:28px!important;height:28px!important;object-fit:contain!important}
 #shBody .team-match-row .sc{font-size:17px!important;font-weight:900!important;line-height:1.35!important}
+</style>
+
+<style id="skorhane-player-history-polish-20261128">
+.player-injury-filter{display:flex;align-items:center;gap:10px;margin:10px 0 12px;padding:9px 10px;border:1px solid #2b3c30;border-radius:11px;background:#17231b}
+.player-injury-filter label{font-size:11px;color:#9aab9f;font-weight:750}
+.player-injury-filter select{flex:1;min-width:0;background:#101712;color:#f1f6f2;border:1px solid #3a5241;border-radius:9px;padding:8px 10px;font:inherit}
+.player-injury-row{align-items:center}.player-injury-main{min-width:0;flex:1}.player-injury-main>b{display:block;line-height:1.35}.player-injury-main>small{display:block}
+.player-injury-badges{display:flex;gap:6px;flex:none}
+.injury-pill{min-width:47px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:6px 8px;border:1px solid #236b39;border-radius:999px;background:#123b22;color:#63e987}
+.injury-pill>b{font-size:13px;font-weight:900;line-height:1.1}.injury-pill>small{font-size:8px;color:#9ce6ad}
+.player-injury-total{display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:12px 3px 2px;border-top:1px solid #31513a;color:#76ed94;font-size:11px;font-weight:850}.player-injury-total>b{margin-right:auto;color:#eef8ef}
+.transfer-history-row{align-items:center}.player-transfer-main{min-width:0;flex:1}
+.player-transfer-route{display:flex;align-items:center;flex-wrap:wrap;gap:5px}
+.player-transfer-route .avt{width:22px;height:22px;flex:0 0 22px;background:transparent;border:0;padding:0}
+.player-transfer-route .avt img{width:100%;height:100%;object-fit:contain}.player-transfer-route>span{color:#82988a}
+.player-transfer-main>small{display:block;margin-top:5px;color:#99a89d;font-size:10px}
+.player-transfer-fee{flex:none;margin-left:auto;max-width:104px;text-align:right;color:#54e47e;font-size:12px;font-weight:900;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.player-market-value-row>div{min-width:0;flex:1}.market-trend-icon{width:21px;height:21px;flex:none;margin-left:auto}
+.market-trend-icon.up{color:#4ee27b}.market-trend-icon.down{color:#ff5b62}
+.player-form-table-wrap{max-width:100%;overflow-x:auto;margin-top:12px;border:1px solid #29372d;border-radius:11px;scrollbar-width:thin}
+.player-form-table{width:100%;min-width:520px;border-collapse:collapse;font-size:10px;font-variant-numeric:tabular-nums}
+.player-form-table th{padding:9px 8px;background:#1b251e;color:#a7b6aa;text-align:center;font-size:9px;font-weight:800;white-space:nowrap;border-bottom:1px solid #324436}
+.player-form-table th:nth-child(2),.player-form-table td:nth-child(2){text-align:left;min-width:120px}
+.player-form-table td{padding:9px 8px;text-align:center;color:#e1eae3;border-bottom:1px solid #26352b;white-space:nowrap}
+.player-form-table tbody tr:last-child td{border-bottom:0}.player-form-table td:nth-child(4){color:#75e890;font-weight:900}
+@media(max-width:420px){.player-injury-badges{gap:4px}.injury-pill{min-width:40px;padding:5px 6px}.player-transfer-fee{max-width:83px;font-size:11px}.player-transfer-route .avt{width:19px;height:19px;flex-basis:19px}}
 </style>
 
 </body>

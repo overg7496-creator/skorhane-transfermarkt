@@ -200,7 +200,33 @@ function listMatch(code, ev) {
     goals: { home: scoreOf(h, s.state), away: scoreOf(a, s.state) },
   };
 }
-async function dayList(date, part) {
+async function apiFootballTurkeyLowerDivisionFixturesForDay(env, date) {
+  if (!apiFootballKey(env)) return [];
+  try {
+    const result = await cached("af-fixtures-day:" + date, async () => ({
+      body: await apiFootballPaged(env, "/fixtures", { date: String(date) }, 5), ttl: 900
+    }));
+    const divisions = {
+      "318": { code: "af-318", name: "TFF 2. Lig" },
+      "321": { code: "af-321", name: "TFF 3. Lig" }
+    };
+    return (result.body.response || []).flatMap(item => {
+      const league = item && item.league || {};
+      const division = divisions[String(league.id || "")];
+      if (!division) return [];
+      const match = apiFootballFixtureMatch(item, division.code);
+      match.league = {
+        ...(match.league || {}), id: Number(league.id), code: division.code,
+        name: division.name, country: "Türkiye", round: league.round || "",
+        logo: league.logo || "https://media.api-sports.io/football/leagues/" + league.id + ".png"
+      };
+      return match.teams && match.teams.home && match.teams.home.name &&
+        match.teams.away && match.teams.away.name ? [match] : [];
+    });
+  } catch (_) { return []; }
+}
+
+async function dayList(env, date, part) {
   // ESPN günleri ABD saatine göre keser: önceki ve sonraki günü de alıp İstanbul gününe göre süzüyoruz.
   // Aralık reddedilirse (HTTP 400) yalnızca o günü isteriz.
   const slice = LEAGUES.slice(part * PART_SIZE, (part + 1) * PART_SIZE);
@@ -224,7 +250,8 @@ async function dayList(date, part) {
   const per = await Promise.all(
     slice.map(async (m, i) => { if (i === 0) return first; try { return await one(m[0], dates); } catch (_) { return []; } })
   );
-  return per.flat();
+  const lowerDivisionFixtures = part === 0 ? await apiFootballTurkeyLowerDivisionFixturesForDay(env, date) : [];
+  return per.flat().concat(lowerDivisionFixtures);
 }
 
 // ---------- Maç detayı ----------
@@ -4038,31 +4065,100 @@ function tmCompetitionIdForCode(code) {
   const raw = String(code || "").trim();
   return TM_COMPETITION_IDS[raw] || TM_COMPETITION_IDS[raw.toLowerCase()] || (/^(?:TR[1-4][A-D]?|GB1|ES1|L1|IT1|FR1)$/.test(raw) ? raw : "");
 }
+function tmCompetitionIdsForCode(code) {
+  const raw = String(code || "").trim().toLowerCase();
+  if (["af-318", "tur.3", "tff2"].includes(raw)) return ["TR3A", "TR3B"];
+  if (["af-321", "tur.4", "tff3"].includes(raw)) return ["TR4A", "TR4B", "TR4C"];
+  const single = tmCompetitionIdForCode(code);
+  return single ? [single] : [];
+}
+function tmMergeCompetitionGroupData(parts, requestedCode, year) {
+  const mergeRows = rows => {
+    const map = new Map();
+    for (const row of rows || []) {
+      const id = String(row.playerId || row.tm_id || row.id || "").trim();
+      const key = id || String(row.player || row.name || "");
+      if (!key) continue;
+      let target = map.get(key);
+      if (!target) {
+        target = { ...row, playerId:id || key, value:0, appearances:0, assists:0, goals:0, minutes:0, teams:[] };
+        map.set(key, target);
+      }
+      target.value += Number(row.value) || 0;
+      target.appearances += Number(row.appearances) || 0;
+      target.assists += Number(row.assists) || 0;
+      target.goals += Number(row.goals) || 0;
+      target.minutes += Number(row.minutes) || 0;
+      const team = String(row.team || "").trim();
+      if (team && !target.teams.includes(team)) target.teams.push(team);
+      if (!target.logo && row.logo) target.logo = row.logo;
+      if (!target.player && row.player) target.player = row.player;
+    }
+    const sorted = [...map.values()].sort((a,b)=>b.value-a.value || b.goals-a.goals || b.assists-a.assists || b.minutes-a.minutes);
+    let rank=0, previous=null;
+    return sorted.map(row=>{if(previous===null || row.value!==previous)rank++;previous=row.value;return {...row,rank,team:row.teams.join(" / ") || row.team || ""};});
+  };
+  const metricKeys = [...new Set(parts.flatMap(part => Object.keys(part.leaders || {})))];
+  const leaders = Object.fromEntries(metricKeys.map(key => [key, mergeRows(parts.flatMap(part => (part.leaders && part.leaders[key]) || []))]));
+  const expectedPlayers = parts.reduce((sum,part)=>sum+Number(part.leaderboardCoverage&&part.leaderboardCoverage.expectedPlayers||0),0);
+  const completedPlayers = parts.reduce((sum,part)=>sum+Number(part.leaderboardCoverage&&part.leaderboardCoverage.completedPlayers||0),0);
+  const missingPlayers = Math.max(0,expectedPlayers-completedPlayers);
+  return {
+    found:parts.some(part=>part.found), source:parts.some(part=>part.source==="Supabase")?"Supabase":"",
+    hasSupabaseLeaderboardData:parts.some(part=>part.hasSupabaseLeaderboardData),
+    goalLeadersAvailable:parts.some(part=>part.goalLeadersAvailable),
+    assistLeadersAvailable:parts.some(part=>part.assistLeadersAvailable),
+    metricAvailability:Object.fromEntries(metricKeys.map(key=>[key,parts.some(part=>part.metricAvailability&&part.metricAvailability[key])])),
+    leaderboardCoverage:{complete:expectedPlayers>0&&missingPlayers===0,expectedPlayers,completedPlayers,missingPlayers,version:3},
+    code:parts.map(part=>part.code).join("+"),requestedCode,season:Number(year),
+    seasons:[...new Set(parts.flatMap(part=>part.seasons||[]))].sort((a,b)=>b-a),
+    goals:mergeRows(parts.flatMap(part=>part.goals||[])), assists:mergeRows(parts.flatMap(part=>part.assists||[])),
+    leaders,standings:parts.flatMap(part=>part.standings||[]),syncState:parts.map(part=>part.syncState).filter(Boolean),
+    errors:Object.fromEntries(["goals","assists","roster","coverage","totals"].map(key=>[key,parts.map(part=>part.errors&&part.errors[key]).filter(Boolean).join(" · ")]))
+  };
+}
 function tmSeasonRows(sourceRows) {
   return [...new Set((sourceRows || []).map(row => String(row && row.record_key || ""))
     .filter(value => /^(?:19|20)\d{2}$/.test(value)))].map(Number).sort((a,b) => b-a);
 }
 function tmExtractTableRows(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (!payload || typeof payload !== "object") return [];
-  if (Array.isArray(payload.tables)) {
-    return payload.tables.flatMap(table => (Array.isArray(table && table.rows) ? table.rows : [])
-      .map(row => ({
-        ...row,
-        tableName: String(table && table.name || ""),
-        team: { id:String(row.clubId || ""), name:String(row.clubName || "") }
-      })));
-  }
-  for (const key of ["table", "standings", "rows", "data"]) {
-    const value = payload[key];
+  const listFrom = value => {
     if (Array.isArray(value)) return value;
-    if (value && typeof value === "object") {
-      for (const nested of ["table", "standings", "rows"]) {
-        if (Array.isArray(value[nested])) return value[nested];
+    if (!value || typeof value !== "object") return [];
+    for (const key of ["rows","standings","table","data"]) {
+      if (Array.isArray(value[key])) return value[key];
+      if (value[key] && typeof value[key] === "object") {
+        for (const nested of ["rows","standings","table"]) if (Array.isArray(value[key][nested])) return value[key][nested];
       }
     }
+    return [];
+  };
+  const normalize = (row,index,tableName) => {
+    const club = row && (row.team || row.club || row.clubInfo || row.teamInfo) || {};
+    const name = String(club.name || club.displayName || club.clubName || row.clubName || row.club_name || row.teamName || row.team_name || row.name || "");
+    const n = (...values) => { for (const value of values) { if (value===null || value===undefined || value==="") continue; const parsed=Number(value); if(Number.isFinite(parsed)) return parsed; } return null; };
+    const gf=n(row.goalsFor,row.goals_for,row.goalsScored,row.goals_scored,row.goals&&row.goals.for);
+    const ga=n(row.goalsAgainst,row.goals_against,row.goalsConceded,row.goals_conceded,row.goals&&row.goals.against);
+    return {
+      rank:n(row.rank,row.position,row.place,row.order,row.rankPosition) ?? index+1,
+      team:{id:String(club.id||club.clubId||row.clubId||row.club_id||row.teamId||row.team_id||""),name,logo:String(club.logo||club.image||club.imageUrl||row.logo||row.logoUrl||row.logo_url||"")},
+      points:n(row.points,row.point,row.totalPoints,row.total_points),
+      diff:n(row.diff,row.goalDifference,row.goal_difference,row.goalsDiff,row.goals_diff) ?? (gf!=null&&ga!=null?gf-ga:null),
+      played:n(row.played,row.matches,row.matchesPlayed,row.matches_played,row.gamesPlayed,row.games_played),
+      win:n(row.wins,row.win,row.won),draw:n(row.draws,row.draw,row.ties),lose:n(row.losses,row.lose,row.lost),
+      desc:String(row.description||row.desc||row.note&&(row.note.description||row.note.text)||""),
+      tableName:String(tableName||row.tableName||row.groupName||"")
+    };
+  };
+  let groups=[];
+  if(payload&&Array.isArray(payload.tables)){
+    groups=payload.tables.map(table=>({
+      name:String(table&&(table.name||table.tableName||table.type||table.groupName)||""),
+      rows:listFrom(table).map((row,index)=>normalize(row,index,table&&(table.name||table.tableName||table.type)||"")).filter(row=>row.team.name)
+    })).filter(table=>table.rows.length);
   }
-  return [];
+  if(!groups.length){const rows=listFrom(payload).map((row,index)=>normalize(row,index,"")).filter(row=>row.team.name);if(rows.length)groups=[{name:"",rows}];}
+  return groups;
 }
 function tmLeaderRows(rows, metric) {
   const unique = new Map();
@@ -4101,7 +4197,12 @@ function tmLeaderRows(rows, metric) {
   });
 }
 async function tmLeagueData(env, code, year) {
-  const competitionId = tmCompetitionIdForCode(code);
+  const competitionIds = tmCompetitionIdsForCode(code);
+  if (competitionIds.length > 1) {
+    const parts = await Promise.all(competitionIds.map(id => tmLeagueData(env, id, year)));
+    return tmMergeCompetitionGroupData(parts, code, year);
+  }
+  const competitionId = competitionIds[0] || tmCompetitionIdForCode(code);
   if (!competitionId) return {
     found:false, code, season:year, seasons:[], goals:[], assists:[], standings:[],
     goalLeadersAvailable:false, assistLeadersAvailable:false,
@@ -4198,7 +4299,15 @@ async function tmLeagueData(env, code, year) {
     }
   };
 }async function tmTeamData(env, code, year, teamName) {
-  const competitionId = tmCompetitionIdForCode(code);
+  const competitionIds = tmCompetitionIdsForCode(code);
+  if (competitionIds.length > 1) {
+    const results = await Promise.all(competitionIds.map(id => tmTeamData(env, id, year, teamName)));
+    const found = results.filter(result => result && result.found);
+    if (found.length === 1) return { ...found[0], requestedCompetition:code };
+    if (found.length > 1) return { found:false, roster:[], players:[], seasons:[], error:"Takım adı TFF alt lig gruplarında birden fazla kulüple eşleşti." };
+    return { found:false, roster:[], players:[], seasons:[], error:"Bu takım TFF alt liglerinin seçilen sezon kadrolarında bulunamadı." };
+  }
+  const competitionId = competitionIds[0] || tmCompetitionIdForCode(code);
   if (!competitionId || !String(teamName || "").trim()) return { found:false, roster:[], players:[], seasons:[] };
   const season = String(year), nameKey = teamSearchKey(teamName);
   const metaQuery = "tm_source_records?select=external_id,payload,record_key&source=eq.felipeall&record_type=eq.club_metadata" +
@@ -4335,9 +4444,9 @@ async function tmPlayer(env, id) {
   const out = { photo: "", bio: {}, seasons: [], transfers: [], marketValueHistory: [], injuries: [], absences: [], recentMatches: [] };
   const playerId = String(id || "").replace(/\D/g, "");
   if (!playerId) return { ...out, err: "geçersiz Transfermarkt oyuncu kimliği" };
-  const bundleCache = await cached("tm-player-profile-bundle:v3:" + playerId, async () => {
+  const bundleCache = await cached("tm-player-profile-bundle:v4:" + playerId, async () => {
     const value = await tmDbRpc(env, "tm_player_profile_bundle", { p_tm_id: playerId });
-    return { body: value, ttl: value && value.player ? 60 : 10 };
+    return { body: value, ttl: value && value.player ? 300 : 15 };
   });
   const bundle = bundleCache.body;
   const dbRow = bundle && bundle.player;
@@ -4347,6 +4456,15 @@ async function tmPlayer(env, id) {
   const bundleMarketValues = Array.isArray(bundle && bundle.market_values) ? bundle.market_values : [];
   const bundleInjuries = Array.isArray(bundle && bundle.injuries) ? bundle.injuries : [];
   const bundleAbsences = Array.isArray(bundle && bundle.absences) ? bundle.absences : [];
+  const bundleClubDirectory = Array.isArray(bundle && bundle.club_directory) ? bundle.club_directory : [];
+  const clubDirectoryById = new Map(bundleClubDirectory.map(club => [String(club.club_id || ""), club]).filter(([id]) => id));
+  const clubDirectoryByName = new Map(bundleClubDirectory.map(club => [teamSearchKey(club.name || ""), club]).filter(([key]) => key));
+  const resolvePlayerClub = (value, clubId = "") => {
+    const rawName = value && typeof value === "object" ? (value.name || value.displayName || value.clubName || value.teamName || "") : String(value == null ? "" : value);
+    const rawId = String(clubId || value && typeof value === "object" && (value.id || value.clubId || value.club_id) || (/^[0-9]+$/.test(rawName) ? rawName : ""));
+    const found = (rawId && clubDirectoryById.get(rawId)) || clubDirectoryByName.get(teamSearchKey(rawName));
+    return { name:found && found.name || (/^[0-9]+$/.test(rawName) ? "" : rawName), logo:found && found.logo_url || "", id:rawId };
+  };
   const recentAppearanceRows = Array.isArray(bundle && bundle.recent_appearances) ? bundle.recent_appearances : [];
   const bundleAppearanceRows = Array.isArray(bundle && bundle.appearances) ? bundle.appearances : [];
   const appearanceRows = bundleAppearanceRows.length ? bundleAppearanceRows : recentAppearanceRows;
@@ -4425,19 +4543,26 @@ async function tmPlayer(env, id) {
       if (typeof value === "object") return String(value.displayValue || value.display_value || value.text || value.value || value.amount || "");
       return String(value);
     };
-    out.transfers = transferRows.length ? transferRows.map(x => ({
-      date: x.transfer_date || "", from: x.from_club || "", to: x.to_club || "",
-      kind: x.transfer_type || "", fee: x.fee_text || (x.fee_eur != null ? Number(x.fee_eur).toLocaleString("tr-TR") + " €" : "")
-    })) : payloadTransfers.map(x => ({
-      date: x.date || x.transferDate || x.transfer_date || "",
-      from: transferClubName(x.clubFrom || x.club_from || x.from_club || x.from || x.fromClub),
-      to: transferClubName(x.clubTo || x.club_to || x.to_club || x.to || x.toClub),
-      kind: x.transferType || x.transfer_type || x.type || "",
-      fee: transferFeeText(x.fee || x.feeText || x.fee_text || x.transferFee || x.transfer_fee)
-    }));
-  } catch (_) {
-    out.transfers = payloadTransfers;
-  }
+    out.transfers = transferRows.length ? transferRows.map(x => {
+      const payload = x.payload && typeof x.payload === "object" ? x.payload : {};
+      const fromRaw = x.from_club || payload.clubFrom || payload.club_from || "";
+      const toRaw = x.to_club || payload.clubTo || payload.club_to || "";
+      const fromClub = resolvePlayerClub(fromRaw, payload.fromClubId || payload.from_club_id || payload.clubFromId);
+      const toClub = resolvePlayerClub(toRaw, payload.toClubId || payload.to_club_id || payload.clubToId);
+      return { date:x.transfer_date || "", from:fromClub.name || transferClubName(fromRaw) || "Bilinmeyen takım",
+        to:toClub.name || transferClubName(toRaw) || "Bilinmeyen takım", fromLogo:fromClub.logo, toLogo:toClub.logo,
+        kind:x.transfer_type || "", fee:x.fee_text || (x.fee_eur != null ? Number(x.fee_eur).toLocaleString("tr-TR") + " €" : "") };
+    }) : payloadTransfers.map(x => {
+      const fromRaw = x.clubFrom || x.club_from || x.from_club || x.from || x.fromClub;
+      const toRaw = x.clubTo || x.club_to || x.to_club || x.to || x.toClub;
+      const fromClub = resolvePlayerClub(fromRaw, x.fromClubId || x.from_club_id);
+      const toClub = resolvePlayerClub(toRaw, x.toClubId || x.to_club_id);
+      return { date:x.date || x.transferDate || x.transfer_date || "", from:fromClub.name || transferClubName(fromRaw),
+        to:toClub.name || transferClubName(toRaw), fromLogo:fromClub.logo, toLogo:toClub.logo,
+        kind:x.transferType || x.transfer_type || x.type || "",
+        fee:transferFeeText(x.fee || x.feeText || x.fee_text || x.transferFee || x.transfer_fee) };
+    }).sort((a,b)=>String(b.date || "").localeCompare(String(a.date || "")));
+  } catch (_) { out.transfers = payloadTransfers; }
   if (!marketRows.length) marketRows = listPayload(row.market_value_payload || {}, ["market_value_history", "marketValueHistory", "history", "marketValues", "valuations", "items", "data"]);
   out.marketValueHistory = marketRows;
   const rawInjuryRows = bundleInjuries.length ? bundleInjuries : listPayload(row.injuries_payload || {}, ["injuries", "data", "items", "injuryHistory"]);
@@ -4468,14 +4593,25 @@ async function tmPlayer(env, id) {
     const label = value => typeof value === "object" && value ? (value.name || value.displayName || value.clubName || value.teamName || "") : value;
     const club = String(item && item.club_name || label(payload.club_name || payload.playerClubName || payload.club || payload.team || payload.teamName) || "");
     const opponent = String(item && item.opponent_name || label(payload.opponent_name || payload.opponentName || payload.opponent || payload.opposition) || "");
+    const homeRaw = payload.home_team || payload.homeTeam || payload.teams && payload.teams.home || {};
+    const awayRaw = payload.away_team || payload.awayTeam || payload.teams && payload.teams.away || {};
+    const isHomeHint = payload.isHome ?? payload.is_home ?? (payload.homeAway === "home" ? true : payload.homeAway === "away" ? false : null);
+    const isHome = typeof isHomeHint === "boolean" ? isHomeHint : true;
+    const homeName = label(homeRaw) || (isHome ? club : opponent);
+    const awayName = label(awayRaw) || (isHome ? opponent : club);
+    const score = payload.score || payload.scores || payload.goals || {};
+    const scoreHomeRaw = payload.scoreHome ?? payload.score_home ?? payload.homeScore ?? payload.home_score ?? score.home;
+    const scoreAwayRaw = payload.scoreAway ?? payload.score_away ?? payload.awayScore ?? payload.away_score ?? score.away;
+    const scoreHome = scoreHomeRaw == null || scoreHomeRaw === "" || !Number.isFinite(Number(scoreHomeRaw)) ? null : Number(scoreHomeRaw);
+    const scoreAway = scoreAwayRaw == null || scoreAwayRaw === "" || !Number.isFinite(Number(scoreAwayRaw)) ? null : Number(scoreAwayRaw);
     const ratingRaw = pick(playerPayload, "rating", "playerRating", "player_rating", "averageRating", "average_rating");
     const rating = ratingRaw === "" || ratingRaw == null || !Number.isFinite(Number(ratingRaw)) ? null : Number(ratingRaw);
     return {
       id: String(item && (item.game_id || item.id) || payload.game_id || payload.gameId || payload.match_id || ""),
       date: String(item && item.played_at || payload.played_at || payload.date || payload.matchDate || ""),
-      home: { name: club || "Takım bilgisi yok", logo: String(payload.club_logo || payload.team_logo || "") },
-      away: { name: opponent || "Rakip bilgisi yok", logo: String(payload.opponent_logo || "") },
-      scoreHome: null, scoreAway: null, isHome: null,
+      home: { name: homeName || "Takım bilgisi yok", logo: String(homeRaw.logo || homeRaw.image_url || (isHome ? payload.club_logo || payload.team_logo : payload.opponent_logo) || "") },
+      away: { name: awayName || "Rakip bilgisi yok", logo: String(awayRaw.logo || awayRaw.image_url || (!isHome ? payload.club_logo || payload.team_logo : payload.opponent_logo) || "") },
+      scoreHome, scoreAway, isHome,
       league: String(item && item.competition_name || payload.competition_name || payload.competition || payload.league || "Maç"),
       leagueCode: String(payload.competition_code || payload.league_code || ""),
       rating, goals: numberOrNull(item && item.goals != null ? item.goals : pick(playerPayload, "goals", "playerGoals")),
@@ -4521,10 +4657,11 @@ async function tmPlayer(env, id) {
       const clubObject = clubRaw && typeof clubRaw === "object" ? clubRaw : null;
       const clubName = clubObject ? pick(clubObject, "name", "displayName", "shortName") : clubRaw;
       const clubId = pick(x, "clubId", "clubID", "club_id") || (clubObject ? pick(clubObject, "id", "clubId", "clubID") : "");
-      let clubLabel = clubName == null ? "" : String(clubName).trim();
+      const clubMeta = resolvePlayerClub(clubRaw, clubId);
+      let clubLabel = String(clubMeta.name || (clubName == null ? "" : clubName)).trim();
       // Felipe /stats may identify the historical club only by clubId. Keep that
       // season row visible instead of silently filtering every numeric club ID.
-      if (/^\d+$/.test(clubLabel)) clubLabel = "Kulüp #" + clubLabel;
+      if (/^[0-9]+$/.test(clubLabel)) clubLabel = clubMeta.name || "";
       if (!clubLabel && clubId !== "") clubLabel = "Kulüp #" + String(clubId).trim();
       // Do not attribute an unattributed historical row to the player's current club.
       if (!clubLabel) continue;
@@ -4532,7 +4669,9 @@ async function tmPlayer(env, id) {
       // Same Transfermarkt club ID can have multiple display-name spellings.
       // Group by ID first, using normalized name only for legacy rows without IDs.
       const k = se + "|" + (clubId !== "" ? "id:" + String(clubId).trim() : "name:" + teamSearchKey(clubLabel));
-      const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Toplam Dakika": null, "Sarı Kart": null, "Kırmızı Kart": null, "Yenilen Gol": null, "Gol Yemeden": null, cats: emptyCats() };
+      const r = mp.get(k) || { "Sezon": se, "Takım": clubLabel, "Maç": 0, "Gol": 0, "Asist": null, "İlk 11": null, "Toplam Dakika": null, "Sarı Kart": null, "Kırmızı Kart": null, "Yenilen Gol": null, "Gol Yemeden": null, logo:clubMeta.logo || "", teamLogo:clubMeta.logo || "", clubId:clubId || "", cats:emptyCats() };
+      if (!r.logo && clubMeta.logo) { r.logo=clubMeta.logo; r.teamLogo=clubMeta.logo; }
+      if (!r.clubId && clubId) r.clubId=String(clubId);
       const m = num(pick(x, "appearances", "apps", "matches")), g = num(pick(x, "goals")), rawAssists = pick(x, "assists"), a = num(rawAssists);
       const rawStarts = pick(x, "starts", "gamesStarted", "appearancesAsStarter", "is_starting"), starts = rawStarts === "" ? null : num(rawStarts);
       const rawYellow = pick(x, "yellowCards", "yellow_cards", "yellow", "bookingsYellow"), yellow = rawYellow === "" ? null : num(rawYellow);
@@ -4556,6 +4695,7 @@ async function tmPlayer(env, id) {
     out.seasons = [...mp.values()];
   }
 
+  out.name = row.name || b.name || "";
   out.dataCoverage = {
     recentMatches: out.recentMatches.length,
     careerSeasons: out.seasons.length,
@@ -4930,7 +5070,7 @@ async function playerFull(env, slug, name, tmId, tsdbId, wikiT, part, role, afId
     const loan=/loan|kiral/i.test(rawType),free=/free|bedelsiz/i.test(rawType),endLoan=/endOfLoan|end of loan|kiralıktan dönüş/i.test(rawType);
     const numericFee=rawFee!==''&&rawFee!=null&&Number.isFinite(Number(rawFee))?Number(rawFee):null;
     const fee=numericFee!==null?(numericFee===0?'Bedelsiz':new Intl.NumberFormat('tr-TR',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(numericFee)):(rawFee!==''?String(rawFee):(/€|£|\$|\b\d/.test(rawType)&&!loan?rawType:''));
-    return {date,from,to,kind:endLoan?'Kiralıktan dönüş':loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
+    return {date,from,to,fromLogo:move.fromLogo||move.from_logo||'',toLogo:move.toLogo||move.to_logo||'',kind:endLoan?'Kiralıktan dönüş':loan?'Kiralık':free?'Bedelsiz':fee?'Bonservis':rawType?'Transfer':'Detay belirtilmemiş',fee};
   }).filter(x=>x.from||x.to||x.date).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const transfers=tmTransfers;
   return { part: part || "all", role: coach ? "coach" : "player", tmId: String(out.tmId || tmId || ""), player: { name: nm, logo: photo, photos, slug: slug || "" }, about: out.trAbout || (out.wk && out.wk.about) || "", aboutLang: out.trAbout ? "tr" : out.wk && out.wk.about ? "en" : "", bio, seasons: sp.seasons, national: out.national || [], coach: out.coachRows || [], transfers, injuries: out.tm && out.tm.injuries || [], absences: out.tm && out.tm.absences || [], marketValueHistory: out.tm && out.tm.marketValueHistory || [], recentMatches: out.tm && out.tm.recentMatches || [], tmRefreshRequired: !!(out.tm && out.tm.refreshRequired), tmRefreshQueued: !!(out.tm && out.tm.refreshQueued), tmRefreshConfigured: out.tm ? !!out.tm.refreshConfigured : null, tmRefreshReason: out.tm && out.tm.refreshReason || "", tmRefreshState: out.tm && out.tm.refreshState || "", tmRefreshRetryAt: out.tm && out.tm.refreshRetryAt || "", sources: st, stats: null };
@@ -8191,7 +8331,7 @@ export default {
           const part = Number(q.get("part") || 0);
           if (!Number.isInteger(part) || part < 0 || part >= PARTS) return json({ source: "ESPN", parts: PARTS, response: [] });
           res = await cached("f:" + date + ":" + part, async () => ({
-            body: { source: "ESPN", parts: PARTS, response: await dayList(date, part) },
+            body: { source: "ESPN + API-Football", parts: PARTS, response: await dayList(env, date, part) },
             ttl,   // bugün 30 sn: canlı skorlar
           }));
         }
@@ -8260,11 +8400,11 @@ export default {
         const slug = (q.get("slug") || "").trim(), nm = (q.get("name") || "").trim().slice(0, 80), tmId = (q.get("tm") || "").replace(/\D/g, ""), tsId = (q.get("tsdb") || "").replace(/\D/g, ""), afId = (q.get("af") || "").replace(/\D/g, ""), espnId = (q.get("espn") || "").replace(/\D/g, ""), teamHint = (q.get("team") || "").slice(0, 100), posHint = (q.get("pos") || "").slice(0, 40), wk = (q.get("wiki") || "").slice(0, 120), initialPhoto = (q.get("photo") || "").slice(0, 500), pitchId = (q.get("pitch") || "").trim().slice(0, 80), pitchCode = canonicalPitchLeagueCode(q.get("pitchCode") || ""), pitchYear = String(q.get("pitchYear") || "").slice(0, 4), part = q.get("part") === "info" ? "info" : q.get("part") === "stats" ? "stats" : "all", role = q.get("role") === "coach" ? "coach" : "player";
         if (slug && !/^[A-Za-z0-9._\/-]{2,120}$/.test(slug)) return json({ error: "Geçersiz oyuncu" }, 400);
         if (!slug && !nm && !tmId && !afId && !espnId && !tsId) return json({ error: "Oyuncu belirtilmedi" }, 400);
-        res = await cached("pf49:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
+        res = await cached("pf50:" + role + ":" + part + ":" + (slug || tmId || afId || espnId || tsId || pitchId || nm.toLowerCase()) + ":" + tsId + ":" + afId + ":" + espnId + ":" + pitchId + ":" + pitchCode + ":" + pitchYear + ":" + teamSearchKey(teamHint), async () => {
           const r = await playerFull(env, slug, nm, tmId, tsId, wk, part, role, afId, teamHint, posHint, espnId, initialPhoto, pitchId, pitchCode, pitchYear, executionCtx);
           const hasCareer = !!((r.seasons && r.seasons.length) || (r.coach && r.coach.length));
           const providerErrors = Object.values(r.sources || {}).some(value => /HTTP 429|rate limit|zaman aşımı|HTTP 5\d\d|timeout/i.test(String(value)));
-          return { body: r, ttl: r.tmRefreshRequired ? 3 : part === "info" ? 30 : hasCareer ? 60 : providerErrors ? 15 : 30 };
+          return { body: r, ttl: r.tmRefreshRequired ? 3 : part === "info" ? 60 : hasCareer ? 300 : providerErrors ? 30 : 120 };
         });
       } else if (p === "/team") {
         let code = q.get("code") || "";
