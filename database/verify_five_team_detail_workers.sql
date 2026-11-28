@@ -26,7 +26,7 @@ team_shards as (
 select
   s.competition_id,
   s.worker_shard_id,
-  count(*)::bigint as assigned_teams,
+  count(distinct s.club_id)::bigint as assigned_teams,
   count(distinct v.tm_id)::bigint as assigned_players
 from team_shards s
 left join public.tm_detail_preseed_candidates_by_team_worker v
