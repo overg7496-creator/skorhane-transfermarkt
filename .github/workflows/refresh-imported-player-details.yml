@@ -47,6 +47,7 @@ on:
     branches: [main]
     paths:
       - "database/015_five_team_detail_workers.sql"
+      - "database/016_latest_season_detail_workers.sql"
 
 permissions:
   contents: read
@@ -64,7 +65,7 @@ jobs:
         worker_shard: ${{ fromJSON((inputs.seen_after != '' || inputs.seen_before != '') && '[1]' || ((github.event_name != 'workflow_dispatch' || inputs.worker_shard == 'ALL') && '[1,2,3,4,5]') || format('[{0}]', inputs.worker_shard)) }}
     concurrency:
       group: skorhane-imported-player-details-${{ matrix.competition_id }}-shard-${{ matrix.worker_shard }}
-      cancel-in-progress: false
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
