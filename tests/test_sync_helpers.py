@@ -560,7 +560,8 @@ class SyncHelperTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("max-parallel: 12", workflow)
+        self.assertIn("max-parallel: 45", workflow)
+        self.assertIn("cancel-in-progress: true", workflow)
         self.assertIn("five disjoint team shards", workflow)
         self.assertIn("needs: prepare-detail-worker-cache", workflow)
         self.assertIn("prepare-detail-worker-cache:", workflow)
@@ -1156,7 +1157,7 @@ class HistoryFallbackTests(unittest.TestCase):
         self.assertIn("refresh-rotation", rotation)
         self.assertIn('cron: "17 * * * *"', details)
         self.assertIn("TM_DETAIL_PRESEED_ALL_HISTORY: \"true\"", details)
-        self.assertIn("max-parallel: 12", details)
+        self.assertIn("max-parallel: 45", details)
         self.assertIn('TM_DETAIL_MAX_RUNTIME_SECONDS: "14400"', details)
         self.assertIn("timeout-minutes: 360", details)
         self.assertIn('cron: "0 10 * * 0"', matches)
