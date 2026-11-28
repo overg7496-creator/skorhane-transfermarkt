@@ -55,7 +55,7 @@ permissions:
   contents: read
   actions: write
 
-# The matrix runs five disjoint team shards for each of the nine leagues (45 workers).
+# The matrix makes all five disjoint team shards across the nine leagues eligible to run together (45 workers).
 # Each player is assigned to exactly one league+club shard; hourly sweeps retry unfinished details.
 jobs:
   prepare-detail-worker-cache:
