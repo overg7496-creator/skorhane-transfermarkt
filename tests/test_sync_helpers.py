@@ -1139,6 +1139,7 @@ class HistoryFallbackTests(unittest.TestCase):
         self.assertIn("refresh-rotation", rotation)
         self.assertIn('cron: "17 * * * *"', details)
         self.assertIn("TM_DETAIL_PRESEED_ALL_HISTORY: \"true\"", details)
+        self.assertIn("max-parallel: 12", details)
         self.assertIn('TM_DETAIL_MAX_RUNTIME_SECONDS: "14400"', details)
         self.assertIn("timeout-minutes: 360", details)
         self.assertIn('cron: "0 10 * * 0"', matches)
