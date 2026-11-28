@@ -48,6 +48,7 @@ on:
     paths:
       - "database/015_five_team_detail_workers.sql"
       - "database/016_latest_season_detail_workers.sql"
+      - "database/017_detail_worker_candidate_cache.sql"
 
 permissions:
   contents: read
@@ -56,7 +57,28 @@ permissions:
 # The matrix runs five disjoint team shards for each of the nine leagues (45 workers).
 # Each player is assigned to exactly one league+club shard; hourly sweeps retry unfinished details.
 jobs:
+  prepare-detail-worker-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Refresh indexed current-season worker cache once
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
+          response="$(curl --fail-with-body --silent --show-error --max-time 120 \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            --data '{}' \
+            "${SUPABASE_URL%/}/rest/v1/rpc/tm_refresh_detail_preseed_candidates_cache")"
+          echo "Güncel oyuncu işçi önbelleği yenilendi: $response"
+
   refresh-player-details:
+    needs: prepare-detail-worker-cache
     strategy:
       fail-fast: false
       # Keep Supabase's worker-view reads below the concurrency level that caused statement timeouts.
