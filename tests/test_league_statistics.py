@@ -214,10 +214,10 @@ class LeagueStatisticsTests(unittest.TestCase):
                 self.assertEqual(row[field], 0)
         self.assertTrue(row["payload"]["league_stats_sync"]["zero_fill"])
 
-    def test_scope_defaults_to_exact_nine_leagues_and_last_five_seasons(self):
+    def test_scope_defaults_to_all_twelve_transfermarkt_competitions_and_last_five_seasons(self):
         self.assertEqual(
             league_stats.COMPETITIONS,
-            ["TR1", "TR2", "TR3A", "TR3B", "GB1", "ES1", "L1", "IT1", "FR1"],
+            ["TR1", "TR2", "TR3A", "TR3B", "TR4A", "TR4B", "TR4C", "GB1", "ES1", "L1", "IT1", "FR1"],
         )
         self.assertEqual(league_stats.SEASONS, ["2022", "2023", "2024", "2025", "2026"])
 

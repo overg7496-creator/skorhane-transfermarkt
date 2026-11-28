@@ -103,8 +103,8 @@ class LeaderboardAccuracyPatchTests(unittest.TestCase):
         self.assertIn("my.tmLeagueData.hasSupabaseLeaderboardData===true", self.html)
 
     def test_worker_cache_versions_are_bumped_and_copies_match(self):
-        self.assertIn('"pf49:"', self.worker)
-        self.assertIn("tm-player-profile-bundle:v3:", self.worker)
+        self.assertIn('"pf50:"', self.worker)
+        self.assertIn("tm-player-profile-bundle:v4:", self.worker)
         self.assertIn("tm-league-data:v5:", self.worker)
         self.assertEqual(self.worker, self.worker_copy)
         self.assertEqual(self.worker, self.requested_worker_copy)

@@ -55,7 +55,7 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn('tmDbRpc(env, "tm_player_profile_bundle"', worker)
         self.assertIn("tmPayloadArray", worker)
         self.assertIn("transferClubName", worker)
-        self.assertIn('"pf49:"', worker)
+        self.assertIn('"pf50:"', worker)
         self.assertIn("function tmSupabaseBase(env)", worker)
         self.assertIn("SUPABASE_URL Project URL olmalı", worker)
         self.assertIn("function tmPlayerRefreshPlan(row, sourceRecords = [], normalizedCoverage = {})", worker)
@@ -409,15 +409,12 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("last_squad_seen_at.lt.2026-11-25T21", query)
         self.assertNotIn("is_active=eq.true", query)
 
-    def test_detail_preseed_view_is_scoped_to_the_exact_nine_leagues_and_five_seasons(self):
+    def test_detail_preseed_view_is_scoped_to_all_twelve_competitions_and_five_seasons(self):
         migration = (ROOT / "database" / "011_detail_preseed_scope.sql").read_text(encoding="utf-8").lower()
-        for competition in ("tr1", "tr2", "tr3a", "tr3b", "gb1", "es1", "l1", "it1", "fr1"):
+        for competition in ("tr1", "tr2", "tr3a", "tr3b", "tr4a", "tr4b", "tr4c", "gb1", "es1", "l1", "it1", "fr1"):
             with self.subTest(competition=competition):
                 self.assertIn("'" + competition + "'", migration)
         self.assertIn("tm_leader_season_start_year(q.season_id) between 2022 and 2026", migration)
-        self.assertNotIn("'tr4a'", migration)
-        self.assertNotIn("'tr4b'", migration)
-        self.assertNotIn("'tr4c'", migration)
         self.assertNotIn("p.last_felipe_synced_at is null", migration)
 
     def test_imported_detail_continuation_preserves_explicit_window(self):
@@ -751,7 +748,8 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("my.info=j;my.stats=j", html)
         self.assertNotIn("api('/player?part=info'+qs)", html)
         self.assertNotIn("api('/player?part=stats'+qs)", html)
-        self.assertNotIn("api('/pitch-player-recent?", html)
+        self.assertIn("api('/pitch-player-recent?", html)
+        self.assertIn("my.pitchRecentEnrichmentAttempted", html)
         self.assertNotIn("attempt===0?6000:12000", html)
         self.assertIn("skorhane.playerstats.tm.v14.", html)
         self.assertNotIn("Eksik Transfermarkt kayıtları yenileme kuyruğuna alındı", html)
