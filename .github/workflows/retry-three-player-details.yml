@@ -1,0 +1,85 @@
+name: SkorHane Yeniden Deneme - ES1 L1 FR1
+
+on:
+  push:
+    paths:
+      - ".github/workflows/retry-three-player-details.trigger"
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  refresh-player-details:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        competition_id: ["ES1", "L1", "FR1"]
+    concurrency:
+      group: skorhane-imported-player-details-${{ matrix.competition_id }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate detail worker and tests
+        run: |
+          python -m py_compile sync/sync_transfermarkt.py sync/sync_squads_and_clubs.py
+          python -m unittest discover -s tests -v
+
+      - name: Start dedicated Transfermarkt API (v5.0.0)
+        env:
+          RATE_LIMITING_ENABLE: "false"
+          TFMKT_MAX_CONCURRENCY: "1"
+          TFMKT_TIMEOUT_SECONDS: "30"
+          CACHE_TTL_SECONDS: "600"
+        run: |
+          python -m pip install --upgrade uv
+          git clone --depth 1 --branch v5.0.0 https://github.com/felipeall/transfermarkt-api.git "$RUNNER_TEMP/transfermarkt-api"
+          cd "$RUNNER_TEMP/transfermarkt-api"
+          uv sync --extra server --no-dev
+          nohup uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/transfermarkt-api.log" 2>&1 &
+          ready=0
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:8000/health > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat "$RUNNER_TEMP/transfermarkt-api.log"
+            echo "Transfermarkt API 90 saniye içinde başlamadı."
+            exit 1
+          fi
+          echo "Özel Transfermarkt API hazır (v5.0.0, eşzamanlı upstream isteği=1)."
+
+      - name: Refresh only the imported squad cohort
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FELIPE_API_BASE: http://127.0.0.1:8000
+          TM_SEASON: "2026"
+          TM_MAX_PLAYERS_PER_RUN: "80"
+          TM_DETAIL_PRESEED_ALL_HISTORY: "true"
+          TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}
+          TM_DETAIL_MAX_RUNTIME_SECONDS: "14400"
+          TM_DETAIL_CONTINUATION_WORKFLOW: refresh-imported-player-details.yml
+          FELIPE_DELAY_MIN_SECONDS: "8.0"
+          FELIPE_DELAY_MAX_SECONDS: "9.5"
+          TM_MAX_MATCH_PAGES: "5"
+          HTTP_MAX_RETRIES: "4"
+          HTTP_TIMEOUT_SECONDS: "45"
+          TM_DETAIL_SQUAD_SEEN_AFTER: ""
+          TM_DETAIL_SQUAD_SEEN_BEFORE: ""
+        run: |
+          python sync/sync_transfermarkt.py refresh-imported-details
