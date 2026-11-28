@@ -866,7 +866,7 @@ def load_pending_player_detail_candidates(
     squad_seen_after: str | None = None,
     squad_seen_before: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Load unfinished players from the exact nine-league/five-season roster scope."""
+    """Load unfinished players from the nine leagues current/latest imported season roster."""
     select = "tm_id,name,team_name,position,photo_url,last_synced_at,last_felipe_synced_at,last_squad_seen_at"
     candidates: list[dict[str, Any]] = []
     offset = 0
@@ -912,12 +912,12 @@ def load_pending_player_detail_candidates(
         use_preseed_view = True
         cohort_label = "açık kadro aktarım aralığı"
     elif worker_competition:
-        # Each historical player is assigned to one league and one latest club.
-        # Five balanced club shards split that league without overlapping players.
+        # Each current-season player is assigned to one league and one current club.
+        # Five balanced current-roster team shards split that league without overlap.
         squad_filter = ""
         use_preseed_view = True
         worker_view = True
-        cohort_label = f"{worker_competition} / takım grubu {worker_shard} tarihî oyuncuları"
+        cohort_label = f"{worker_competition} / takım grubu {worker_shard} güncel sezon kadrosu"
     elif all_history_requested:
         # The SQL view limits this to TR1/TR2/TR3A/TR3B/GB1/ES1/L1/IT1/FR1
         # and season starts 2022-2026; it includes completed rows for accurate
