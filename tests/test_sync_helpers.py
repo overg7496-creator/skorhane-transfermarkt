@@ -562,6 +562,10 @@ class SyncHelperTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("max-parallel: 12", workflow)
         self.assertIn("five disjoint team shards", workflow)
+        self.assertIn("needs: prepare-detail-worker-cache", workflow)
+        self.assertIn("prepare-detail-worker-cache:", workflow)
+        self.assertIn("tm_refresh_detail_preseed_candidates_cache", workflow)
+        self.assertIn("database/017_detail_worker_candidate_cache.sql", workflow)
         self.assertIn("worker_shard: ${{ fromJSON(", workflow)
         self.assertIn("TM_DETAIL_WORKER_SHARD: ${{ matrix.worker_shard }}", workflow)
         self.assertIn("skorhane-imported-player-details-${{ matrix.competition_id }}-shard-${{ matrix.worker_shard }}", workflow)
@@ -574,6 +578,18 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn('["TR1","TR2","TR3A","TR3B","GB1","ES1","L1","IT1","FR1"]', workflow)
         self.assertIn("format('[\"{0}\"]'", workflow)
         self.assertIn("TM_DETAIL_COMPETITION_ID: ${{ matrix.competition_id }}", workflow)
+
+    def test_detail_worker_candidate_cache_migration_is_indexed_and_private(self):
+        sql = (
+            ROOT / "database" / "017_detail_worker_candidate_cache.sql"
+        ).read_text(encoding="utf-8").lower()
+        self.assertIn("create materialized view", sql)
+        self.assertIn("create unique index tm_detail_preseed_worker_cache_tm_id_uq", sql)
+        self.assertIn("tm_detail_preseed_worker_cache_lookup_idx", sql)
+        self.assertIn("refresh materialized view concurrently", sql)
+        self.assertIn("revoke all on table public.tm_detail_preseed_candidates_by_team_worker_cache", sql)
+        self.assertIn("grant select on table public.tm_detail_preseed_candidates_by_team_worker_cache", sql)
+        self.assertIn("grant execute on function public.tm_refresh_detail_preseed_candidates_cache()", sql)
 
 
     def test_team_shard_worker_requires_a_valid_shard(self):
