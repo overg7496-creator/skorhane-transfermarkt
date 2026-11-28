@@ -560,7 +560,8 @@ class SyncHelperTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("max-parallel: 45", workflow)
+        self.assertIn("max-parallel: 12", workflow)
+        self.assertIn("five disjoint team shards", workflow)
         self.assertIn("worker_shard: ${{ fromJSON(", workflow)
         self.assertIn("TM_DETAIL_WORKER_SHARD: ${{ matrix.worker_shard }}", workflow)
         self.assertIn("skorhane-imported-player-details-${{ matrix.competition_id }}-shard-${{ matrix.worker_shard }}", workflow)
