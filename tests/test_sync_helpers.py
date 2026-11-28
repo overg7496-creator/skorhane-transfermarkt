@@ -561,6 +561,7 @@ class SyncHelperTests(unittest.TestCase):
             ROOT / ".github" / "workflows" / "refresh-imported-player-details.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("max-parallel: 45", workflow)
+        # Long-running shards must finish; newer hourly sweeps wait instead of cancelling active work.
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertIn("five disjoint team shards", workflow)
         self.assertIn("needs: prepare-detail-worker-cache", workflow)
