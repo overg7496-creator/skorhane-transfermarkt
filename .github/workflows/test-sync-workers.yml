@@ -2,6 +2,16 @@ name: SkorHane Sync Worker Tests
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "sync/**"
+      - "tests/**"
+      - "database/**"
+      - "SkorHane-Worker.js"
+      - "SkorHane-Worker-kodu-kopyalanabilir.txt"
+      - "SkorHane-HTML-kodu-kopyalanabilir.txt"
+      - "SkorHane-HTML-kopyalanabilir.txt"
+      - ".github/workflows/test-sync-workers.yml"
   push:
     branches: [main]
     paths:
