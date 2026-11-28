@@ -560,6 +560,21 @@ class SyncHelperTests(unittest.TestCase):
         self.assertIn("where player_rank = 1", migration)
         self.assertIn("worker_shard_id", migration)
 
+    def test_latest_season_worker_migration_uses_current_rosters_not_historical_team_pool(self):
+        migration = (
+            ROOT / "database" / "016_latest_season_detail_workers.sql"
+        ).read_text(encoding="utf-8").lower()
+        for competition in ("tr1", "tr2", "tr3a", "tr3b", "gb1", "es1", "l1", "it1", "fr1"):
+            with self.subTest(competition=competition):
+                self.assertIn("'" + competition + "'", migration)
+        self.assertIn("latest_seasons as", migration)
+        self.assertIn("max(public.tm_leader_season_start_year(q.season_id))", migration)
+        self.assertIn("ntile(5)", migration)
+        self.assertIn("partition by em.tm_id", migration)
+        self.assertIn("where player_rank = 1", migration)
+        self.assertNotIn("between 2022 and 2026", migration)
+
+
     def test_backfill_queue_is_resumable_and_uses_time_guard(self):
         script = (ROOT / "sync" / "sync_transfermarkt.py").read_text(encoding="utf-8")
         self.assertIn("same league partition", script)
